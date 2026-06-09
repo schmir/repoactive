@@ -1,0 +1,4 @@
+[pytest]
+addopts = ["--import-mode=importlib"]
+filterwarnings = ["error"]
+testpaths = ["tests"]

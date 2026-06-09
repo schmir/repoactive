@@ -1,0 +1,22 @@
+[platform]
+type = "github"
+token_env = "GITHUB_TOKEN"
+
+[defaults]
+branch_prefix = "repoactive/"
+
+[[job]]
+name = "uv-lock-upgrade"
+command = "uv lock --upgrade"
+title = "build: upgrade all dependencies"
+
+[[job]]
+name = "prek-autoupdate"
+command = "uvx prek autoupdate"
+title = "ci: update pre-commit hooks"
+
+[[job]]
+name = "prek-run-all"
+command = "sh -c 'uvx prek run -a; true'"
+title = "ci: apply pre-commit fixes"
+depends_on = ["prek-autoupdate"]
