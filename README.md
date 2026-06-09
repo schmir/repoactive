@@ -114,6 +114,11 @@ MRs are automatically added to the MR description.
 
 ## Usage
 
+```bash
+# Print the installed version and exit
+repoactive --version
+```
+
 ```
 repoactive run [OPTIONS] [JOBS]...
 ```
