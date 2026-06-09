@@ -19,7 +19,7 @@ ENV PATH="/root/.local/bin:$PATH"
 # --- Install repoactive
 RUN --mount=type=bind,from=ghcr.io/astral-sh/uv:latest,source=/uv,target=/uv \
     --mount=type=bind,target=/app \
-    /uv --no-cache tool install /app
+    /uv --no-cache tool install --compile-bytecode /app
 
 WORKDIR /src
 
