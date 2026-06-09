@@ -14,6 +14,7 @@ ci:
     prek run --all-files
     uv run ty check
     uv run pytest
+    uv run nox -s validate_config
 
 # Install repoactive in editable mode
 dev:
