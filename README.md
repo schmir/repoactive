@@ -142,6 +142,37 @@ repoactive run --debug
 | `--local`       |       | Push branches only, skip MR creation      |
 | `--debug`       | `-d`  | Enable debug logging                      |
 
+## Validating configuration
+
+```
+repoactive validate-config [OPTIONS]
+```
+
+Check that a config file is syntactically and semantically valid without
+running any jobs:
+
+```bash
+# Validate the default .repoactive.toml
+repoactive validate-config
+
+# Validate a specific config file
+repoactive validate-config --config myconfig.toml
+
+# Validate a merged config (same merging rules as `run`)
+repoactive validate-config --config base.toml --config override.toml
+```
+
+On success the command prints `Config OK: N job(s) defined.` and exits with
+code 0. On failure it prints the validation error to stderr and exits with
+code 1.
+
+Validation checks include unknown keys, missing required fields, invalid
+`depends_on` references, and circular job dependencies.
+
+| Option          | Short | Description                                                |
+| --------------- | ----- | ---------------------------------------------------------- |
+| `--config PATH` | `-c`  | Config file (default: `.repoactive.toml`); repeat to merge |
+
 ## Requirements
 
 - Python 3.11 or later

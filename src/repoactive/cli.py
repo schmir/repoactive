@@ -70,7 +70,11 @@ def validate_config(
         typer.Option("--config", "-c", help="Config file; repeat to merge, later files win."),
     ] = None,
 ) -> None:
-    """Validate configuration and exit."""
+    """Validate configuration and exit.
+
+    Prints 'Config OK: N job(s) defined.' on success (exit 0).
+    Prints the error to stderr and exits with code 1 on failure.
+    """
     try:
         cfg = load_config(config or [_DEFAULT_CONFIG])
     except Exception as e:
