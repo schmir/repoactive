@@ -139,7 +139,7 @@ repoactive run
 # Run specific jobs
 repoactive run regenerate-api-client sync-licence-headers
 
-# Push branches without opening MRs
+# Run jobs locally without pushing branches or creating MRs
 repoactive run --local
 
 # Enable debug logging
@@ -150,7 +150,7 @@ repoactive run --debug
 | --------------- | ----- | ----------------------------------------- |
 | `--config PATH` | `-c`  | Config file (default: `.repoactive.toml`) |
 | `--repo PATH`   | `-r`  | jj repository path (default: `.`)         |
-| `--local`       |       | Push branches only, skip MR creation      |
+| `--local`       |       | Skip pushing branches and MR creation     |
 | `--debug`       | `-d`  | Enable debug logging                      |
 
 ## Validating configuration
