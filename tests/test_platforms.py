@@ -6,8 +6,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from repoactive.config import PlatformConfig, load_config
-from repoactive.platforms import _match_platform
+from repoactive.config import Config, PlatformConfig, load_config
+from repoactive.platforms import _match_platform, get_platform
 from repoactive.platforms.base import parse_repo_from_url
 from repoactive.platforms.github import GitHubPlatform
 
@@ -90,3 +90,90 @@ class TestGitHubPlatformInit:
     def test_none_url_uses_default_api_url(self, mock_github: MagicMock) -> None:
         GitHubPlatform(url=None, token="tok", repo="owner/repo")
         mock_github.assert_called_once_with("tok", base_url="https://api.github.com")
+
+
+REPO = Path("/repo")
+
+
+def _config(*platform_dicts: dict) -> Config:
+    return Config.model_validate({"platform": list(platform_dicts)})
+
+
+class TestGetPlatform:
+    def _github_config(self) -> Config:
+        return _config({"url": "https://github.com", "type": "github", "token_env": "GH_TOKEN"})
+
+    def _gitlab_config(self) -> Config:
+        return _config({"url": "https://gitlab.com", "type": "gitlab", "token_env": "GL_TOKEN"})
+
+    @patch("repoactive.platforms.GitHubPlatform")
+    @patch("repoactive.platforms.jj.get_remote_url")
+    def test_returns_github_platform(
+        self, mock_url: MagicMock, mock_gh: MagicMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        mock_url.return_value = "https://github.com/owner/repo.git"
+        monkeypatch.setenv("GH_TOKEN", "ghtoken")
+
+        result = get_platform(self._github_config(), REPO)
+
+        mock_gh.assert_called_once_with(
+            url="https://github.com", token="ghtoken", repo="owner/repo"
+        )
+        assert result is mock_gh.return_value
+
+    @patch("repoactive.platforms.GitLabPlatform")
+    @patch("repoactive.platforms.jj.get_remote_url")
+    def test_returns_gitlab_platform(
+        self, mock_url: MagicMock, mock_gl: MagicMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        mock_url.return_value = "https://gitlab.com/ns/repo.git"
+        monkeypatch.setenv("GL_TOKEN", "gltoken")
+
+        result = get_platform(self._gitlab_config(), REPO)
+
+        mock_gl.assert_called_once_with(url="https://gitlab.com", token="gltoken", repo="ns/repo")
+        assert result is mock_gl.return_value
+
+    @patch("repoactive.platforms.jj.get_remote_url")
+    def test_missing_token_raises(
+        self, mock_url: MagicMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        mock_url.return_value = "https://github.com/owner/repo.git"
+        monkeypatch.delenv("GH_TOKEN", raising=False)
+
+        with pytest.raises(RuntimeError, match="GH_TOKEN"):
+            get_platform(self._github_config(), REPO)
+
+    @patch("repoactive.platforms.jj.get_remote_url")
+    def test_no_matching_platform_raises(
+        self, mock_url: MagicMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        mock_url.return_value = "https://bitbucket.org/owner/repo.git"
+        monkeypatch.setenv("GH_TOKEN", "tok")
+
+        with pytest.raises(RuntimeError, match="No platform configured"):
+            get_platform(self._github_config(), REPO)
+
+    @patch("repoactive.platforms.GitHubPlatform")
+    @patch("repoactive.platforms.jj.get_remote_url")
+    def test_repo_path_forwarded_to_jj(
+        self, mock_url: MagicMock, mock_gh: MagicMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        mock_url.return_value = "https://github.com/owner/repo.git"
+        monkeypatch.setenv("GH_TOKEN", "tok")
+
+        get_platform(self._github_config(), REPO)
+
+        mock_url.assert_called_once_with(cwd=REPO)
+
+    @patch("repoactive.platforms.GitHubPlatform")
+    @patch("repoactive.platforms.jj.get_remote_url")
+    def test_ssh_remote_url_parsed(
+        self, mock_url: MagicMock, mock_gh: MagicMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        mock_url.return_value = "git@github.com:owner/repo.git"
+        monkeypatch.setenv("GH_TOKEN", "tok")
+
+        get_platform(self._github_config(), REPO)
+
+        mock_gh.assert_called_once_with(url="https://github.com", token="tok", repo="owner/repo")
