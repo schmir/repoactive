@@ -49,17 +49,6 @@ need to write is the script that produces the change.
 passed via `--config`).
 
 ```toml
-
-# [[platform]] can be used to define self-hosted gitlab/github instances.
-[[platform]]
-# Base URL of the platform instance
-url = "https://gitlab.example.com"
-# Name of the env var holding the API token
-token_env = "GITLAB_TOKEN"
-# type must be either "github" or "gitlab"
-type = "gitlab"
-
-
 [defaults]
 # Prefix prepended to job.name to form the branch name
 branch_prefix = "repoactive/"
@@ -103,6 +92,20 @@ command = "./scripts/update_integration_tests.py"
 title = "tests: update integration tests"
 # Optional: run this job on top of the merged output of the listed jobs
 depends_on = ["regenerate-api-client", "sync-licence-headers"]
+```
+
+For public GitHub.com or GitLab.com repositories no platform declaration is
+needed — `repoactive` detects the remote URL automatically. To use a
+self-hosted instance, add a `[[platform]]` section:
+
+```toml
+[[platform]]
+# Base URL of the platform instance
+url = "https://gitlab.example.com"
+# Name of the env var holding the API token
+token_env = "GITLAB_TOKEN"
+# type must be either "github" or "gitlab"
+type = "gitlab"
 ```
 
 The branch for each job is always `defaults.branch_prefix + job.name`.
