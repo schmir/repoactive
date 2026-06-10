@@ -38,7 +38,7 @@ need to write is the script that produces the change.
 
 - Keeping generated files (API clients, protobuf bindings, lock files) in
   sync with their sources
-- Applying organisation-wide refactors or policy changes across many
+- Applying organization-wide refactors or policy changes across many
   repositories
 - Automating any periodic code transformation that should go through a
   review process
@@ -82,8 +82,8 @@ create_mr = true
 output_in_commit = true
 
 [[job]]
-name = "sync-licence-headers"
-command = "./scripts/add_licence_headers.sh"
+name = "sync-license-headers"
+command = "./scripts/add_license_headers.sh"
 title = "sync license headers"
 
 [[job]]
@@ -91,7 +91,7 @@ name = "integration-tests-update"
 command = "./scripts/update_integration_tests.py"
 title = "tests: update integration tests"
 # Optional: run this job on top of the merged output of the listed jobs
-depends_on = ["regenerate-api-client", "sync-licence-headers"]
+depends_on = ["regenerate-api-client", "sync-license-headers"]
 ```
 
 For public GitHub.com or GitLab.com repositories no platform declaration is
@@ -137,7 +137,7 @@ auto-included):
 repoactive run
 
 # Run specific jobs
-repoactive run regenerate-api-client sync-licence-headers
+repoactive run regenerate-api-client sync-license-headers
 
 # Run jobs locally without pushing branches or creating MRs
 repoactive run --local
