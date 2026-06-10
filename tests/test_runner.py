@@ -9,6 +9,7 @@ from repoactive.runner import (
     JobResult,
     _compute_parents,
     _mr_params,
+    _propagate_disabled,
     _resolve_jobs,
     _topological_sort,
     run_all,
@@ -120,6 +121,69 @@ class TestResolveJobs:
     def test_multiple_unknown_names_in_error(self) -> None:
         with pytest.raises(ValueError, match="x"):
             _resolve_jobs([_job("a")], ["x", "y"])
+
+
+class TestPropagateDisabled:
+    def _job(
+        self, name: str, *, disabled: bool = False, depends_on: list[str] | None = None
+    ) -> Job:
+        return Job(
+            name=name, command="cmd", title=name, disabled=disabled, depends_on=depends_on or []
+        )
+
+    def test_no_disabled_jobs(self) -> None:
+        jobs = [self._job("a"), self._job("b")]
+        assert _propagate_disabled(jobs) == set()
+
+    def test_explicitly_disabled(self) -> None:
+        jobs = [self._job("a", disabled=True), self._job("b")]
+        assert _propagate_disabled(jobs) == {"a"}
+
+    def test_direct_dependent_disabled(self) -> None:
+        jobs = [self._job("a", disabled=True), self._job("b", depends_on=["a"])]
+        assert _propagate_disabled(jobs) == {"a", "b"}
+
+    def test_transitive_propagation(self) -> None:
+        jobs = [
+            self._job("a", disabled=True),
+            self._job("b", depends_on=["a"]),
+            self._job("c", depends_on=["b"]),
+        ]
+        assert _propagate_disabled(jobs) == {"a", "b", "c"}
+
+    def test_unrelated_job_not_disabled(self) -> None:
+        jobs = [
+            self._job("a", disabled=True),
+            self._job("b", depends_on=["a"]),
+            self._job("c"),
+        ]
+        assert _propagate_disabled(jobs) == {"a", "b"}
+
+    def test_multiple_disabled_roots(self) -> None:
+        jobs = [
+            self._job("a", disabled=True),
+            self._job("b", disabled=True),
+            self._job("c", depends_on=["a"]),
+            self._job("d", depends_on=["b"]),
+        ]
+        assert _propagate_disabled(jobs) == {"a", "b", "c", "d"}
+
+    def test_diamond_propagation(self) -> None:
+        jobs = [
+            self._job("a", disabled=True),
+            self._job("b", depends_on=["a"]),
+            self._job("c", depends_on=["a"]),
+            self._job("d", depends_on=["b", "c"]),
+        ]
+        assert _propagate_disabled(jobs) == {"a", "b", "c", "d"}
+
+    def test_only_one_dep_disabled_propagates(self) -> None:
+        jobs = [
+            self._job("a", disabled=True),
+            self._job("b"),
+            self._job("c", depends_on=["a", "b"]),
+        ]
+        assert _propagate_disabled(jobs) == {"a", "c"}
 
 
 class TestComputeParents:
