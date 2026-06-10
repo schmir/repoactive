@@ -13,11 +13,9 @@ logger = logging.getLogger(__name__)
 class PlatformConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    url: str
     type: Literal["gitlab", "github"]
-    url: str | None = None
     token_env: str
-    # Project path ("namespace/repo"). Auto-detected from remote URL if omitted.
-    repo: str | None = None
 
 
 class Defaults(BaseModel):
@@ -51,7 +49,7 @@ class Job(BaseModel):
 class Config(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
-    platform: PlatformConfig
+    platforms: list[PlatformConfig] = Field(alias="platform", default_factory=list)
     defaults: Defaults = Field(default_factory=Defaults)
     jobs: list[Job] = Field(default_factory=list, alias="job")
 
@@ -103,18 +101,51 @@ def _merge_jobs(base: list[dict], override: list[dict]) -> list[dict]:
         else:
             job_by_name[name] = dict(job)
             result.append(job_by_name[name])
-
     return result
+
+
+def _merge_platforms(base: list[dict], override: list[dict]) -> list[dict]:
+    """Merge two platform lists by url: override fields win, new entries appended."""
+    platform_by_url: dict[str, dict] = {}
+    result: list[dict] = []
+    for platform in base + override:
+        url = platform.get("url", "")
+        if url in platform_by_url:
+            platform_by_url[url].update(platform)
+        else:
+            platform_by_url[url] = dict(platform)
+            result.append(platform_by_url[url])
+    return result
+
+
+_default_platforms = """
+[[platform]]
+url="https://github.com"
+type="github"
+token_env="GITHUB_TOKEN"
+
+[[platform]]
+url="https://gitlab.com"
+type="gitlab"
+token_env="GITLAB_TOKEN"
+"""
 
 
 def load_config(paths: list[Path]) -> Config:
     assert paths
-    configs = [tomllib.loads(path.read_text()) for path in paths]
+    configs = [
+        tomllib.loads(_default_platforms),
+        *(tomllib.loads(path.read_text()) for path in paths),
+    ]
+
     merged = {}
     for data in configs:
         jobs = _merge_jobs(merged.get("job", []), data.get("job", []))
+        platforms = _merge_platforms(merged.get("platform", []), data.get("platform", []))
         merged = _deep_merge(merged, data)
         merged["job"] = jobs
-        config = Config.model_validate(merged)  # ensure it's valid after each merge
+        merged["platform"] = platforms
+        Config.model_validate(merged)  # ensure it's valid after each merge
+    config = Config.model_validate(merged)
     logger.debug("loaded config: %s", config.model_dump_json(indent=2))
     return config

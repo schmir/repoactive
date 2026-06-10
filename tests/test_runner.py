@@ -56,7 +56,7 @@ def _result(job: Job, *, revsets: list[str], produced: bool = True) -> JobResult
 def _config(*jobs: Job) -> Config:
     return Config.model_validate(
         {
-            "platform": {"type": "gitlab", "token_env": "T"},
+            "platform": [{"url": "https://gitlab.com", "type": "gitlab", "token_env": "T"}],
             "jobs": [
                 {
                     "name": j.name,

@@ -55,7 +55,7 @@ def run(
     if debug:
         logging.basicConfig(level=logging.DEBUG)
     cfg = load_config(config or [_DEFAULT_CONFIG])
-    platform = None if local else get_platform(cfg.platform, repo)
+    platform = None if local else get_platform(cfg, repo)
     summary = run_all(
         config=cfg, repo_path=repo, platform=platform, requested_jobs=jobs or None, local=local
     )

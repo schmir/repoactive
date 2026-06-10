@@ -1,5 +1,12 @@
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Literal
+
 import pytest
 
+from repoactive.config import PlatformConfig, load_config
+from repoactive.platforms import _match_platform
 from repoactive.platforms.base import parse_repo_from_url
 
 
@@ -17,3 +24,45 @@ class TestParseRepoFromUrl:
     )
     def test_parses_url(self, url: str, expected: str) -> None:
         assert parse_repo_from_url(url) == expected
+
+
+class TestMatchPlatform:
+    def _p(
+        self, url: str, platform_type: Literal["gitlab", "github"] = "github"
+    ) -> PlatformConfig:
+        return PlatformConfig(url=url, type=platform_type, token_env="TOKEN")
+
+    def test_matches_by_url(self) -> None:
+        p = self._p("https://github.com")
+        assert _match_platform("git@github.com:owner/repo.git", [p]) is p
+
+    def test_matches_custom_url(self) -> None:
+        p = self._p("https://gitlab.example.com", "gitlab")
+        assert _match_platform("git@gitlab.example.com:ns/repo.git", [p]) is p
+
+    def test_selects_correct_platform_from_list(self) -> None:
+        gh = self._p("https://github.com")
+        gl = self._p("https://gitlab.com", "gitlab")
+        assert _match_platform("git@github.com:owner/repo.git", [gh, gl]) is gh
+        assert _match_platform("git@gitlab.com:ns/repo.git", [gh, gl]) is gl
+
+    def test_no_match_raises(self) -> None:
+        p = self._p("https://github.com")
+        with pytest.raises(RuntimeError, match="No platform configured"):
+            _match_platform("git@gitlab.example.com:ns/repo.git", [p])
+
+    def test_default_platforms_match_github(self, tmp_path: Path) -> None:
+        f = tmp_path / "c.toml"
+        f.write_text("")
+        cfg = load_config([f])
+        p = _match_platform("git@github.com:owner/repo.git", cfg.platforms)
+        assert p.url == "https://github.com"
+        assert p.token_env == "GITHUB_TOKEN"
+
+    def test_default_platforms_match_gitlab(self, tmp_path: Path) -> None:
+        f = tmp_path / "c.toml"
+        f.write_text("")
+        cfg = load_config([f])
+        p = _match_platform("https://gitlab.com/ns/repo.git", cfg.platforms)
+        assert p.url == "https://gitlab.com"
+        assert p.token_env == "GITLAB_TOKEN"

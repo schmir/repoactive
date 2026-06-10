@@ -1,7 +1,3 @@
-[platform]
-type = "github"
-token_env = "GITHUB_TOKEN"
-
 [defaults]
 branch_prefix = "repoactive/"
 

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -30,3 +32,12 @@ def parse_repo_from_url(url: str) -> str:
         return ssh.group(1)
     # HTTPS
     return re.sub(r"https?://[^/]+/", "", url).removesuffix(".git")
+
+
+def extract_host(url: str) -> str:
+    """Extract hostname from an SSH or HTTPS URL."""
+    ssh = re.match(r"git@([^:]+):", url)
+    if ssh:
+        return ssh.group(1)
+    m = re.match(r"https?://([^/]+)", url)
+    return m.group(1) if m else ""

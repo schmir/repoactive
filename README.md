@@ -49,13 +49,16 @@ need to write is the script that produces the change.
 passed via `--config`).
 
 ```toml
-[platform]
-# "gitlab" or "github"
-type = "gitlab"
-# Base URL for self-hosted instances; omit for gitlab.com / github.com
+
+# [[platform]] can be used to define self-hosted gitlab/github instances.
+[[platform]]
+# Base URL of the platform instance
 url = "https://gitlab.example.com"
 # Name of the env var holding the API token
 token_env = "GITLAB_TOKEN"
+# type must be either "github" or "gitlab"
+type = "gitlab"
+
 
 [defaults]
 # Prefix prepended to job.name to form the branch name
@@ -65,7 +68,7 @@ mr_title_prefix = "[repoactive] "
 # Prefix prepended to every commit title (set to "" to disable)
 commit_title_prefix = "[repoactive] "
 # Labels applied to every MR/PR unless overridden per job
-labels = ["automated"]
+labels = ["repoactive"]
 
 [[job]]
 # Unique identifier - branch name is always <branch_prefix><name>
