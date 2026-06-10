@@ -49,7 +49,7 @@ need to write is the script that produces the change.
 passed via `--config`).
 
 ```toml
-[defaults]
+[job-defaults]
 # Prefix prepended to job.name to form the branch name
 branch_prefix = "repoactive/"
 # Prefix prepended to every MR/PR title (set to "" to disable)
@@ -68,7 +68,7 @@ command = "python scripts/regen_api.py"
 title = "api: regenerate API client"
 # Optional: MR description
 description = "Automated regeneration of the API client from the OpenAPI spec."
-# Optional: override labels (merged with defaults.labels)
+# Optional: extra labels (merged with job-defaults.labels)
 labels = ["automated", "api"]
 # Optional: target branch (default: repo default branch)
 base_branch = "main"
@@ -108,7 +108,7 @@ token_env = "GITLAB_TOKEN"
 type = "gitlab"
 ```
 
-The branch for each job is always `defaults.branch_prefix + job.name`.
+The branch for each job is always `job-defaults.branch_prefix + job.name`.
 Secrets are kept out of the config file by referencing environment variable
 names rather than inline values.
 

@@ -20,12 +20,12 @@ def _config(**kwargs: object) -> Config:
 
 class TestBranchName:
     def test_default_prefix(self) -> None:
-        job = Job(name="foo", command="cmd", title="Foo")
-        assert job.branch_name("repoactive/") == "repoactive/foo"
+        job = Job(name="foo", command="cmd", title="Foo", branch_prefix="repoactive/")
+        assert job.branch_name() == "repoactive/foo"
 
     def test_custom_prefix(self) -> None:
-        job = Job(name="bar", command="cmd", title="Bar")
-        assert job.branch_name("bot/") == "bot/bar"
+        job = Job(name="bar", command="cmd", title="Bar", branch_prefix="bot/")
+        assert job.branch_name() == "bot/bar"
 
 
 class TestDependsOnValidation:
@@ -70,14 +70,14 @@ class TestDependsOnValidation:
             )
 
 
-class TestDefaults:
+class TestJobDefaults:
     def test_branch_prefix_default(self) -> None:
         cfg = _config()
-        assert cfg.defaults.branch_prefix == "repoactive/"
+        assert cfg.job_defaults.branch_prefix == "repoactive/"
 
     def test_labels_default_empty(self) -> None:
         cfg = _config()
-        assert cfg.defaults.labels == []
+        assert cfg.job_defaults.labels == []
 
 
 class TestLoadConfig:
@@ -121,24 +121,24 @@ class TestLoadConfig:
         base = tmp_path / "base.toml"
         base.write_text(
             '[[platform]]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
-            '[defaults]\nbranch_prefix = "old/"\n'
+            '[job-defaults]\nbranch_prefix = "old/"\n'
         )
         override = tmp_path / "override.toml"
-        override.write_text('[defaults]\nbranch_prefix = "new/"\n')
+        override.write_text('[job-defaults]\nbranch_prefix = "new/"\n')
         cfg = load_config([base, override])
-        assert cfg.defaults.branch_prefix == "new/"
+        assert cfg.job_defaults.branch_prefix == "new/"
 
     def test_merge_unset_key_preserved(self, tmp_path: Path) -> None:
         base = tmp_path / "base.toml"
         base.write_text(
             '[[platform]]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
-            '[defaults]\nbranch_prefix = "base/"\nmr_title_prefix = "kept"\n'
+            '[job-defaults]\nbranch_prefix = "base/"\nmr_title_prefix = "kept"\n'
         )
         override = tmp_path / "override.toml"
-        override.write_text('[defaults]\nbranch_prefix = "new/"\n')
+        override.write_text('[job-defaults]\nbranch_prefix = "new/"\n')
         cfg = load_config([base, override])
-        assert cfg.defaults.branch_prefix == "new/"
-        assert cfg.defaults.mr_title_prefix == "kept"
+        assert cfg.job_defaults.branch_prefix == "new/"
+        assert cfg.job_defaults.mr_title_prefix == "kept"
 
     def test_merge_platform_new_entry_appended(self, tmp_path: Path) -> None:
         base = tmp_path / "base.toml"
@@ -189,7 +189,7 @@ class TestLoadConfig:
 
     def test_platform_always_includes_defaults(self, tmp_path: Path) -> None:
         f = tmp_path / ".repoactive.toml"
-        f.write_text('[defaults]\nbranch_prefix = "x/"\n')
+        f.write_text('[job-defaults]\nbranch_prefix = "x/"\n')
         cfg = load_config([f])
         assert {p.url for p in cfg.platforms} >= {"https://github.com", "https://gitlab.com"}
 
@@ -199,9 +199,9 @@ class TestLoadConfig:
             '[[platform]]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
         )
         partial = tmp_path / "partial.toml"
-        partial.write_text('[defaults]\nbranch_prefix = "x/"\n')
+        partial.write_text('[job-defaults]\nbranch_prefix = "x/"\n')
         cfg = load_config([base, partial])
-        assert cfg.defaults.branch_prefix == "x/"
+        assert cfg.job_defaults.branch_prefix == "x/"
 
     def test_second_config_invalid_depends_on_raises(self, tmp_path: Path) -> None:
         base = tmp_path / "base.toml"

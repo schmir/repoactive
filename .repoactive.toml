@@ -1,4 +1,4 @@
-[defaults]
+[job-defaults]
 branch_prefix = "repoactive/"
 
 [[job]]

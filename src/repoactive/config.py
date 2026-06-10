@@ -18,13 +18,14 @@ class PlatformConfig(BaseModel):
     token_env: str
 
 
-class Defaults(BaseModel):
+class JobDefaults(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     branch_prefix: str = "repoactive/"
     mr_title_prefix: str = "[repoactive] "
     commit_title_prefix: str = "[repoactive] "
     labels: list[str] = Field(default_factory=list)
+    base_branch: str | None = None
 
 
 class Job(BaseModel):
@@ -34,7 +35,6 @@ class Job(BaseModel):
     command: str
     title: str
     description: str | None = None
-    labels: list[str] = Field(default_factory=list)
     base_branch: str | None = None
     draft: bool = False
     create_mr: bool = True
@@ -42,15 +42,41 @@ class Job(BaseModel):
     depends_on: list[str] = Field(default_factory=list)
     output_in_commit: bool = True
 
-    def branch_name(self, prefix: str) -> str:
-        return f"{prefix}{self.name}"
+    # the following fields will be resolved from the defaults
+    branch_prefix: str | None = None
+    mr_title_prefix: str | None = None
+    commit_title_prefix: str | None = None
+    labels: list[str] = Field(default_factory=list)
+
+    def branch_name(self) -> str:
+        assert self.branch_prefix is not None, "job must be resolved before calling branch_name()"
+        return f"{self.branch_prefix}{self.name}"
+
+    def resolve(self, defaults: JobDefaults) -> Job:
+        return self.model_copy(
+            update={
+                "branch_prefix": self.branch_prefix
+                if self.branch_prefix is not None
+                else defaults.branch_prefix,
+                "mr_title_prefix": self.mr_title_prefix
+                if self.mr_title_prefix is not None
+                else defaults.mr_title_prefix,
+                "commit_title_prefix": self.commit_title_prefix
+                if self.commit_title_prefix is not None
+                else defaults.commit_title_prefix,
+                "base_branch": self.base_branch
+                if self.base_branch is not None
+                else defaults.base_branch,
+                "labels": list(dict.fromkeys(defaults.labels + self.labels)),
+            }
+        )
 
 
 class Config(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     platforms: list[PlatformConfig] = Field(alias="platform", default_factory=list)
-    defaults: Defaults = Field(default_factory=Defaults)
+    job_defaults: JobDefaults = Field(alias="job-defaults", default_factory=JobDefaults)
     jobs: list[Job] = Field(default_factory=list, alias="job")
 
     @model_validator(mode="after")

@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from repoactive.config import Config, Defaults, Job
+from repoactive.config import Config, Job, JobDefaults
 from repoactive.runner import (
     JobResult,
     _compute_parents,
@@ -17,13 +17,16 @@ from repoactive.runner import (
 )
 
 
-def _job(
+def _job(  # noqa: PLR0913
     name: str,
     *,
     depends_on: list[str] | None = None,
     base_branch: str | None = None,
     description: str | None = None,
     labels: list[str] | None = None,
+    branch_prefix: str = "repoactive/",
+    mr_title_prefix: str = "",
+    commit_title_prefix: str = "",
 ) -> Job:
     return Job(
         name=name,
@@ -33,18 +36,7 @@ def _job(
         base_branch=base_branch,
         description=description,
         labels=labels or [],
-    )
-
-
-def _defaults(
-    prefix: str = "repoactive/",
-    labels: list[str] | None = None,
-    mr_title_prefix: str = "",
-    commit_title_prefix: str = "",
-) -> Defaults:
-    return Defaults(
-        branch_prefix=prefix,
-        labels=labels or [],
+        branch_prefix=branch_prefix,
         mr_title_prefix=mr_title_prefix,
         commit_title_prefix=commit_title_prefix,
     )
@@ -221,46 +213,90 @@ class TestComputeParents:
         assert parents == ["repoactive/a", "repoactive/b"]
 
 
+class TestJobResolve:
+    def test_branch_prefix_falls_back_to_defaults(self) -> None:
+        job = Job(name="x", command="cmd", title="X")
+        resolved = job.resolve(JobDefaults(branch_prefix="bot/"))
+        assert resolved.branch_prefix == "bot/"
+
+    def test_branch_prefix_per_job_overrides_defaults(self) -> None:
+        job = Job(name="x", command="cmd", title="X", branch_prefix="custom/")
+        resolved = job.resolve(JobDefaults(branch_prefix="bot/"))
+        assert resolved.branch_prefix == "custom/"
+
+    def test_mr_title_prefix_falls_back_to_defaults(self) -> None:
+        job = Job(name="x", command="cmd", title="X")
+        resolved = job.resolve(JobDefaults(mr_title_prefix="[bot] "))
+        assert resolved.mr_title_prefix == "[bot] "
+
+    def test_mr_title_prefix_per_job_overrides_defaults(self) -> None:
+        job = Job(name="x", command="cmd", title="X", mr_title_prefix="[job] ")
+        resolved = job.resolve(JobDefaults(mr_title_prefix="[bot] "))
+        assert resolved.mr_title_prefix == "[job] "
+
+    def test_commit_title_prefix_falls_back_to_defaults(self) -> None:
+        job = Job(name="x", command="cmd", title="X")
+        resolved = job.resolve(JobDefaults(commit_title_prefix="[bot] "))
+        assert resolved.commit_title_prefix == "[bot] "
+
+    def test_commit_title_prefix_per_job_overrides_defaults(self) -> None:
+        job = Job(name="x", command="cmd", title="X", commit_title_prefix="[job] ")
+        resolved = job.resolve(JobDefaults(commit_title_prefix="[bot] "))
+        assert resolved.commit_title_prefix == "[job] "
+
+    def test_labels_merged_with_defaults(self) -> None:
+        job = Job(name="x", command="cmd", title="X", labels=["feat"])
+        resolved = job.resolve(JobDefaults(labels=["auto"]))
+        assert resolved.labels == ["auto", "feat"]
+
+    def test_labels_deduplicated(self) -> None:
+        job = Job(name="x", command="cmd", title="X", labels=["auto"])
+        resolved = job.resolve(JobDefaults(labels=["auto"]))
+        assert resolved.labels == ["auto"]
+
+    def test_empty_prefix_string_not_overridden_by_defaults(self) -> None:
+        job = Job(name="x", command="cmd", title="X", mr_title_prefix="")
+        resolved = job.resolve(JobDefaults(mr_title_prefix="[bot] "))
+        assert resolved.mr_title_prefix == ""
+
+    def test_base_branch_falls_back_to_defaults(self) -> None:
+        job = Job(name="x", command="cmd", title="X")
+        resolved = job.resolve(JobDefaults(base_branch="main"))
+        assert resolved.base_branch == "main"
+
+    def test_base_branch_per_job_overrides_defaults(self) -> None:
+        job = Job(name="x", command="cmd", title="X", base_branch="dev")
+        resolved = job.resolve(JobDefaults(base_branch="main"))
+        assert resolved.base_branch == "dev"
+
+    def test_base_branch_stays_none_when_not_set(self) -> None:
+        job = Job(name="x", command="cmd", title="X")
+        resolved = job.resolve(JobDefaults())
+        assert resolved.base_branch is None
+
+
 _BM = "repoactive/x"
 _BASE_BRANCH = "main"
 
 
 class TestMrParams:
-    def test_labels_merged(self) -> None:
-        job = _job("x", labels=["feat"])
-        params = _mr_params(
-            job=job,
-            defaults=_defaults(labels=["auto"]),
-            bookmark=_BM,
-            base_branch=_BASE_BRANCH,
-        )
+    def test_labels_used(self) -> None:
+        job = _job("x", labels=["auto", "feat"])
+        params = _mr_params(job=job, bookmark=_BM, base_branch=_BASE_BRANCH)
         assert params.labels == ["auto", "feat"]
 
-    def test_labels_deduplicated(self) -> None:
-        job = _job("x", labels=["auto"])
-        params = _mr_params(
-            job=job,
-            defaults=_defaults(labels=["auto"]),
-            bookmark=_BM,
-            base_branch=_BASE_BRANCH,
-        )
-        assert params.labels == ["auto"]
-
     def test_description_falls_back_to_empty(self) -> None:
-        params = _mr_params(
-            job=_job("x"), defaults=_defaults(), bookmark=_BM, base_branch=_BASE_BRANCH
-        )
+        params = _mr_params(job=_job("x"), bookmark=_BM, base_branch=_BASE_BRANCH)
         assert params.description == ""
 
     def test_description_used_when_set(self) -> None:
         job = _job("x", description="Details.")
-        params = _mr_params(job=job, defaults=_defaults(), bookmark=_BM, base_branch=_BASE_BRANCH)
+        params = _mr_params(job=job, bookmark=_BM, base_branch=_BASE_BRANCH)
         assert params.description == "Details."
 
     def test_command_output_appended(self) -> None:
         params = _mr_params(
             job=_job("x"),
-            defaults=_defaults(),
             bookmark=_BM,
             base_branch=_BASE_BRANCH,
             command_output="some output",
@@ -270,7 +306,6 @@ class TestMrParams:
     def test_command_output_appended_after_description(self) -> None:
         params = _mr_params(
             job=_job("x", description="Details."),
-            defaults=_defaults(),
             bookmark=_BM,
             base_branch=_BASE_BRANCH,
             command_output="some output",
@@ -281,7 +316,6 @@ class TestMrParams:
         job = _job("x", description="Details.")
         params = _mr_params(
             job=job,
-            defaults=_defaults(),
             bookmark=_BM,
             base_branch=_BASE_BRANCH,
             command_output="",
@@ -292,7 +326,6 @@ class TestMrParams:
         dep_outputs = [("dep-cmd", "dep output")]
         params = _mr_params(
             job=_job("x"),
-            defaults=_defaults(),
             bookmark=_BM,
             base_branch=_BASE_BRANCH,
             command_output="own output",
@@ -304,7 +337,6 @@ class TestMrParams:
         dep_outputs = [("dep-cmd", "dep output")]
         params = _mr_params(
             job=_job("x"),
-            defaults=_defaults(),
             bookmark=_BM,
             base_branch=_BASE_BRANCH,
             command_output="",
@@ -316,7 +348,6 @@ class TestMrParams:
         dep_outputs = [("dep-cmd", ""), ("dep2-cmd", "dep2 output")]
         params = _mr_params(
             job=_job("x"),
-            defaults=_defaults(),
             bookmark=_BM,
             base_branch=_BASE_BRANCH,
             command_output="",
@@ -326,8 +357,7 @@ class TestMrParams:
 
     def test_title_prefix_applied(self) -> None:
         params = _mr_params(
-            job=_job("x"),
-            defaults=_defaults(mr_title_prefix="[bot] "),
+            job=_job("x", mr_title_prefix="[bot] "),
             bookmark=_BM,
             base_branch=_BASE_BRANCH,
         )
@@ -335,22 +365,18 @@ class TestMrParams:
 
     def test_empty_title_prefix(self) -> None:
         params = _mr_params(
-            job=_job("x"),
-            defaults=_defaults(mr_title_prefix=""),
-            bookmark=_BM,
-            base_branch=_BASE_BRANCH,
+            job=_job("x", mr_title_prefix=""), bookmark=_BM, base_branch=_BASE_BRANCH
         )
         assert params.title == "Change x"
 
     def test_draft_forwarded(self) -> None:
-        job = Job(name="x", command="cmd", title="X", draft=True)
-        params = _mr_params(job=job, defaults=_defaults(), bookmark=_BM, base_branch=_BASE_BRANCH)
+        job = Job(name="x", command="cmd", title="X", draft=True, mr_title_prefix="")
+        params = _mr_params(job=job, bookmark=_BM, base_branch=_BASE_BRANCH)
         assert params.draft is True
 
     def test_dep_mr_urls_included(self) -> None:
         params = _mr_params(
             job=_job("x"),
-            defaults=_defaults(),
             bookmark=_BM,
             base_branch=_BASE_BRANCH,
             dep_mr_urls=[("Dep A", "https://example.com/mr/1")],
@@ -360,7 +386,6 @@ class TestMrParams:
     def test_dep_mr_urls_multiple(self) -> None:
         params = _mr_params(
             job=_job("x"),
-            defaults=_defaults(),
             bookmark=_BM,
             base_branch=_BASE_BRANCH,
             dep_mr_urls=[
@@ -375,7 +400,6 @@ class TestMrParams:
     def test_dep_mr_urls_after_description(self) -> None:
         params = _mr_params(
             job=_job("x", description="Details."),
-            defaults=_defaults(),
             bookmark=_BM,
             base_branch=_BASE_BRANCH,
             dep_mr_urls=[("Dep A", "https://example.com/mr/1")],
@@ -387,7 +411,6 @@ class TestMrParams:
     def test_dep_mr_urls_before_command_output(self) -> None:
         params = _mr_params(
             job=_job("x"),
-            defaults=_defaults(),
             bookmark=_BM,
             base_branch=_BASE_BRANCH,
             command_output="some output",
@@ -406,9 +429,7 @@ class TestRunJob:
         mock_jj.is_empty.return_value = False
         job = _job("foo")
 
-        result = run_job(
-            job=job, defaults=_defaults(), parents=["trunk()"], repo_path=REPO, platform=None
-        )
+        result = run_job(job=job, parents=["trunk()"], repo_path=REPO, platform=None)
 
         mock_jj.new.assert_called_once_with("trunk()", cwd=REPO)
         mock_jj.bookmark_set.assert_called_once_with("repoactive/foo", cwd=REPO)
@@ -425,7 +446,7 @@ class TestRunJob:
         mock_jj.is_empty.return_value = False
         job = _job("foo", description="Body text.")
 
-        run_job(job=job, defaults=_defaults(), parents=["trunk()"], repo_path=REPO, platform=None)
+        run_job(job=job, parents=["trunk()"], repo_path=REPO, platform=None)
 
         mock_jj.describe.assert_called_once_with("Change foo\n\nBody text.", cwd=REPO)
 
@@ -438,7 +459,7 @@ class TestRunJob:
         mock_jj.is_empty.return_value = False
         job = _job("foo")
 
-        run_job(job=job, defaults=_defaults(), parents=["trunk()"], repo_path=REPO, platform=None)
+        run_job(job=job, parents=["trunk()"], repo_path=REPO, platform=None)
 
         mock_jj.describe.assert_called_once_with(
             "Change foo\n\n  $ cmd-foo\n  did stuff", cwd=REPO
@@ -451,9 +472,16 @@ class TestRunJob:
     ) -> None:
         mock_sub.return_value.stdout = "did stuff\n"
         mock_jj.is_empty.return_value = False
-        job = Job(name="foo", command="cmd-foo", title="Change foo", output_in_commit=False)
+        job = Job(
+            name="foo",
+            command="cmd-foo",
+            title="Change foo",
+            output_in_commit=False,
+            branch_prefix="repoactive/",
+            commit_title_prefix="",
+        )
 
-        run_job(job=job, defaults=_defaults(), parents=["trunk()"], repo_path=REPO, platform=None)
+        run_job(job=job, parents=["trunk()"], repo_path=REPO, platform=None)
 
         mock_jj.describe.assert_called_once_with("Change foo", cwd=REPO)
 
@@ -463,10 +491,8 @@ class TestRunJob:
         mock_sub.return_value.stdout = ""
         mock_jj.is_empty.return_value = False
 
-        defaults = _defaults(commit_title_prefix="[bot] ")
         run_job(
-            job=_job("foo"),
-            defaults=defaults,
+            job=_job("foo", commit_title_prefix="[bot] "),
             parents=["trunk()"],
             repo_path=REPO,
             platform=None,
@@ -483,9 +509,7 @@ class TestRunJob:
         mock_jj.is_empty.return_value = True
         job = _job("foo")
 
-        result = run_job(
-            job=job, defaults=_defaults(), parents=["trunk()"], repo_path=REPO, platform=None
-        )
+        result = run_job(job=job, parents=["trunk()"], repo_path=REPO, platform=None)
 
         mock_jj.abandon.assert_called_once_with(cwd=REPO)
         mock_jj.bookmark_set.assert_called_once_with(
@@ -506,7 +530,6 @@ class TestRunJob:
 
         result = run_job(
             job=job,
-            defaults=_defaults(),
             parents=["repoactive/a", "repoactive/b"],
             repo_path=REPO,
             platform=None,
@@ -526,7 +549,6 @@ class TestRunJob:
         with pytest.raises(RuntimeError, match="command failed"):
             run_job(
                 job=_job("foo"),
-                defaults=_defaults(),
                 parents=["trunk()"],
                 repo_path=REPO,
                 platform=None,
@@ -548,7 +570,6 @@ class TestRunJob:
 
         run_job(
             job=_job("foo"),
-            defaults=_defaults(),
             parents=["trunk()"],
             repo_path=REPO,
             platform=platform,
@@ -568,7 +589,6 @@ class TestRunJob:
 
         result = run_job(
             job=_job("foo"),
-            defaults=_defaults(),
             parents=["trunk()"],
             repo_path=REPO,
             platform=platform,
@@ -585,11 +605,17 @@ class TestRunJob:
         mock_sub.return_value.stdout = ""
         mock_jj.is_empty.return_value = False
         platform = MagicMock()
-        job = Job(name="foo", command="cmd", title="Foo", create_mr=False)
+        job = Job(
+            name="foo",
+            command="cmd",
+            title="Foo",
+            create_mr=False,
+            branch_prefix="repoactive/",
+            commit_title_prefix="",
+        )
 
         result = run_job(
             job=job,
-            defaults=_defaults(),
             parents=["trunk()"],
             repo_path=REPO,
             platform=platform,
@@ -608,7 +634,6 @@ class TestRunJob:
 
         result = run_job(
             job=_job("foo"),
-            defaults=_defaults(),
             parents=["trunk()"],
             repo_path=REPO,
             platform=platform,
@@ -628,7 +653,6 @@ class TestRunJob:
 
         result = run_job(
             job=_job("foo"),
-            defaults=_defaults(),
             parents=["trunk()"],
             repo_path=REPO,
             platform=None,
@@ -761,3 +785,15 @@ class TestRunAll:
         b = _job("b", depends_on=["a"])
         with pytest.raises(ValueError, match="Cannot run disabled job"):
             run_all(config=_config(a, b), repo_path=REPO, requested_jobs=["b"])
+
+    @patch("repoactive.runner.run_job")
+    def test_run_all_resolves_jobs_with_defaults(self, mock_run_job: MagicMock) -> None:
+        a = _job("a")
+        mock_run_job.return_value = _result(a, revsets=["repoactive/a"])
+
+        run_all(config=_config(a), repo_path=REPO)
+
+        passed_job = mock_run_job.call_args.kwargs["job"]
+        assert passed_job.branch_prefix == "repoactive/"
+        assert passed_job.mr_title_prefix == "[repoactive] "
+        assert passed_job.commit_title_prefix == "[repoactive] "

@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from repoactive import jj
-from repoactive.config import Config, Defaults, Job
+from repoactive.config import Config, Job
 from repoactive.platforms.base import MRParams, Platform
 
 
@@ -87,14 +87,12 @@ def _compute_parents(job: Job, results: dict[str, JobResult]) -> list[str]:
 def _mr_params(  # noqa: PLR0913
     *,
     job: Job,
-    defaults: Defaults,
     bookmark: str,
     base_branch: str,
     command_output: str = "",
     dep_outputs: list[tuple[str, str]] | None = None,
     dep_mr_urls: list[tuple[str, str]] | None = None,
 ) -> MRParams:
-    labels = list(dict.fromkeys(defaults.labels + job.labels))
     description = job.description or ""
     if dep_mr_urls:
         if description:
@@ -111,9 +109,9 @@ def _mr_params(  # noqa: PLR0913
     return MRParams(
         source_branch=bookmark,
         target_branch=base_branch,
-        title=f"{defaults.mr_title_prefix}{job.title}",
+        title=f"{job.mr_title_prefix}{job.title}",
         description=description,
-        labels=labels,
+        labels=job.labels,
         draft=job.draft,
     )
 
@@ -169,7 +167,6 @@ def _handle_empty(  # noqa: PLR0913
 def _publish_job(  # noqa: PLR0913
     *,
     job: Job,
-    defaults: Defaults,
     bookmark: str,
     repo_path: Path,
     platform: Platform | None,
@@ -179,7 +176,7 @@ def _publish_job(  # noqa: PLR0913
     local: bool = False,
 ) -> JobResult:
     jj.bookmark_set(bookmark, cwd=repo_path)
-    commit_message = f"{defaults.commit_title_prefix}{job.title}"
+    commit_message = f"{job.commit_title_prefix}{job.title}"
     if job.description:
         commit_message += f"\n\n{job.description}"
     if job.output_in_commit and command_output:
@@ -204,7 +201,6 @@ def _publish_job(  # noqa: PLR0913
         base_branch = job.base_branch or platform.default_branch()
         params = _mr_params(
             job=job,
-            defaults=defaults,
             bookmark=bookmark,
             base_branch=base_branch,
             command_output=command_output,
@@ -228,7 +224,6 @@ def _publish_job(  # noqa: PLR0913
 def run_job(  # noqa: PLR0913
     *,
     job: Job,
-    defaults: Defaults,
     parents: list[str],
     repo_path: Path,
     platform: Platform | None,
@@ -236,14 +231,13 @@ def run_job(  # noqa: PLR0913
     dep_mr_urls: list[tuple[str, str]] | None = None,
     local: bool = False,
 ) -> JobResult:
-    bookmark = job.branch_name(defaults.branch_prefix)
+    bookmark = job.branch_name()
     jj.new(*parents, cwd=repo_path)
     command_output = _run_command(job, repo_path)
     if jj.is_empty(cwd=repo_path):
         return _handle_empty(job, bookmark, parents, repo_path, command_output, local=local)
     return _publish_job(
         job=job,
-        defaults=defaults,
         bookmark=bookmark,
         repo_path=repo_path,
         platform=platform,
@@ -314,8 +308,7 @@ def run_all(
         ]
         try:
             result = run_job(
-                job=job,
-                defaults=config.defaults,
+                job=job.resolve(config.job_defaults),
                 parents=parents,
                 repo_path=repo_path,
                 platform=platform,
