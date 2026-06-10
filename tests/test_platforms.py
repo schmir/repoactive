@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Literal
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from repoactive.config import PlatformConfig, load_config
 from repoactive.platforms import _match_platform
 from repoactive.platforms.base import parse_repo_from_url
+from repoactive.platforms.github import GitHubPlatform
 
 
 class TestParseRepoFromUrl:
@@ -66,3 +68,25 @@ class TestMatchPlatform:
         p = _match_platform("https://gitlab.com/ns/repo.git", cfg.platforms)
         assert p.url == "https://gitlab.com"
         assert p.token_env == "GITLAB_TOKEN"
+
+
+class TestGitHubPlatformInit:
+    @patch("repoactive.platforms.github.Github")
+    def test_public_github_uses_default_api_url(self, mock_github: MagicMock) -> None:
+        GitHubPlatform(url="https://github.com", token="tok", repo="owner/repo")
+        mock_github.assert_called_once_with("tok", base_url="https://api.github.com")
+
+    @patch("repoactive.platforms.github.Github")
+    def test_public_github_with_trailing_slash(self, mock_github: MagicMock) -> None:
+        GitHubPlatform(url="https://github.com/", token="tok", repo="owner/repo")
+        mock_github.assert_called_once_with("tok", base_url="https://api.github.com")
+
+    @patch("repoactive.platforms.github.Github")
+    def test_ghe_url_uses_api_v3(self, mock_github: MagicMock) -> None:
+        GitHubPlatform(url="https://github.example.com", token="tok", repo="owner/repo")
+        mock_github.assert_called_once_with("tok", base_url="https://github.example.com/api/v3")
+
+    @patch("repoactive.platforms.github.Github")
+    def test_none_url_uses_default_api_url(self, mock_github: MagicMock) -> None:
+        GitHubPlatform(url=None, token="tok", repo="owner/repo")
+        mock_github.assert_called_once_with("tok", base_url="https://api.github.com")

@@ -3,11 +3,17 @@ from github import Github
 from repoactive.platforms.base import MRParams, Platform
 
 _DEFAULT_API_URL = "https://api.github.com"
+_PUBLIC_GITHUB_URL = "https://github.com"
 
 
 class GitHubPlatform(Platform):
     def __init__(self, url: str | None, token: str, repo: str) -> None:
-        base_url = (url.rstrip("/") + "/api/v3") if url else _DEFAULT_API_URL
+        normalized = (url or "").rstrip("/")
+        base_url = (
+            normalized + "/api/v3"
+            if normalized and normalized != _PUBLIC_GITHUB_URL
+            else _DEFAULT_API_URL
+        )
         self._gh = Github(token, base_url=base_url)
         self._repo = self._gh.get_repo(repo)
 
