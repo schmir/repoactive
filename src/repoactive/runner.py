@@ -306,12 +306,10 @@ def run_all(
         dep_outputs = [
             (summary.results[dep].job.command, summary.results[dep].command_output)
             for dep in job.depends_on
-            if dep in summary.results
         ]
         dep_mr_urls = [
             (summary.results[dep].job.title, url)
             for dep in job.depends_on
-            if dep in summary.results
             if (url := summary.results[dep].mr_url) is not None
         ]
         try:
