@@ -1,7 +1,10 @@
 *.py[cod]
+.claude/
+.envrc
 .nox/
 .pytest_cache/
 .ruff_cache/
 .venv/
+CLAUDE.md
 __pycache__/
 dist/
