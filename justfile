@@ -11,7 +11,7 @@ test *args:
 
 # Run CI checks: prek, type check, tests
 ci:
-    prek run --all-files
+    scripts/prek.sh run --all-files
     uv run ty check
     uv run pytest
     uv run nox -s validate_config
