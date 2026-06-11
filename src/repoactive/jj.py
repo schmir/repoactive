@@ -109,3 +109,11 @@ def get_remote_url(remote: str = "origin", cwd: Path | None = None) -> str:
         if parts and parts[0] == remote:
             return parts[1]
     raise JJError(f"Remote '{remote}' not found")
+
+
+def workspace_add(name: str, path: Path, cwd: Path | None = None) -> None:
+    _run("workspace", "add", "--name", name, str(path), cwd=cwd)
+
+
+def workspace_forget(name: str, cwd: Path | None = None) -> None:
+    _run("workspace", "forget", name, cwd=cwd)

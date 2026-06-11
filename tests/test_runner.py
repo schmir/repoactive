@@ -1,6 +1,6 @@
 import subprocess
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 
@@ -432,10 +432,10 @@ class TestRunJob:
 
         result = run_job(job=job, parents=["trunk()"], repo_path=REPO, platform=None)
 
-        mock_jj.new.assert_called_once_with("trunk()", cwd=REPO)
-        mock_jj.bookmark_set.assert_called_once_with("repoactive/foo", cwd=REPO)
-        mock_jj.describe.assert_called_once_with("Change foo", cwd=REPO)
-        mock_jj.git_push.assert_called_once_with("repoactive/foo", cwd=REPO)
+        mock_jj.new.assert_called_once_with("trunk()", cwd=ANY)
+        mock_jj.bookmark_set.assert_called_once_with("repoactive/foo", cwd=ANY)
+        mock_jj.describe.assert_called_once_with("Change foo", cwd=ANY)
+        mock_jj.git_push.assert_called_once_with("repoactive/foo", cwd=ANY)
         mock_jj.abandon.assert_not_called()
         assert result.produced_output is True
         assert result.effective_revsets == ["repoactive/foo"]
@@ -450,7 +450,7 @@ class TestRunJob:
 
         run_job(job=job, parents=["trunk()"], repo_path=REPO, platform=None)
 
-        mock_jj.describe.assert_called_once_with("Change foo\n\nBody text.", cwd=REPO)
+        mock_jj.describe.assert_called_once_with("Change foo\n\nBody text.", cwd=ANY)
 
     @patch("repoactive.runner.jj")
     @patch("repoactive.runner.subprocess.run")
@@ -464,9 +464,7 @@ class TestRunJob:
 
         run_job(job=job, parents=["trunk()"], repo_path=REPO, platform=None)
 
-        mock_jj.describe.assert_called_once_with(
-            "Change foo\n\n  $ cmd-foo\n  did stuff", cwd=REPO
-        )
+        mock_jj.describe.assert_called_once_with("Change foo\n\n  $ cmd-foo\n  did stuff", cwd=ANY)
 
     @patch("repoactive.runner.jj")
     @patch("repoactive.runner.subprocess.run")
@@ -487,7 +485,7 @@ class TestRunJob:
 
         run_job(job=job, parents=["trunk()"], repo_path=REPO, platform=None)
 
-        mock_jj.describe.assert_called_once_with("Change foo", cwd=REPO)
+        mock_jj.describe.assert_called_once_with("Change foo", cwd=ANY)
 
     @patch("repoactive.runner.jj")
     @patch("repoactive.runner.subprocess.run")
@@ -503,7 +501,7 @@ class TestRunJob:
             platform=None,
         )
 
-        mock_jj.describe.assert_called_once_with("[bot] Change foo", cwd=REPO)
+        mock_jj.describe.assert_called_once_with("[bot] Change foo", cwd=ANY)
 
     @patch("repoactive.runner.jj")
     @patch("repoactive.runner.subprocess.run")
@@ -514,7 +512,7 @@ class TestRunJob:
 
         result = run_job(job=_job("foo"), parents=["trunk()"], repo_path=REPO, platform=None)
 
-        mock_jj.abandon.assert_called_once_with(cwd=REPO)
+        mock_jj.abandon.assert_called_once_with(cwd=ANY)
         mock_jj.bookmark_set.assert_not_called()
         mock_jj.bookmark_delete.assert_not_called()
         mock_jj.git_push.assert_not_called()
@@ -533,9 +531,9 @@ class TestRunJob:
 
         result = run_job(job=_job("foo"), parents=["trunk()"], repo_path=REPO, platform=None)
 
-        mock_jj.abandon.assert_called_once_with(cwd=REPO)
-        mock_jj.bookmark_delete.assert_called_once_with("repoactive/foo", cwd=REPO)
-        mock_jj.git_push_delete.assert_called_once_with("repoactive/foo", cwd=REPO)
+        mock_jj.abandon.assert_called_once_with(cwd=ANY)
+        mock_jj.bookmark_delete.assert_called_once_with("repoactive/foo", cwd=ANY)
+        mock_jj.git_push_delete.assert_called_once_with("repoactive/foo", cwd=ANY)
         mock_jj.bookmark_set.assert_not_called()
         mock_jj.git_push.assert_not_called()
         assert result.produced_output is False
@@ -552,7 +550,7 @@ class TestRunJob:
 
         run_job(job=_job("foo"), parents=["trunk()"], repo_path=REPO, platform=None, local=True)
 
-        mock_jj.bookmark_delete.assert_called_once_with("repoactive/foo", cwd=REPO)
+        mock_jj.bookmark_delete.assert_called_once_with("repoactive/foo", cwd=ANY)
         mock_jj.git_push_delete.assert_not_called()
 
     @patch("repoactive.runner.jj")
@@ -587,7 +585,7 @@ class TestRunJob:
                 platform=None,
             )
 
-        mock_jj.abandon.assert_called_once_with(cwd=REPO)
+        mock_jj.abandon.assert_called_once_with(cwd=ANY)
         mock_jj.bookmark_set.assert_not_called()
 
     @patch("repoactive.runner.jj")
@@ -697,7 +695,7 @@ class TestRunJob:
             local=True,
         )
 
-        mock_jj.abandon.assert_called_once_with(cwd=REPO)
+        mock_jj.abandon.assert_called_once_with(cwd=ANY)
         mock_jj.bookmark_set.assert_not_called()
         mock_jj.git_push.assert_not_called()
         assert result.produced_output is False
@@ -714,9 +712,9 @@ class TestRunJob:
         run_job(job=_job("foo"), parents=["trunk()"], repo_path=REPO, platform=None)
 
         mock_jj.new.assert_not_called()
-        mock_jj.edit.assert_called_once_with("repoactive/foo", cwd=REPO)
-        mock_jj.restore.assert_called_once_with("repoactive/foo", cwd=REPO)
-        mock_jj.rebase.assert_called_once_with("trunk()", cwd=REPO)
+        mock_jj.edit.assert_called_once_with("repoactive/foo", cwd=ANY)
+        mock_jj.restore.assert_called_once_with("repoactive/foo", cwd=ANY)
+        mock_jj.rebase.assert_called_once_with("trunk()", cwd=ANY)
 
     @patch("repoactive.runner.jj")
     @patch("repoactive.runner.subprocess.run")
@@ -735,7 +733,7 @@ class TestRunJob:
         )
 
         mock_jj.new.assert_not_called()
-        mock_jj.rebase.assert_called_once_with("repoactive/a", "repoactive/b", cwd=REPO)
+        mock_jj.rebase.assert_called_once_with("repoactive/a", "repoactive/b", cwd=ANY)
 
     @patch("repoactive.runner.jj")
     @patch("repoactive.runner.subprocess.run")
@@ -746,7 +744,7 @@ class TestRunJob:
 
         run_job(job=_job("foo"), parents=["trunk()"], repo_path=REPO, platform=None)
 
-        mock_jj.new.assert_called_once_with("trunk()", cwd=REPO)
+        mock_jj.new.assert_called_once_with("trunk()", cwd=ANY)
         mock_jj.edit.assert_not_called()
         mock_jj.restore.assert_not_called()
         mock_jj.rebase.assert_not_called()

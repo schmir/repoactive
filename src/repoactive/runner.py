@@ -1,4 +1,7 @@
+import contextlib
+import shutil
 import subprocess
+import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -250,35 +253,44 @@ def run_job(  # noqa: PLR0913
     start = time.monotonic()
     bookmark = job.branch_name()
     bookmark_existed = jj.bookmark_exists(bookmark, cwd=repo_path)
-    if bookmark_existed:
-        jj.edit(bookmark, cwd=repo_path)
-        jj.rebase(*parents, cwd=repo_path)
-        jj.restore(bookmark, cwd=repo_path)
-    else:
-        jj.new(*parents, cwd=repo_path)
-    command_output = _run_command(job, repo_path)
-    if jj.is_empty(cwd=repo_path):
-        return _handle_empty(
-            job,
-            bookmark,
-            parents,
-            repo_path,
-            command_output,
-            bookmark_existed=bookmark_existed,
+
+    tmp_parent = Path(tempfile.mkdtemp(prefix="repoactive_"))
+    workspace_path = tmp_parent / "workspace"
+    jj.workspace_add(job.name, workspace_path, cwd=repo_path)
+    try:
+        if bookmark_existed:
+            jj.edit(bookmark, cwd=workspace_path)
+            jj.rebase(*parents, cwd=workspace_path)
+            jj.restore(bookmark, cwd=workspace_path)
+        else:
+            jj.new(*parents, cwd=workspace_path)
+        command_output = _run_command(job, workspace_path)
+        if jj.is_empty(cwd=workspace_path):
+            return _handle_empty(
+                job,
+                bookmark,
+                parents,
+                workspace_path,
+                command_output,
+                bookmark_existed=bookmark_existed,
+                local=local,
+                start=start,
+            )
+        return _publish_job(
+            job=job,
+            bookmark=bookmark,
+            repo_path=workspace_path,
+            platform=platform,
+            command_output=command_output,
+            dep_outputs=dep_outputs,
+            dep_mr_urls=dep_mr_urls,
             local=local,
             start=start,
         )
-    return _publish_job(
-        job=job,
-        bookmark=bookmark,
-        repo_path=repo_path,
-        platform=platform,
-        command_output=command_output,
-        dep_outputs=dep_outputs,
-        dep_mr_urls=dep_mr_urls,
-        local=local,
-        start=start,
-    )
+    finally:
+        with contextlib.suppress(jj.JJError):
+            jj.workspace_forget(job.name, cwd=repo_path)
+        shutil.rmtree(tmp_parent, ignore_errors=True)
 
 
 def _propagate_disabled(jobs: list[Job]) -> set[str]:
