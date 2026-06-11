@@ -1,4 +1,5 @@
 import contextlib
+import logging
 import shutil
 import subprocess
 import tempfile
@@ -9,6 +10,8 @@ from pathlib import Path
 from repoactive import jj
 from repoactive.config import Config, Job
 from repoactive.platforms.base import MRParams, Platform
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -250,6 +253,8 @@ def run_job(  # noqa: PLR0913
     dep_mr_urls: list[tuple[str, str]] | None = None,
     local: bool = False,
 ) -> JobResult:
+    logger.debug("starting job: %s", job.model_dump_json(indent=2))
+    logger.debug("parents: %s", parents)
     start = time.monotonic()
     bookmark = job.branch_name()
     bookmark_existed = jj.bookmark_exists(bookmark, cwd=repo_path)
@@ -341,7 +346,6 @@ def run_all(
             blocked.add(job.name)
             continue
 
-        parents = _compute_parents(job, summary.results)
         dep_outputs = [
             (summary.results[dep].job.command, summary.results[dep].command_output)
             for dep in job.depends_on
@@ -353,9 +357,10 @@ def run_all(
         ]
         start = time.monotonic()
         try:
+            resolved_job = job.resolve(config.job_defaults)
             result = run_job(
-                job=job.resolve(config.job_defaults),
-                parents=parents,
+                job=resolved_job,
+                parents=_compute_parents(resolved_job, summary.results),
                 repo_path=repo_path,
                 platform=platform,
                 dep_outputs=dep_outputs,
