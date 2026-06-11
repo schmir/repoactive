@@ -143,22 +143,20 @@ def _handle_empty(  # noqa: PLR0913
     repo_path: Path,
     command_output: str,
     *,
+    bookmark_existed: bool,
     local: bool = False,
 ) -> JobResult:
-    if len(parents) == 1:
-        jj.abandon(cwd=repo_path)
-        jj.bookmark_set(bookmark, revision=parents[0], cwd=repo_path)
-        print(f"  [{job.name}] no changes, bookmark set to parent")
+    jj.abandon(cwd=repo_path)
+    if bookmark_existed:
+        jj.bookmark_delete(bookmark, cwd=repo_path)
+        if not local:
+            jj.git_push_delete(bookmark, cwd=repo_path)
+        print(f"  [{job.name}] no changes, bookmark deleted")
     else:
-        # Keep the empty merge commit so the bookmark has a single target.
-        jj.bookmark_set(bookmark, cwd=repo_path)
-        print(f"  [{job.name}] no changes, bookmark set to empty merge commit")
-
-    if not local:
-        jj.git_push(bookmark, cwd=repo_path)
+        print(f"  [{job.name}] no changes")
     return JobResult(
         job=job,
-        effective_revsets=[bookmark],
+        effective_revsets=parents,
         produced_output=False,
         command_output=command_output,
     )
@@ -232,10 +230,24 @@ def run_job(  # noqa: PLR0913
     local: bool = False,
 ) -> JobResult:
     bookmark = job.branch_name()
-    jj.new(*parents, cwd=repo_path)
+    bookmark_existed = jj.bookmark_exists(bookmark, cwd=repo_path)
+    if bookmark_existed:
+        jj.edit(bookmark, cwd=repo_path)
+        jj.rebase(*parents, cwd=repo_path)
+        jj.restore(bookmark, cwd=repo_path)
+    else:
+        jj.new(*parents, cwd=repo_path)
     command_output = _run_command(job, repo_path)
     if jj.is_empty(cwd=repo_path):
-        return _handle_empty(job, bookmark, parents, repo_path, command_output, local=local)
+        return _handle_empty(
+            job,
+            bookmark,
+            parents,
+            repo_path,
+            command_output,
+            bookmark_existed=bookmark_existed,
+            local=local,
+        )
     return _publish_job(
         job=job,
         bookmark=bookmark,

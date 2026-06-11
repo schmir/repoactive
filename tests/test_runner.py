@@ -426,6 +426,7 @@ class TestRunJob:
     @patch("repoactive.runner.subprocess.run")
     def test_produces_output(self, mock_sub: MagicMock, mock_jj: MagicMock) -> None:
         mock_sub.return_value.stdout = ""
+        mock_jj.bookmark_exists.return_value = False
         mock_jj.is_empty.return_value = False
         job = _job("foo")
 
@@ -443,6 +444,7 @@ class TestRunJob:
     @patch("repoactive.runner.subprocess.run")
     def test_describe_includes_body(self, mock_sub: MagicMock, mock_jj: MagicMock) -> None:
         mock_sub.return_value.stdout = ""
+        mock_jj.bookmark_exists.return_value = False
         mock_jj.is_empty.return_value = False
         job = _job("foo", description="Body text.")
 
@@ -456,6 +458,7 @@ class TestRunJob:
         self, mock_sub: MagicMock, mock_jj: MagicMock
     ) -> None:
         mock_sub.return_value.stdout = "did stuff\n"
+        mock_jj.bookmark_exists.return_value = False
         mock_jj.is_empty.return_value = False
         job = _job("foo")
 
@@ -471,6 +474,7 @@ class TestRunJob:
         self, mock_sub: MagicMock, mock_jj: MagicMock
     ) -> None:
         mock_sub.return_value.stdout = "did stuff\n"
+        mock_jj.bookmark_exists.return_value = False
         mock_jj.is_empty.return_value = False
         job = Job(
             name="foo",
@@ -489,6 +493,7 @@ class TestRunJob:
     @patch("repoactive.runner.subprocess.run")
     def test_commit_title_prefix_applied(self, mock_sub: MagicMock, mock_jj: MagicMock) -> None:
         mock_sub.return_value.stdout = ""
+        mock_jj.bookmark_exists.return_value = False
         mock_jj.is_empty.return_value = False
 
         run_job(
@@ -502,50 +507,78 @@ class TestRunJob:
 
     @patch("repoactive.runner.jj")
     @patch("repoactive.runner.subprocess.run")
-    def test_no_output_single_parent_sets_bookmark_to_parent(
-        self, mock_sub: MagicMock, mock_jj: MagicMock
-    ) -> None:
+    def test_no_output_no_existing_bookmark(self, mock_sub: MagicMock, mock_jj: MagicMock) -> None:
         mock_sub.return_value.stdout = ""
+        mock_jj.bookmark_exists.return_value = False
         mock_jj.is_empty.return_value = True
-        job = _job("foo")
 
-        result = run_job(job=job, parents=["trunk()"], repo_path=REPO, platform=None)
+        result = run_job(job=_job("foo"), parents=["trunk()"], repo_path=REPO, platform=None)
 
         mock_jj.abandon.assert_called_once_with(cwd=REPO)
-        mock_jj.bookmark_set.assert_called_once_with(
-            "repoactive/foo", revision="trunk()", cwd=REPO
-        )
-        mock_jj.git_push.assert_called_once_with("repoactive/foo", cwd=REPO)
+        mock_jj.bookmark_set.assert_not_called()
+        mock_jj.bookmark_delete.assert_not_called()
+        mock_jj.git_push.assert_not_called()
+        mock_jj.git_push_delete.assert_not_called()
         assert result.produced_output is False
-        assert result.effective_revsets == ["repoactive/foo"]
+        assert result.effective_revsets == ["trunk()"]
 
     @patch("repoactive.runner.jj")
     @patch("repoactive.runner.subprocess.run")
-    def test_no_output_multiple_parents_sets_bookmark_to_merge_commit(
+    def test_no_output_existing_bookmark_deleted(
         self, mock_sub: MagicMock, mock_jj: MagicMock
     ) -> None:
         mock_sub.return_value.stdout = ""
+        mock_jj.bookmark_exists.return_value = True
         mock_jj.is_empty.return_value = True
-        job = _job("foo")
+
+        result = run_job(job=_job("foo"), parents=["trunk()"], repo_path=REPO, platform=None)
+
+        mock_jj.abandon.assert_called_once_with(cwd=REPO)
+        mock_jj.bookmark_delete.assert_called_once_with("repoactive/foo", cwd=REPO)
+        mock_jj.git_push_delete.assert_called_once_with("repoactive/foo", cwd=REPO)
+        mock_jj.bookmark_set.assert_not_called()
+        mock_jj.git_push.assert_not_called()
+        assert result.produced_output is False
+        assert result.effective_revsets == ["trunk()"]
+
+    @patch("repoactive.runner.jj")
+    @patch("repoactive.runner.subprocess.run")
+    def test_no_output_existing_bookmark_local_skips_push_delete(
+        self, mock_sub: MagicMock, mock_jj: MagicMock
+    ) -> None:
+        mock_sub.return_value.stdout = ""
+        mock_jj.bookmark_exists.return_value = True
+        mock_jj.is_empty.return_value = True
+
+        run_job(job=_job("foo"), parents=["trunk()"], repo_path=REPO, platform=None, local=True)
+
+        mock_jj.bookmark_delete.assert_called_once_with("repoactive/foo", cwd=REPO)
+        mock_jj.git_push_delete.assert_not_called()
+
+    @patch("repoactive.runner.jj")
+    @patch("repoactive.runner.subprocess.run")
+    def test_no_output_effective_revsets_are_parents(
+        self, mock_sub: MagicMock, mock_jj: MagicMock
+    ) -> None:
+        mock_sub.return_value.stdout = ""
+        mock_jj.bookmark_exists.return_value = False
+        mock_jj.is_empty.return_value = True
 
         result = run_job(
-            job=job,
+            job=_job("foo"),
             parents=["repoactive/a", "repoactive/b"],
             repo_path=REPO,
             platform=None,
         )
 
-        mock_jj.abandon.assert_not_called()
-        mock_jj.bookmark_set.assert_called_once_with("repoactive/foo", cwd=REPO)
-        mock_jj.git_push.assert_called_once_with("repoactive/foo", cwd=REPO)
-        assert result.produced_output is False
-        assert result.effective_revsets == ["repoactive/foo"]
+        assert result.effective_revsets == ["repoactive/a", "repoactive/b"]
 
     @patch("repoactive.runner.jj")
     @patch("repoactive.runner.subprocess.run", side_effect=subprocess.CalledProcessError(1, "cmd"))
     def test_command_failure_abandons_and_raises(
         self, mock_sub: MagicMock, mock_jj: MagicMock
     ) -> None:
+        mock_jj.bookmark_exists.return_value = False
         with pytest.raises(RuntimeError, match="command failed"):
             run_job(
                 job=_job("foo"),
@@ -563,6 +596,7 @@ class TestRunJob:
         self, mock_sub: MagicMock, mock_jj: MagicMock
     ) -> None:
         mock_sub.return_value.stdout = "Copied file foo -> bar\n"
+        mock_jj.bookmark_exists.return_value = False
         mock_jj.is_empty.return_value = False
         platform = MagicMock()
         platform.default_branch.return_value = "main"
@@ -582,6 +616,7 @@ class TestRunJob:
     @patch("repoactive.runner.subprocess.run")
     def test_calls_platform_ensure_mr(self, mock_sub: MagicMock, mock_jj: MagicMock) -> None:
         mock_sub.return_value.stdout = ""
+        mock_jj.bookmark_exists.return_value = False
         mock_jj.is_empty.return_value = False
         platform = MagicMock()
         platform.default_branch.return_value = "main"
@@ -603,6 +638,7 @@ class TestRunJob:
         self, mock_sub: MagicMock, mock_jj: MagicMock
     ) -> None:
         mock_sub.return_value.stdout = ""
+        mock_jj.bookmark_exists.return_value = False
         mock_jj.is_empty.return_value = False
         platform = MagicMock()
         job = Job(
@@ -629,6 +665,7 @@ class TestRunJob:
     @patch("repoactive.runner.subprocess.run")
     def test_local_skips_push_and_mr(self, mock_sub: MagicMock, mock_jj: MagicMock) -> None:
         mock_sub.return_value.stdout = ""
+        mock_jj.bookmark_exists.return_value = False
         mock_jj.is_empty.return_value = False
         platform = MagicMock()
 
@@ -649,6 +686,7 @@ class TestRunJob:
     @patch("repoactive.runner.subprocess.run")
     def test_local_no_output_skips_push(self, mock_sub: MagicMock, mock_jj: MagicMock) -> None:
         mock_sub.return_value.stdout = ""
+        mock_jj.bookmark_exists.return_value = False
         mock_jj.is_empty.return_value = True
 
         result = run_job(
@@ -660,11 +698,58 @@ class TestRunJob:
         )
 
         mock_jj.abandon.assert_called_once_with(cwd=REPO)
-        mock_jj.bookmark_set.assert_called_once_with(
-            "repoactive/foo", revision="trunk()", cwd=REPO
-        )
+        mock_jj.bookmark_set.assert_not_called()
         mock_jj.git_push.assert_not_called()
         assert result.produced_output is False
+
+    @patch("repoactive.runner.jj")
+    @patch("repoactive.runner.subprocess.run")
+    def test_existing_bookmark_uses_edit_restore_rebase(
+        self, mock_sub: MagicMock, mock_jj: MagicMock
+    ) -> None:
+        mock_sub.return_value.stdout = ""
+        mock_jj.bookmark_exists.return_value = True
+        mock_jj.is_empty.return_value = False
+
+        run_job(job=_job("foo"), parents=["trunk()"], repo_path=REPO, platform=None)
+
+        mock_jj.new.assert_not_called()
+        mock_jj.edit.assert_called_once_with("repoactive/foo", cwd=REPO)
+        mock_jj.restore.assert_called_once_with("repoactive/foo", cwd=REPO)
+        mock_jj.rebase.assert_called_once_with("trunk()", cwd=REPO)
+
+    @patch("repoactive.runner.jj")
+    @patch("repoactive.runner.subprocess.run")
+    def test_existing_bookmark_multiple_parents_rebase(
+        self, mock_sub: MagicMock, mock_jj: MagicMock
+    ) -> None:
+        mock_sub.return_value.stdout = ""
+        mock_jj.bookmark_exists.return_value = True
+        mock_jj.is_empty.return_value = False
+
+        run_job(
+            job=_job("foo"),
+            parents=["repoactive/a", "repoactive/b"],
+            repo_path=REPO,
+            platform=None,
+        )
+
+        mock_jj.new.assert_not_called()
+        mock_jj.rebase.assert_called_once_with("repoactive/a", "repoactive/b", cwd=REPO)
+
+    @patch("repoactive.runner.jj")
+    @patch("repoactive.runner.subprocess.run")
+    def test_no_existing_bookmark_uses_new(self, mock_sub: MagicMock, mock_jj: MagicMock) -> None:
+        mock_sub.return_value.stdout = ""
+        mock_jj.bookmark_exists.return_value = False
+        mock_jj.is_empty.return_value = False
+
+        run_job(job=_job("foo"), parents=["trunk()"], repo_path=REPO, platform=None)
+
+        mock_jj.new.assert_called_once_with("trunk()", cwd=REPO)
+        mock_jj.edit.assert_not_called()
+        mock_jj.restore.assert_not_called()
+        mock_jj.rebase.assert_not_called()
 
 
 class TestRunAll:
