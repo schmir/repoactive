@@ -145,12 +145,12 @@ def _run_command(job: Job, repo_path: Path) -> str:
 
 
 def _handle_empty(  # noqa: PLR0913
+    *,
     job: Job,
     bookmark: str,
     parents: list[str],
     repo_path: Path,
     command_output: str,
-    *,
     bookmark_existed: bool,
     local: bool = False,
     start: float = 0.0,
@@ -272,11 +272,11 @@ def run_job(  # noqa: PLR0913
         command_output = _run_command(job, workspace_path)
         if jj.is_empty(cwd=workspace_path):
             return _handle_empty(
-                job,
-                bookmark,
-                parents,
-                workspace_path,
-                command_output,
+                job=job,
+                bookmark=bookmark,
+                parents=parents,
+                repo_path=workspace_path,
+                command_output=command_output,
                 bookmark_existed=bookmark_existed,
                 local=local,
                 start=start,
