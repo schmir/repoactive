@@ -3,16 +3,17 @@
 > **Warning:** This project is in an early stage of development. Use at your
 > own risk.
 
-`repoactive` runs your scripts against a git repository and keeps the
-corresponding merge requests up to date. You write the scripts that produce
-the code changes; `repoactive` handles the rest - branches, commits, and the
-full MR lifecycle.
+`repoactive` runs your scripts against a git repository and optionally keeps
+the corresponding merge requests up to date. You write the scripts that
+produce the code changes; `repoactive` handles the rest - branches, commits,
+and (with `--create-prs`) the full MR lifecycle.
 
 ## How it works
 
 You configure one or more **jobs**, each with a script (any shell command or
 executable) that modifies the repository's working tree. `repoactive` runs
-each script, captures the resulting diff, and then:
+each script, captures the resulting diff, and records the change locally.
+With `--create-prs` it also:
 
 - opens a new merge request if one does not already exist for that job, or
 - updates the existing merge request branch if the diff has changed.
@@ -21,18 +22,22 @@ Branches and MR descriptions are managed automatically - the only code you
 need to write is the script that produces the change.
 
 ```
-[your script] → diff → repoactive → branch → git push → merge request
-                                                              ↑
-                                                      (create or update)
+[your script] → diff → repoactive → branch
+                                       ↓ (with --push or --create-prs)
+                                    git push → merge request
+                                                    ↑ (with --create-prs)
+                                            (create or update)
 ```
 
 1. `repoactive` creates a new commit on top of the base branch or on top of
    other repoactive managed branches.
 2. It runs the job's script against the working tree.
-3. If the script produced a diff, it pushes the branch and creates or
-   updates the merge request.
-4. If the script produced no diff, the branch is reset to the base and
-   pushed without opening or updating an MR.
+3. If the script produced a diff, it records the change. With `--push` or
+   `--create-prs`, it pushes the branch; with `--create-prs`, it also
+   creates or updates the merge request.
+4. If the script produced no diff, the branch is reset to the base. With
+   `--push` or `--create-prs`, the reset branch is pushed without opening or
+   updating an MR.
 
 ## Use cases
 
@@ -133,25 +138,29 @@ Run all configured jobs (or a named subset - dependencies are
 auto-included):
 
 ```bash
-# Run all jobs
+# Apply all jobs locally (no push, no MR creation)
 repoactive run
 
-# Run specific jobs
+# Apply specific jobs locally
 repoactive run regenerate-api-client sync-license-headers
 
-# Run jobs locally without pushing branches or creating MRs
-repoactive run --local
+# Push branches to the remote without creating MRs
+repoactive run --push
+
+# Push branches and create or update merge requests
+repoactive run --create-prs
 
 # Enable debug logging
 repoactive run --debug
 ```
 
-| Option          | Short | Description                               |
-| --------------- | ----- | ----------------------------------------- |
-| `--config PATH` | `-c`  | Config file (default: `.repoactive.toml`) |
-| `--repo PATH`   | `-r`  | jj repository path (default: `.`)         |
-| `--local`       |       | Skip pushing branches and MR creation     |
-| `--debug`       | `-d`  | Enable debug logging                      |
+| Option          | Short | Description                                                |
+| --------------- | ----- | ---------------------------------------------------------- |
+| `--config PATH` | `-c`  | Config file (default: `.repoactive.toml`); repeat to merge |
+| `--repo PATH`   | `-r`  | jj repository path (default: `.`)                          |
+| `--push`        |       | Push branches to the remote repository                     |
+| `--create-prs`  |       | Push branches and create or update pull requests           |
+| `--debug`       | `-d`  | Enable debug logging                                       |
 
 ## Validating configuration
 

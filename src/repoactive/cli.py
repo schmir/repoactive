@@ -34,7 +34,7 @@ def callback(
 
 
 @app.command()
-def run(
+def run(  # noqa: PLR0913
     config: Annotated[
         list[Path] | None,
         typer.Option("--config", "-c", help="Config file; repeat to merge, later files win."),
@@ -42,8 +42,12 @@ def run(
     repo: Annotated[
         Path, typer.Option("--repo", "-r", help="Path to the jj repository.")
     ] = _DEFAULT_REPO,
-    local: Annotated[
-        bool, typer.Option("--local", help="Skip pushing branches and MR creation/update.")
+    push: Annotated[
+        bool, typer.Option("--push", help="Push bookmarks to the remote repository.")
+    ] = False,
+    create_prs: Annotated[
+        bool,
+        typer.Option("--create-prs", help="Push bookmarks and create or update pull requests."),
     ] = False,
     debug: Annotated[bool, typer.Option("--debug", "-d", help="Enable debug logging.")] = False,
     jobs: Annotated[
@@ -51,11 +55,12 @@ def run(
         typer.Argument(help="Jobs to run (default: all); dependencies are auto-included."),
     ] = None,
 ) -> None:
-    """Apply jobs and create or update merge requests."""
+    """Apply jobs locally; use --push or --create-prs to publish."""
     if debug:
         logging.basicConfig(level=logging.DEBUG)
     cfg = load_config(config or [_DEFAULT_CONFIG])
-    platform = None if local else get_platform(cfg, repo)
+    local = not push and not create_prs
+    platform = get_platform(cfg, repo) if create_prs else None
     summary = run_all(
         config=cfg, repo_path=repo, platform=platform, requested_jobs=jobs or None, local=local
     )
