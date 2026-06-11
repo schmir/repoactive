@@ -1,4 +1,5 @@
 import subprocess
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -17,6 +18,7 @@ class JobResult:
     produced_output: bool
     mr_url: str | None = None
     command_output: str = ""
+    duration: float = 0.0
 
 
 @dataclass
@@ -145,20 +147,23 @@ def _handle_empty(  # noqa: PLR0913
     *,
     bookmark_existed: bool,
     local: bool = False,
+    start: float = 0.0,
 ) -> JobResult:
     jj.abandon(cwd=repo_path)
+    elapsed = time.monotonic() - start
     if bookmark_existed:
         jj.bookmark_delete(bookmark, cwd=repo_path)
         if not local:
             jj.git_push_delete(bookmark, cwd=repo_path)
-        print(f"  [{job.name}] no changes, bookmark deleted")
+        print(f"==> [{job.name}] no changes, bookmark deleted ({elapsed:.1f}s)")
     else:
-        print(f"  [{job.name}] no changes")
+        print(f"==> [{job.name}] no changes ({elapsed:.1f}s)")
     return JobResult(
         job=job,
         effective_revsets=parents,
         produced_output=False,
         command_output=command_output,
+        duration=elapsed,
     )
 
 
@@ -172,7 +177,9 @@ def _publish_job(  # noqa: PLR0913
     dep_outputs: list[tuple[str, str]] | None,
     dep_mr_urls: list[tuple[str, str]] | None,
     local: bool = False,
+    start: float = 0.0,
 ) -> JobResult:
+    stat = jj.diff_stat(cwd=repo_path)
     jj.bookmark_set(bookmark, cwd=repo_path)
     commit_message = f"{job.commit_title_prefix}{job.title}"
     if job.description:
@@ -185,12 +192,17 @@ def _publish_job(  # noqa: PLR0913
     jj.describe(commit_message, cwd=repo_path)
 
     if local:
-        print(f"  [{job.name}] local: bookmark '{bookmark}' set (not pushed)")
+        elapsed = time.monotonic() - start
+        print(f"==> [{job.name}] bookmark set (local) ({elapsed:.1f}s)")
+        if stat:
+            print("\n".join(f"    {line}" for line in stat.splitlines()))
+            print()
         return JobResult(
             job=job,
             effective_revsets=[bookmark],
             produced_output=True,
             command_output=command_output,
+            duration=elapsed,
         )
 
     jj.git_push(bookmark, cwd=repo_path)
@@ -206,9 +218,14 @@ def _publish_job(  # noqa: PLR0913
             dep_mr_urls=dep_mr_urls,
         )
         mr_url = platform.ensure_mr(params)
-        print(f"  [{job.name}] {mr_url}")
+        elapsed = time.monotonic() - start
+        print(f"==> [{job.name}] {mr_url} ({elapsed:.1f}s)")
     else:
-        print(f"  [{job.name}] bookmark '{bookmark}' pushed")
+        elapsed = time.monotonic() - start
+        print(f"==> [{job.name}] pushed ({elapsed:.1f}s)")
+    if stat:
+        print("\n".join(f"    {line}" for line in stat.splitlines()))
+        print()
 
     return JobResult(
         job=job,
@@ -216,6 +233,7 @@ def _publish_job(  # noqa: PLR0913
         produced_output=True,
         mr_url=mr_url,
         command_output=command_output,
+        duration=elapsed,
     )
 
 
@@ -229,6 +247,7 @@ def run_job(  # noqa: PLR0913
     dep_mr_urls: list[tuple[str, str]] | None = None,
     local: bool = False,
 ) -> JobResult:
+    start = time.monotonic()
     bookmark = job.branch_name()
     bookmark_existed = jj.bookmark_exists(bookmark, cwd=repo_path)
     if bookmark_existed:
@@ -247,6 +266,7 @@ def run_job(  # noqa: PLR0913
             command_output,
             bookmark_existed=bookmark_existed,
             local=local,
+            start=start,
         )
     return _publish_job(
         job=job,
@@ -257,6 +277,7 @@ def run_job(  # noqa: PLR0913
         dep_outputs=dep_outputs,
         dep_mr_urls=dep_mr_urls,
         local=local,
+        start=start,
     )
 
 
@@ -284,7 +305,7 @@ def run_all(
     disabled = _propagate_disabled(config.jobs)
     for j in config.jobs:
         if j.name in disabled and not j.disabled:
-            print(f"  [{j.name}] disabled (dependency disabled)")
+            print(f"==> [{j.name}] disabled (dependency disabled)")
 
     if requested_jobs:
         disabled_requested = [name for name in requested_jobs if name in disabled]
@@ -303,7 +324,7 @@ def run_all(
     for job in ordered_jobs:
         blocking_deps = [d for d in job.depends_on if d in blocked]
         if blocking_deps:
-            print(f"  [{job.name}] skipped (dependency failed: {', '.join(blocking_deps)})")
+            print(f"==> [{job.name}] skipped (dependency failed: {', '.join(blocking_deps)})")
             summary.skipped.add(job.name)
             blocked.add(job.name)
             continue
@@ -318,6 +339,7 @@ def run_all(
             for dep in job.depends_on
             if (url := summary.results[dep].mr_url) is not None
         ]
+        start = time.monotonic()
         try:
             result = run_job(
                 job=job.resolve(config.job_defaults),
@@ -330,7 +352,8 @@ def run_all(
             )
             summary.results[job.name] = result
         except Exception as e:
-            print(f"  [{job.name}] failed: {e}")
+            elapsed = time.monotonic() - start
+            print(f"==> [{job.name}] failed: {e} ({elapsed:.1f}s)")
             summary.failed[job.name] = e
             blocked.add(job.name)
 

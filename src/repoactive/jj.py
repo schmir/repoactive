@@ -86,6 +86,10 @@ def abandon(cwd: Path | None = None) -> None:
     _run("abandon", "@", cwd=cwd)
 
 
+def diff_stat(cwd: Path | None = None) -> str:
+    return _run("diff", "--stat", cwd=cwd).strip()
+
+
 def describe(message: str, cwd: Path | None = None) -> None:
     _run("describe", "--message", message, cwd=cwd)
 
