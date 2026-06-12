@@ -1,5 +1,6 @@
 """Integration tests for the JJ wrapper — runs against a real jj repository."""
 
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -10,9 +11,14 @@ from repoactive.jj import JJ, JJError
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
 
 
-def _init_repo(path: Path) -> JJ:
+def _init_repo(path: Path, *, colocate: bool = True) -> JJ:
     path.mkdir(parents=True, exist_ok=True)
-    subprocess.run(["jj", "git", "init", "--colocate", str(path)], check=True, capture_output=True)
+    args = (
+        ["jj", "git", "init", "--colocate", str(path)]
+        if colocate
+        else ["jj", "--config=git.colocate=false", "git", "init", str(path)]
+    )
+    subprocess.run(args, check=True, capture_output=True)
     (path / ".jj" / "repo" / "config.toml").write_text(
         '[user]\nname = "Test User"\nemail = "test@test.com"\n'
     )
@@ -33,6 +39,26 @@ def _change_id(jj: JJ, rev: str = "@") -> str:
     return subprocess.run(
         ["jj", "--no-pager", "log", "-r", rev, "--no-graph", "-T", "change_id"],
         cwd=jj.cwd,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+
+def _commit_id(jj: JJ, rev: str = "@") -> str:
+    return subprocess.run(
+        ["jj", "--no-pager", "log", "-r", rev, "--no-graph", "-T", "commit_id"],
+        cwd=jj.cwd,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+
+def _git(cwd: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", *args],
+        cwd=cwd,
         capture_output=True,
         text=True,
         check=True,
@@ -251,3 +277,76 @@ class TestJJError:
     def test_raised_for_invalid_revision(self, repo: JJ) -> None:
         with pytest.raises(JJError):
             repo.edit("this-revision-does-not-exist")
+
+
+class TestWorkspaceColocation:
+    @staticmethod
+    def _commit(repo: JJ, filename: str, message: str) -> None:
+        (repo.cwd / filename).write_text(filename)
+        repo.describe(message)
+        repo.new("@")
+
+    def test_workspace_is_colocated(self, repo: JJ, tmp_path: Path) -> None:
+        self._commit(repo, "a.txt", "initial")
+        ws_path = tmp_path / "ws"
+        repo.workspace_add("ws", ws_path)
+        assert (ws_path / ".git").is_file()
+        ws = JJ(ws_path)
+        assert _git(ws_path, "rev-parse", "HEAD") == _commit_id(ws, "@-")
+
+    def test_git_status_clean_in_new_workspace(self, repo: JJ, tmp_path: Path) -> None:
+        self._commit(repo, "a.txt", "initial")
+        ws_path = tmp_path / "ws"
+        repo.workspace_add("ws", ws_path)
+        assert _git(ws_path, "status", "--porcelain") == ""
+
+    def test_git_sync_head_after_moving_working_copy(self, repo: JJ, tmp_path: Path) -> None:
+        self._commit(repo, "a.txt", "first")
+        repo.bookmark_set("base", "@-")
+        self._commit(repo, "b.txt", "second")
+        ws_path = tmp_path / "ws"
+        repo.workspace_add("ws", ws_path)
+        ws = JJ(ws_path)
+        ws.new("base")
+        ws.git_sync_head()
+        assert _git(ws_path, "rev-parse", "HEAD") == _commit_id(ws, "@-")
+        assert _git(ws_path, "status", "--porcelain") == ""
+
+    def test_git_sync_head_noop_without_git(self, repo: JJ, tmp_path: Path) -> None:
+        ws_path = tmp_path / "ws"
+        repo.workspace_add("ws", ws_path)  # empty repo: colocation is skipped
+        JJ(ws_path).git_sync_head()  # must not raise
+
+    def test_empty_repo_workspace_not_colocated(self, repo: JJ, tmp_path: Path) -> None:
+        ws_path = tmp_path / "ws"
+        repo.workspace_add("ws", ws_path)
+        assert not (ws_path / ".git").exists()
+        assert JJ(ws_path).is_empty() is True  # jj still works in the workspace
+
+    def test_non_colocated_repo_workspace(self, tmp_path: Path) -> None:
+        repo = _init_repo(tmp_path / "plain", colocate=False)
+        self._commit(repo, "a.txt", "initial")
+        ws_path = tmp_path / "ws"
+        repo.workspace_add("ws", ws_path)
+        assert not (ws_path / ".git").exists()
+
+    def test_jj_and_git_agree_after_commit(self, repo: JJ, tmp_path: Path) -> None:
+        self._commit(repo, "a.txt", "initial")
+        ws_path = tmp_path / "ws"
+        repo.workspace_add("ws", ws_path)
+        ws = JJ(ws_path)
+        (ws_path / "b.txt").write_text("b")
+        ws.describe("from workspace")
+        ws.new("@")
+        ws.git_sync_head()
+        assert _git(ws_path, "log", "-1", "--format=%s") == "from workspace"
+        assert _git(ws_path, "status", "--porcelain") == ""
+
+    def test_prune_after_forget(self, repo: JJ, tmp_path: Path) -> None:
+        self._commit(repo, "a.txt", "initial")
+        ws_path = tmp_path / "ws"
+        repo.workspace_add("ws", ws_path)
+        repo.workspace_forget("ws")
+        shutil.rmtree(ws_path)
+        repo.git_worktree_prune()
+        assert _git(repo.cwd, "worktree", "list", "--porcelain").count("worktree ") == 1

@@ -271,6 +271,7 @@ def run_job(  # noqa: PLR0913
             ws.restore(bookmark)
         else:
             ws.new(*parents)
+        ws.git_sync_head()
         command_output = _run_command(job, ws)
         if ws.is_empty():
             return _handle_empty(
@@ -298,6 +299,8 @@ def run_job(  # noqa: PLR0913
         with contextlib.suppress(JJError):
             repo.workspace_forget(job.name)
         shutil.rmtree(tmp_parent, ignore_errors=True)
+        with contextlib.suppress(JJError):
+            repo.git_worktree_prune()
 
 
 def _propagate_disabled(jobs: list[Job]) -> set[str]:

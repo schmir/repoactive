@@ -1,5 +1,7 @@
 import logging
+import shutil
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -103,8 +105,85 @@ class JJ:
                 return parts[1]
         raise JJError(f"Remote '{remote}' not found")
 
+    def _git(self, *args: str, cwd: Path | None = None) -> str:
+        try:
+            result = subprocess.run(
+                ["git", *args],
+                cwd=cwd or self.cwd,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            return result.stdout
+        except subprocess.CalledProcessError as e:
+            raise JJError(f"git {' '.join(args)} failed:\n{e.stderr.strip()}") from e
+
+    def is_colocated(self) -> bool:
+        return (self.cwd / ".git").exists()
+
+    def _git_head_commit(self) -> str | None:
+        """Commit the colocated git HEAD should point at: the first parent of @.
+
+        Returns None if that parent is the root commit, which has no git
+        counterpart.
+        """
+        output = self._run("log", "-r", "@-", "--no-graph", "-T", 'commit_id ++ "\\n"')
+        commit_id = output.splitlines()[0] if output.strip() else ""
+        if not commit_id or set(commit_id) == {"0"}:
+            return None
+        return commit_id
+
+    def git_sync_head(self) -> None:
+        """Sync the colocated git checkout (HEAD and index) to the jj working copy.
+
+        jj only exports git HEAD in the default workspace; workspaces colocated
+        via workspace_add() need this after the working copy moves (new, edit,
+        rebase). No-op if the workspace is not colocated.
+        """
+        if not self.is_colocated():
+            return
+        head = self._git_head_commit()
+        if head is None:
+            return
+        # Mixed reset: moves the detached HEAD and index, leaves the
+        # jj-managed files alone.
+        self._git("reset", "--quiet", head)
+
+    def git_worktree_prune(self) -> None:
+        """Drop git worktree registrations of workspaces whose directory is gone."""
+        if self.is_colocated():
+            self._git("worktree", "prune")
+
     def workspace_add(self, name: str, path: Path) -> None:
         self._run("workspace", "add", "--name", name, str(path))
+        if self.is_colocated():
+            self._colocate_workspace(name, path)
+
+    def _colocate_workspace(self, name: str, path: Path) -> None:
+        """Register the new workspace as a git worktree of the colocated repo.
+
+        jj's `workspace add` never colocates the new workspace, even when the
+        main repository is colocated (https://github.com/jj-vcs/jj/issues/5252),
+        so git commands would not work inside it. Both `git worktree add` and
+        `jj workspace add` refuse a non-empty existing directory, so the
+        worktree is created next to the workspace and its .git file moved into
+        place.
+        """
+        head = JJ(path)._git_head_commit()
+        if head is None:
+            logger.debug("not colocating workspace %r: parent is the root commit", name)
+            return
+        tmp = Path(tempfile.mkdtemp(prefix="repoactive-worktree-", dir=path.parent))
+        try:
+            self._git("worktree", "add", "--no-checkout", "--detach", str(tmp / name), head)
+            (tmp / name / ".git").rename(path / ".git")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+        self._git("worktree", "repair", str(path))
+        # jj writes this for colocated repos, but not for workspaces.
+        (path / ".jj" / ".gitignore").write_text("/*\n")
+        # --no-checkout left the index empty; jj already wrote the files.
+        self._git("reset", "--quiet", head, cwd=path)
 
     def workspace_forget(self, name: str) -> None:
         self._run("workspace", "forget", name)

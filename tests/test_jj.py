@@ -222,6 +222,29 @@ class TestRebase:
         )
 
 
+class TestWorkspaceAdd:
+    @patch("repoactive.jj.subprocess.run")
+    def test_not_colocated_only_adds_workspace(self, mock_run: MagicMock) -> None:
+        # REPO has no .git directory, so no git worktree setup happens
+        mock_run.return_value.stdout = ""
+        _jj().workspace_add("ws", Path("/tmp/ws"))
+        assert mock_run.call_args_list == [_call("workspace", "add", "--name", "ws", "/tmp/ws")]
+
+
+class TestGitSyncHead:
+    @patch("repoactive.jj.subprocess.run")
+    def test_noop_when_not_colocated(self, mock_run: MagicMock) -> None:
+        _jj().git_sync_head()
+        mock_run.assert_not_called()
+
+
+class TestGitWorktreePrune:
+    @patch("repoactive.jj.subprocess.run")
+    def test_noop_when_not_colocated(self, mock_run: MagicMock) -> None:
+        _jj().git_worktree_prune()
+        mock_run.assert_not_called()
+
+
 class TestGetRemoteUrl:
     @patch("repoactive.jj.subprocess.run")
     def test_returns_origin_url(self, mock_run: MagicMock) -> None:
