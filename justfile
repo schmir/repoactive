@@ -14,7 +14,7 @@ ci:
     treefmt
     # scripts/prek.sh run --all-files
     uv run ty check
-    uv run pytest
+    uv run pytest -m "not slow"
     uv run nox -s validate_config
 
 # Install repoactive in editable mode

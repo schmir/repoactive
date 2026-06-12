@@ -1,4 +1,5 @@
 [pytest]
 addopts = ["--import-mode=importlib"]
 filterwarnings = ["error"]
+markers = ["integration: integration tests", "slow: mark test as slow."]
 testpaths = ["tests"]
