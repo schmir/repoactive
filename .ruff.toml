@@ -3,6 +3,7 @@ line-length = 99
 required-version = ">=0.15.0"
 output-format = "concise"
 
+lint.ignore = ["E501"]
 
 # rules: https://beta.ruff.rs/docs/rules
 lint.select = [
