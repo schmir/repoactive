@@ -1,0 +1,29 @@
+[global]
+excludes = ["uv.lock", "LICENSE"]
+
+[formatter.ruff-check]
+command = "uv"
+options = ["run", "ruff", "check", "--fix"]
+includes = ["*.py"]
+priority = 1
+
+[formatter.ruff-format]
+command = "uv"
+options = ["run", "ruff", "format"]
+includes = ["*.py"]
+priority = 2
+
+[formatter.taplo]
+command = "taplo"
+options = ["format"]
+includes = ["*.toml"]
+
+[formatter.shfmt]
+command = "shfmt"
+options = ["-w", "-i", "4"]
+includes = ["*.sh", "*.bash"]
+
+[formatter.prettier]
+command = "prettier"
+options = ["--write"]
+includes = ["*.md"]

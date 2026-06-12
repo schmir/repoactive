@@ -9,9 +9,10 @@ help:
 test *args:
     uv run pytest "$@"
 
-# Run CI checks: prek, type check, tests
+# Run quick CI checks: treefmt, type check, tests
 ci:
-    scripts/prek.sh run --all-files
+    treefmt
+    # scripts/prek.sh run --all-files
     uv run ty check
     uv run pytest
     uv run nox -s validate_config
