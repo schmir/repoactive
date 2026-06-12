@@ -62,7 +62,7 @@ class JJ:
             "bookmark",
             "list",
             "-T",
-            'self.normal_target().change_id() ++ " " ++ self.name() ++ "\\n"',
+            'if(self.remote(), "", if(self.normal_target(), self.normal_target().change_id() ++ " " ++ self.name() ++ "\\n", ""))',
         )
         result = []
         for line in output.splitlines():

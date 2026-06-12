@@ -91,7 +91,7 @@ class TestBookmarkExists:
         assert _jj().bookmark_exists("rschmitt/foo") is False
 
 
-_TEMPLATE = 'self.normal_target().change_id() ++ " " ++ self.name() ++ "\\n"'
+_TEMPLATE = 'if(self.remote(), "", if(self.normal_target(), self.normal_target().change_id() ++ " " ++ self.name() ++ "\\n", ""))'
 _BOOKMARKS_OUTPUT = (
     "uxpywmluxktrqztvnqywwlpzwvnyrlzk main\n"
     "klmkpoomqllrzxynwkoozmypqowtpyys rschmitt/alpine\n"
@@ -120,6 +120,13 @@ class TestBookmarksList:
     def test_empty_output_returns_empty_list(self, mock_run: MagicMock) -> None:
         mock_run.return_value.stdout = ""
         assert _jj().bookmark_list() == []
+
+    @patch("repoactive.jj.subprocess.run")
+    def test_deleted_tracked_bookmark_excluded(self, mock_run: MagicMock) -> None:
+        # jj emits an empty string for bookmarks with no local target (the if() guard)
+        mock_run.return_value.stdout = "uxpywmluxktrqztvnqywwlpzwvnyrlzk main\n"
+        result = _jj().bookmark_list()
+        assert result == [Bookmark(change_id="uxpywmluxktrqztvnqywwlpzwvnyrlzk", name="main")]
 
     @patch("repoactive.jj.subprocess.run")
     def test_name_with_spaces_parsed_correctly(self, mock_run: MagicMock) -> None:
