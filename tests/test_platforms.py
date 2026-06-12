@@ -107,11 +107,11 @@ class TestGetPlatform:
         return _config({"url": "https://gitlab.com", "type": "gitlab", "token_env": "GL_TOKEN"})
 
     @patch("repoactive.platforms.GitHubPlatform")
-    @patch("repoactive.platforms.jj.get_remote_url")
+    @patch("repoactive.platforms.JJ")
     def test_returns_github_platform(
-        self, mock_url: MagicMock, mock_gh: MagicMock, monkeypatch: pytest.MonkeyPatch
+        self, mock_jj: MagicMock, mock_gh: MagicMock, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        mock_url.return_value = "https://github.com/owner/repo.git"
+        mock_jj.return_value.get_remote_url.return_value = "https://github.com/owner/repo.git"
         monkeypatch.setenv("GH_TOKEN", "ghtoken")
 
         result = get_platform(self._github_config(), REPO)
@@ -122,11 +122,11 @@ class TestGetPlatform:
         assert result is mock_gh.return_value
 
     @patch("repoactive.platforms.GitLabPlatform")
-    @patch("repoactive.platforms.jj.get_remote_url")
+    @patch("repoactive.platforms.JJ")
     def test_returns_gitlab_platform(
-        self, mock_url: MagicMock, mock_gl: MagicMock, monkeypatch: pytest.MonkeyPatch
+        self, mock_jj: MagicMock, mock_gl: MagicMock, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        mock_url.return_value = "https://gitlab.com/ns/repo.git"
+        mock_jj.return_value.get_remote_url.return_value = "https://gitlab.com/ns/repo.git"
         monkeypatch.setenv("GL_TOKEN", "gltoken")
 
         result = get_platform(self._gitlab_config(), REPO)
@@ -134,44 +134,44 @@ class TestGetPlatform:
         mock_gl.assert_called_once_with(url="https://gitlab.com", token="gltoken", repo="ns/repo")
         assert result is mock_gl.return_value
 
-    @patch("repoactive.platforms.jj.get_remote_url")
+    @patch("repoactive.platforms.JJ")
     def test_missing_token_raises(
-        self, mock_url: MagicMock, monkeypatch: pytest.MonkeyPatch
+        self, mock_jj: MagicMock, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        mock_url.return_value = "https://github.com/owner/repo.git"
+        mock_jj.return_value.get_remote_url.return_value = "https://github.com/owner/repo.git"
         monkeypatch.delenv("GH_TOKEN", raising=False)
 
         with pytest.raises(RuntimeError, match="GH_TOKEN"):
             get_platform(self._github_config(), REPO)
 
-    @patch("repoactive.platforms.jj.get_remote_url")
+    @patch("repoactive.platforms.JJ")
     def test_no_matching_platform_raises(
-        self, mock_url: MagicMock, monkeypatch: pytest.MonkeyPatch
+        self, mock_jj: MagicMock, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        mock_url.return_value = "https://bitbucket.org/owner/repo.git"
+        mock_jj.return_value.get_remote_url.return_value = "https://bitbucket.org/owner/repo.git"
         monkeypatch.setenv("GH_TOKEN", "tok")
 
         with pytest.raises(RuntimeError, match="No platform configured"):
             get_platform(self._github_config(), REPO)
 
     @patch("repoactive.platforms.GitHubPlatform")
-    @patch("repoactive.platforms.jj.get_remote_url")
+    @patch("repoactive.platforms.JJ")
     def test_repo_path_forwarded_to_jj(
-        self, mock_url: MagicMock, mock_gh: MagicMock, monkeypatch: pytest.MonkeyPatch
+        self, mock_jj: MagicMock, mock_gh: MagicMock, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        mock_url.return_value = "https://github.com/owner/repo.git"
+        mock_jj.return_value.get_remote_url.return_value = "https://github.com/owner/repo.git"
         monkeypatch.setenv("GH_TOKEN", "tok")
 
         get_platform(self._github_config(), REPO)
 
-        mock_url.assert_called_once_with(cwd=REPO)
+        mock_jj.assert_called_once_with(REPO)
 
     @patch("repoactive.platforms.GitHubPlatform")
-    @patch("repoactive.platforms.jj.get_remote_url")
+    @patch("repoactive.platforms.JJ")
     def test_ssh_remote_url_parsed(
-        self, mock_url: MagicMock, mock_gh: MagicMock, monkeypatch: pytest.MonkeyPatch
+        self, mock_jj: MagicMock, mock_gh: MagicMock, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        mock_url.return_value = "git@github.com:owner/repo.git"
+        mock_jj.return_value.get_remote_url.return_value = "git@github.com:owner/repo.git"
         monkeypatch.setenv("GH_TOKEN", "tok")
 
         get_platform(self._github_config(), REPO)

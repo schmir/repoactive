@@ -16,104 +16,92 @@ class Bookmark:
     name: str
 
 
-def _run(*args: str, cwd: Path | None = None) -> str:
-    try:
-        result = subprocess.run(
-            ["jj", "--no-pager", "--color=never", *args],
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            check=True,
+class JJ:
+    """Wrapper around the jj CLI, bound to a repository or workspace directory."""
+
+    def __init__(self, cwd: Path) -> None:
+        self.cwd = cwd
+
+    def _run(self, *args: str) -> str:
+        try:
+            result = subprocess.run(
+                ["jj", "--no-pager", "--color=never", *args],
+                cwd=self.cwd,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            return result.stdout
+        except subprocess.CalledProcessError as e:
+            raise JJError(f"jj {' '.join(args)} failed:\n{e.stderr.strip()}") from e
+
+    def new(self, *parents: str) -> None:
+        self._run("new", *parents)
+
+    def edit(self, revision: str) -> None:
+        self._run("edit", revision)
+
+    def restore(self, source: str) -> None:
+        self._run("restore", "--changes-in", source)
+
+    def rebase(self, *onto: str) -> None:
+        onto_args = [arg for parent in onto for arg in ("--onto", parent)]
+        self._run("rebase", "-r", "@", *onto_args)
+
+    def bookmark_set(self, name: str, revision: str = "@") -> None:
+        self._run("bookmark", "set", name, "--revision", revision, "--allow-backwards")
+
+    def bookmark_delete(self, name: str) -> None:
+        self._run("bookmark", "delete", name)
+
+    def bookmark_exists(self, name: str) -> bool:
+        return any(b.name == name for b in self.bookmark_list())
+
+    def bookmark_list(self) -> list[Bookmark]:
+        output = self._run(
+            "bookmark",
+            "list",
+            "-T",
+            'self.normal_target().change_id() ++ " " ++ self.name() ++ "\\n"',
         )
-        return result.stdout
-    except subprocess.CalledProcessError as e:
-        raise JJError(f"jj {' '.join(args)} failed:\n{e.stderr.strip()}") from e
+        result = []
+        for line in output.splitlines():
+            if line:
+                change_id, name = line.split(" ", 1)
+                result.append(Bookmark(change_id=change_id, name=name))
+        return result
 
+    def is_empty(self) -> bool:
+        output = self._run("log", "-r", "@", "--no-graph", "--template", "json(self.empty())")
+        result = output.strip() == "true"
+        logger.debug("is_empty: jj output=%r result=%r", output.strip(), result)
+        return result
 
-def new(*parents: str, cwd: Path | None = None) -> None:
-    _run("new", *parents, cwd=cwd)
+    def abandon(self) -> None:
+        self._run("abandon", "@")
 
+    def diff_stat(self) -> str:
+        return self._run("diff", "--stat").strip()
 
-def edit(revision: str, cwd: Path | None = None) -> None:
-    _run("edit", revision, cwd=cwd)
+    def describe(self, message: str) -> None:
+        self._run("describe", "--message", message)
 
+    def git_push(self, bookmark: str) -> None:
+        self._run("git", "push", "--bookmark", bookmark)
 
-def restore(source: str, cwd: Path | None = None) -> None:
-    _run("restore", "--changes-in", source, cwd=cwd)
+    def git_push_delete(self, bookmark: str) -> None:
+        self._run("git", "push", "--deleted", "--bookmark", bookmark)
 
+    def get_remote_url(self, remote: str = "origin") -> str:
+        output = self._run("git", "remote", "list")
+        for line in output.splitlines():
+            parts = line.split()
+            if parts and parts[0] == remote:
+                return parts[1]
+        raise JJError(f"Remote '{remote}' not found")
 
-def rebase(*onto: str, cwd: Path | None = None) -> None:
-    onto_args = [arg for parent in onto for arg in ("--onto", parent)]
-    _run("rebase", "-r", "@", *onto_args, cwd=cwd)
+    def workspace_add(self, name: str, path: Path) -> None:
+        self._run("workspace", "add", "--name", name, str(path))
 
-
-def bookmark_set(name: str, revision: str = "@", cwd: Path | None = None) -> None:
-    _run("bookmark", "set", name, "--revision", revision, "--allow-backwards", cwd=cwd)
-
-
-def bookmark_delete(name: str, cwd: Path | None = None) -> None:
-    _run("bookmark", "delete", name, cwd=cwd)
-
-
-def bookmark_exists(name: str, cwd: Path | None = None) -> bool:
-    return any(b.name == name for b in bookmark_list(cwd=cwd))
-
-
-def bookmark_list(cwd: Path | None = None) -> list[Bookmark]:
-    output = _run(
-        "bookmark",
-        "list",
-        "-T",
-        'self.normal_target().change_id() ++ " " ++ self.name() ++ "\\n"',
-        cwd=cwd,
-    )
-    result = []
-    for line in output.splitlines():
-        if line:
-            change_id, name = line.split(" ", 1)
-            result.append(Bookmark(change_id=change_id, name=name))
-    return result
-
-
-def is_empty(cwd: Path | None = None) -> bool:
-    output = _run("log", "-r", "@", "--no-graph", "--template", "json(self.empty())", cwd=cwd)
-    result = output.strip() == "true"
-    logger.debug("is_empty: jj output=%r result=%r", output.strip(), result)
-    return result
-
-
-def abandon(cwd: Path | None = None) -> None:
-    _run("abandon", "@", cwd=cwd)
-
-
-def diff_stat(cwd: Path | None = None) -> str:
-    return _run("diff", "--stat", cwd=cwd).strip()
-
-
-def describe(message: str, cwd: Path | None = None) -> None:
-    _run("describe", "--message", message, cwd=cwd)
-
-
-def git_push(bookmark: str, cwd: Path | None = None) -> None:
-    _run("git", "push", "--bookmark", bookmark, cwd=cwd)
-
-
-def git_push_delete(bookmark: str, cwd: Path | None = None) -> None:
-    _run("git", "push", "--deleted", "--bookmark", bookmark, cwd=cwd)
-
-
-def get_remote_url(remote: str = "origin", cwd: Path | None = None) -> str:
-    output = _run("git", "remote", "list", cwd=cwd)
-    for line in output.splitlines():
-        parts = line.split()
-        if parts and parts[0] == remote:
-            return parts[1]
-    raise JJError(f"Remote '{remote}' not found")
-
-
-def workspace_add(name: str, path: Path, cwd: Path | None = None) -> None:
-    _run("workspace", "add", "--name", name, str(path), cwd=cwd)
-
-
-def workspace_forget(name: str, cwd: Path | None = None) -> None:
-    _run("workspace", "forget", name, cwd=cwd)
+    def workspace_forget(self, name: str) -> None:
+        self._run("workspace", "forget", name)

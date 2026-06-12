@@ -7,8 +7,8 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from repoactive import jj
 from repoactive.config import Config, Job
+from repoactive.jj import JJ, JJError
 from repoactive.platforms.base import MRParams, Platform
 
 logger = logging.getLogger(__name__)
@@ -124,19 +124,19 @@ def _mr_params(  # noqa: PLR0913
     )
 
 
-def _run_command(job: Job, repo_path: Path) -> str:
+def _run_command(job: Job, ws: JJ) -> str:
     try:
         proc = subprocess.run(
             job.command,
             shell=True,
-            cwd=repo_path,
+            cwd=ws.cwd,
             check=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
         )
     except subprocess.CalledProcessError as e:
-        jj.abandon(cwd=repo_path)
+        ws.abandon()
         output = e.stdout or ""
         raise RuntimeError(
             f"command failed with exit code {e.returncode}" + (f":\n{output}" if output else "")
@@ -149,18 +149,18 @@ def _handle_empty(  # noqa: PLR0913
     job: Job,
     bookmark: str,
     parents: list[str],
-    repo_path: Path,
+    ws: JJ,
     command_output: str,
     bookmark_existed: bool,
     local: bool = False,
     start: float = 0.0,
 ) -> JobResult:
-    jj.abandon(cwd=repo_path)
+    ws.abandon()
     elapsed = time.monotonic() - start
     if bookmark_existed:
-        jj.bookmark_delete(bookmark, cwd=repo_path)
+        ws.bookmark_delete(bookmark)
         if not local:
-            jj.git_push_delete(bookmark, cwd=repo_path)
+            ws.git_push_delete(bookmark)
         print(f"==> [{job.name}] no changes, bookmark deleted ({elapsed:.1f}s)")
     else:
         print(f"==> [{job.name}] no changes ({elapsed:.1f}s)")
@@ -177,7 +177,7 @@ def _publish_job(  # noqa: PLR0913
     *,
     job: Job,
     bookmark: str,
-    repo_path: Path,
+    ws: JJ,
     platform: Platform | None,
     command_output: str,
     dep_outputs: list[tuple[str, str]] | None,
@@ -185,8 +185,8 @@ def _publish_job(  # noqa: PLR0913
     local: bool = False,
     start: float = 0.0,
 ) -> JobResult:
-    stat = jj.diff_stat(cwd=repo_path)
-    jj.bookmark_set(bookmark, cwd=repo_path)
+    stat = ws.diff_stat()
+    ws.bookmark_set(bookmark)
     commit_message = f"{job.commit_title_prefix}{job.title}"
     if job.description:
         commit_message += f"\n\n{job.description}"
@@ -195,7 +195,7 @@ def _publish_job(  # noqa: PLR0913
             f"  {line}" for line in f"$ {job.command}\n{command_output}".splitlines()
         )
         commit_message += f"\n\n{indented}"
-    jj.describe(commit_message, cwd=repo_path)
+    ws.describe(commit_message)
 
     if local:
         elapsed = time.monotonic() - start
@@ -211,7 +211,7 @@ def _publish_job(  # noqa: PLR0913
             duration=elapsed,
         )
 
-    jj.git_push(bookmark, cwd=repo_path)
+    ws.git_push(bookmark)
     mr_url: str | None = None
     if platform is not None and job.create_mr:
         base_branch = job.base_branch or platform.default_branch()
@@ -257,25 +257,27 @@ def run_job(  # noqa: PLR0913
     logger.debug("parents: %s", parents)
     start = time.monotonic()
     bookmark = job.branch_name()
-    bookmark_existed = jj.bookmark_exists(bookmark, cwd=repo_path)
+    repo = JJ(repo_path)
+    bookmark_existed = repo.bookmark_exists(bookmark)
 
     tmp_parent = Path(tempfile.mkdtemp(prefix="repoactive_"))
     workspace_path = tmp_parent / "workspace"
-    jj.workspace_add(job.name, workspace_path, cwd=repo_path)
+    repo.workspace_add(job.name, workspace_path)
+    ws = JJ(workspace_path)
     try:
         if bookmark_existed:
-            jj.edit(bookmark, cwd=workspace_path)
-            jj.rebase(*parents, cwd=workspace_path)
-            jj.restore(bookmark, cwd=workspace_path)
+            ws.edit(bookmark)
+            ws.rebase(*parents)
+            ws.restore(bookmark)
         else:
-            jj.new(*parents, cwd=workspace_path)
-        command_output = _run_command(job, workspace_path)
-        if jj.is_empty(cwd=workspace_path):
+            ws.new(*parents)
+        command_output = _run_command(job, ws)
+        if ws.is_empty():
             return _handle_empty(
                 job=job,
                 bookmark=bookmark,
                 parents=parents,
-                repo_path=workspace_path,
+                ws=ws,
                 command_output=command_output,
                 bookmark_existed=bookmark_existed,
                 local=local,
@@ -284,7 +286,7 @@ def run_job(  # noqa: PLR0913
         return _publish_job(
             job=job,
             bookmark=bookmark,
-            repo_path=workspace_path,
+            ws=ws,
             platform=platform,
             command_output=command_output,
             dep_outputs=dep_outputs,
@@ -293,8 +295,8 @@ def run_job(  # noqa: PLR0913
             start=start,
         )
     finally:
-        with contextlib.suppress(jj.JJError):
-            jj.workspace_forget(job.name, cwd=repo_path)
+        with contextlib.suppress(JJError):
+            repo.workspace_forget(job.name)
         shutil.rmtree(tmp_parent, ignore_errors=True)
 
 

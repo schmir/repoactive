@@ -1,8 +1,8 @@
 import os
 from pathlib import Path
 
-from repoactive import jj
 from repoactive.config import Config, PlatformConfig
+from repoactive.jj import JJ
 from repoactive.platforms.base import Platform, extract_host, parse_repo_from_url
 from repoactive.platforms.github import GitHubPlatform
 from repoactive.platforms.gitlab import GitLabPlatform
@@ -20,7 +20,7 @@ def _match_platform(remote_url: str, platforms: list[PlatformConfig]) -> Platfor
 
 
 def get_platform(config: Config, repo_path: Path) -> Platform:
-    remote_url = jj.get_remote_url(cwd=repo_path)
+    remote_url = JJ(repo_path).get_remote_url()
     platform_config = _match_platform(remote_url, config.platforms)
 
     token = os.environ.get(platform_config.token_env)

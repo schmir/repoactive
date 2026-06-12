@@ -4,28 +4,15 @@ from unittest.mock import MagicMock, call, patch
 
 import pytest
 
-from repoactive.jj import (
-    Bookmark,
-    JJError,
-    abandon,
-    bookmark_delete,
-    bookmark_exists,
-    bookmark_list,
-    bookmark_set,
-    describe,
-    edit,
-    get_remote_url,
-    git_push,
-    git_push_delete,
-    is_empty,
-    new,
-    rebase,
-    restore,
-)
+from repoactive.jj import JJ, Bookmark, JJError
 
 REPO = Path("/repo")
 _BASE = ["jj", "--no-pager", "--color=never"]
 _KWARGS = {"cwd": REPO, "capture_output": True, "text": True, "check": True}
+
+
+def _jj() -> JJ:
+    return JJ(REPO)
 
 
 def _call(*args: str) -> object:
@@ -39,7 +26,7 @@ class TestJJError:
             patch("repoactive.jj.subprocess.run", side_effect=err),
             pytest.raises(JJError, match="bad state"),
         ):
-            new("trunk()", cwd=REPO)
+            _jj().new("trunk()")
 
     def test_empty_stderr_in_error(self) -> None:
         err = CalledProcessError(1, "jj", stderr="")
@@ -47,20 +34,20 @@ class TestJJError:
             patch("repoactive.jj.subprocess.run", side_effect=err),
             pytest.raises(JJError),
         ):
-            new("trunk()", cwd=REPO)
+            _jj().new("trunk()")
 
 
 class TestNew:
     @patch("repoactive.jj.subprocess.run")
     def test_single_parent(self, mock_run: MagicMock) -> None:
         mock_run.return_value.stdout = ""
-        new("trunk()", cwd=REPO)
+        _jj().new("trunk()")
         assert mock_run.call_args == _call("new", "trunk()")
 
     @patch("repoactive.jj.subprocess.run")
     def test_multiple_parents(self, mock_run: MagicMock) -> None:
         mock_run.return_value.stdout = ""
-        new("repoactive/a", "repoactive/b", cwd=REPO)
+        _jj().new("repoactive/a", "repoactive/b")
         assert mock_run.call_args == _call("new", "repoactive/a", "repoactive/b")
 
 
@@ -68,7 +55,7 @@ class TestBookmarkSet:
     @patch("repoactive.jj.subprocess.run")
     def test_sets_bookmark_at_working_copy(self, mock_run: MagicMock) -> None:
         mock_run.return_value.stdout = ""
-        bookmark_set("repoactive/foo", cwd=REPO)
+        _jj().bookmark_set("repoactive/foo")
         assert mock_run.call_args == _call(
             "bookmark", "set", "repoactive/foo", "--revision", "@", "--allow-backwards"
         )
@@ -78,7 +65,7 @@ class TestBookmarkDelete:
     @patch("repoactive.jj.subprocess.run")
     def test_deletes_bookmark(self, mock_run: MagicMock) -> None:
         mock_run.return_value.stdout = ""
-        bookmark_delete("repoactive/foo", cwd=REPO)
+        _jj().bookmark_delete("repoactive/foo")
         assert mock_run.call_args == _call("bookmark", "delete", "repoactive/foo")
 
 
@@ -86,22 +73,22 @@ class TestBookmarkExists:
     @patch("repoactive.jj.subprocess.run")
     def test_returns_true_when_found(self, mock_run: MagicMock) -> None:
         mock_run.return_value.stdout = _BOOKMARKS_OUTPUT
-        assert bookmark_exists("rschmitt/alpine", cwd=REPO) is True
+        assert _jj().bookmark_exists("rschmitt/alpine") is True
 
     @patch("repoactive.jj.subprocess.run")
     def test_returns_false_when_not_found(self, mock_run: MagicMock) -> None:
         mock_run.return_value.stdout = _BOOKMARKS_OUTPUT
-        assert bookmark_exists("repoactive/missing", cwd=REPO) is False
+        assert _jj().bookmark_exists("repoactive/missing") is False
 
     @patch("repoactive.jj.subprocess.run")
     def test_returns_false_when_no_bookmarks(self, mock_run: MagicMock) -> None:
         mock_run.return_value.stdout = ""
-        assert bookmark_exists("repoactive/foo", cwd=REPO) is False
+        assert _jj().bookmark_exists("repoactive/foo") is False
 
     @patch("repoactive.jj.subprocess.run")
     def test_no_partial_name_match(self, mock_run: MagicMock) -> None:
         mock_run.return_value.stdout = "abcdefghijklmnopqrstuvwxyzabcdef rschmitt/foobar\n"
-        assert bookmark_exists("rschmitt/foo", cwd=REPO) is False
+        assert _jj().bookmark_exists("rschmitt/foo") is False
 
 
 _TEMPLATE = 'self.normal_target().change_id() ++ " " ++ self.name() ++ "\\n"'
@@ -116,13 +103,13 @@ class TestBookmarksList:
     @patch("repoactive.jj.subprocess.run")
     def test_calls_correct_command(self, mock_run: MagicMock) -> None:
         mock_run.return_value.stdout = ""
-        bookmark_list(cwd=REPO)
+        _jj().bookmark_list()
         assert mock_run.call_args == _call("bookmark", "list", "-T", _TEMPLATE)
 
     @patch("repoactive.jj.subprocess.run")
     def test_parses_multiple_bookmarks(self, mock_run: MagicMock) -> None:
         mock_run.return_value.stdout = _BOOKMARKS_OUTPUT
-        result = bookmark_list(cwd=REPO)
+        result = _jj().bookmark_list()
         assert result == [
             Bookmark(change_id="uxpywmluxktrqztvnqywwlpzwvnyrlzk", name="main"),
             Bookmark(change_id="klmkpoomqllrzxynwkoozmypqowtpyys", name="rschmitt/alpine"),
@@ -132,12 +119,12 @@ class TestBookmarksList:
     @patch("repoactive.jj.subprocess.run")
     def test_empty_output_returns_empty_list(self, mock_run: MagicMock) -> None:
         mock_run.return_value.stdout = ""
-        assert bookmark_list(cwd=REPO) == []
+        assert _jj().bookmark_list() == []
 
     @patch("repoactive.jj.subprocess.run")
     def test_name_with_spaces_parsed_correctly(self, mock_run: MagicMock) -> None:
         mock_run.return_value.stdout = "abcdefghijklmnopqrstuvwxyzabcdef my/branch name\n"
-        result = bookmark_list(cwd=REPO)
+        result = _jj().bookmark_list()
         assert result == [
             Bookmark(change_id="abcdefghijklmnopqrstuvwxyzabcdef", name="my/branch name")
         ]
@@ -147,7 +134,7 @@ class TestIsEmpty:
     @patch("repoactive.jj.subprocess.run")
     def test_returns_false_when_not_empty(self, mock_run: MagicMock) -> None:
         mock_run.return_value.stdout = "false"
-        assert is_empty(cwd=REPO) is False
+        assert _jj().is_empty() is False
         assert mock_run.call_args == _call(
             "log", "-r", "@", "--no-graph", "--template", "json(self.empty())"
         )
@@ -155,14 +142,14 @@ class TestIsEmpty:
     @patch("repoactive.jj.subprocess.run")
     def test_returns_true_when_empty(self, mock_run: MagicMock) -> None:
         mock_run.return_value.stdout = "true"
-        assert is_empty(cwd=REPO) is True
+        assert _jj().is_empty() is True
 
 
 class TestAbandon:
     @patch("repoactive.jj.subprocess.run")
     def test_abandons_working_copy(self, mock_run: MagicMock) -> None:
         mock_run.return_value.stdout = ""
-        abandon(cwd=REPO)
+        _jj().abandon()
         assert mock_run.call_args == _call("abandon", "@")
 
 
@@ -170,13 +157,13 @@ class TestDescribe:
     @patch("repoactive.jj.subprocess.run")
     def test_sets_message(self, mock_run: MagicMock) -> None:
         mock_run.return_value.stdout = ""
-        describe("chore: update deps", cwd=REPO)
+        _jj().describe("chore: update deps")
         assert mock_run.call_args == _call("describe", "--message", "chore: update deps")
 
     @patch("repoactive.jj.subprocess.run")
     def test_multiline_message(self, mock_run: MagicMock) -> None:
         mock_run.return_value.stdout = ""
-        describe("title\n\nbody", cwd=REPO)
+        _jj().describe("title\n\nbody")
         assert mock_run.call_args == _call("describe", "--message", "title\n\nbody")
 
 
@@ -184,7 +171,7 @@ class TestGitPush:
     @patch("repoactive.jj.subprocess.run")
     def test_pushes_bookmark(self, mock_run: MagicMock) -> None:
         mock_run.return_value.stdout = ""
-        git_push("repoactive/foo", cwd=REPO)
+        _jj().git_push("repoactive/foo")
         assert mock_run.call_args == _call("git", "push", "--bookmark", "repoactive/foo")
 
 
@@ -192,7 +179,7 @@ class TestGitPushDelete:
     @patch("repoactive.jj.subprocess.run")
     def test_pushes_bookmark_deletion(self, mock_run: MagicMock) -> None:
         mock_run.return_value.stdout = ""
-        git_push_delete("repoactive/foo", cwd=REPO)
+        _jj().git_push_delete("repoactive/foo")
         assert mock_run.call_args == _call(
             "git", "push", "--deleted", "--bookmark", "repoactive/foo"
         )
@@ -202,7 +189,7 @@ class TestEdit:
     @patch("repoactive.jj.subprocess.run")
     def test_edits_revision(self, mock_run: MagicMock) -> None:
         mock_run.return_value.stdout = ""
-        edit("repoactive/foo", cwd=REPO)
+        _jj().edit("repoactive/foo")
         assert mock_run.call_args == _call("edit", "repoactive/foo")
 
 
@@ -210,7 +197,7 @@ class TestRestore:
     @patch("repoactive.jj.subprocess.run")
     def test_restores_changes_in(self, mock_run: MagicMock) -> None:
         mock_run.return_value.stdout = ""
-        restore("repoactive/foo", cwd=REPO)
+        _jj().restore("repoactive/foo")
         assert mock_run.call_args == _call("restore", "--changes-in", "repoactive/foo")
 
 
@@ -218,13 +205,13 @@ class TestRebase:
     @patch("repoactive.jj.subprocess.run")
     def test_single_onto(self, mock_run: MagicMock) -> None:
         mock_run.return_value.stdout = ""
-        rebase("trunk()", cwd=REPO)
+        _jj().rebase("trunk()")
         assert mock_run.call_args == _call("rebase", "-r", "@", "--onto", "trunk()")
 
     @patch("repoactive.jj.subprocess.run")
     def test_multiple_onto(self, mock_run: MagicMock) -> None:
         mock_run.return_value.stdout = ""
-        rebase("repoactive/a", "repoactive/b", cwd=REPO)
+        _jj().rebase("repoactive/a", "repoactive/b")
         assert mock_run.call_args == _call(
             "rebase", "-r", "@", "--onto", "repoactive/a", "--onto", "repoactive/b"
         )
@@ -234,7 +221,7 @@ class TestGetRemoteUrl:
     @patch("repoactive.jj.subprocess.run")
     def test_returns_origin_url(self, mock_run: MagicMock) -> None:
         mock_run.return_value.stdout = "origin  https://gitlab.com/org/repo.git\n"
-        assert get_remote_url(cwd=REPO) == "https://gitlab.com/org/repo.git"
+        assert _jj().get_remote_url() == "https://gitlab.com/org/repo.git"
 
     @patch("repoactive.jj.subprocess.run")
     def test_returns_named_remote(self, mock_run: MagicMock) -> None:
@@ -242,16 +229,16 @@ class TestGetRemoteUrl:
             "origin  https://gitlab.com/org/repo.git\n"
             "upstream  https://gitlab.com/upstream/repo.git\n"
         )
-        assert get_remote_url("upstream", cwd=REPO) == "https://gitlab.com/upstream/repo.git"
+        assert _jj().get_remote_url("upstream") == "https://gitlab.com/upstream/repo.git"
 
     @patch("repoactive.jj.subprocess.run")
     def test_raises_when_remote_not_found(self, mock_run: MagicMock) -> None:
         mock_run.return_value.stdout = "origin  https://gitlab.com/org/repo.git\n"
         with pytest.raises(JJError, match="'upstream' not found"):
-            get_remote_url("upstream", cwd=REPO)
+            _jj().get_remote_url("upstream")
 
     @patch("repoactive.jj.subprocess.run")
     def test_raises_when_no_remotes(self, mock_run: MagicMock) -> None:
         mock_run.return_value.stdout = ""
         with pytest.raises(JJError):
-            get_remote_url(cwd=REPO)
+            _jj().get_remote_url()
