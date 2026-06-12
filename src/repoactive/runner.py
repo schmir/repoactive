@@ -160,7 +160,7 @@ def _handle_empty(  # noqa: PLR0913
     if bookmark_existed:
         ws.bookmark_delete(bookmark)
         if not local:
-            ws.git_push_delete(bookmark)
+            ws.git_push_bookmarks(bookmark)
         print(f"==> [{job.name}] no changes, bookmark deleted ({elapsed:.1f}s)")
     else:
         print(f"==> [{job.name}] no changes ({elapsed:.1f}s)")
@@ -211,7 +211,7 @@ def _publish_job(  # noqa: PLR0913
             duration=elapsed,
         )
 
-    ws.git_push(bookmark)
+    ws.git_push_bookmarks(bookmark)
     mr_url: str | None = None
     if platform is not None and job.create_mr:
         base_branch = job.base_branch or platform.default_branch()

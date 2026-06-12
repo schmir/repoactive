@@ -167,21 +167,19 @@ class TestDescribe:
         assert mock_run.call_args == _call("describe", "--message", "title\n\nbody")
 
 
-class TestGitPush:
+class TestGitPushBookmarks:
     @patch("repoactive.jj.subprocess.run")
     def test_pushes_bookmark(self, mock_run: MagicMock) -> None:
         mock_run.return_value.stdout = ""
-        _jj().git_push("repoactive/foo")
+        _jj().git_push_bookmarks("repoactive/foo")
         assert mock_run.call_args == _call("git", "push", "--bookmark", "repoactive/foo")
 
-
-class TestGitPushDelete:
     @patch("repoactive.jj.subprocess.run")
-    def test_pushes_bookmark_deletion(self, mock_run: MagicMock) -> None:
+    def test_pushes_multiple_bookmarks(self, mock_run: MagicMock) -> None:
         mock_run.return_value.stdout = ""
-        _jj().git_push_delete("repoactive/foo")
+        _jj().git_push_bookmarks("repoactive/a", "repoactive/b")
         assert mock_run.call_args == _call(
-            "git", "push", "--deleted", "--bookmark", "repoactive/foo"
+            "git", "push", "--bookmark", "repoactive/a", "--bookmark", "repoactive/b"
         )
 
 

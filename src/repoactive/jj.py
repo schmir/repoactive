@@ -86,11 +86,14 @@ class JJ:
     def describe(self, message: str) -> None:
         self._run("describe", "--message", message)
 
-    def git_push(self, bookmark: str) -> None:
-        self._run("git", "push", "--bookmark", bookmark)
+    def git_push_bookmarks(self, *bookmarks: str) -> None:
+        """Push bookmarks to the remote.
 
-    def git_push_delete(self, bookmark: str) -> None:
-        self._run("git", "push", "--deleted", "--bookmark", bookmark)
+        Pushing a locally-deleted bookmark propagates the deletion; a no-op if
+        the bookmark was never pushed.
+        """
+        bookmark_args = [arg for bookmark in bookmarks for arg in ("--bookmark", bookmark)]
+        self._run("git", "push", *bookmark_args)
 
     def get_remote_url(self, remote: str = "origin") -> str:
         output = self._run("git", "remote", "list")

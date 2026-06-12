@@ -436,7 +436,7 @@ class TestRunJob:
         mock_jj.new.assert_called_once_with("trunk()")
         mock_jj.bookmark_set.assert_called_once_with("repoactive/foo")
         mock_jj.describe.assert_called_once_with("Change foo")
-        mock_jj.git_push.assert_called_once_with("repoactive/foo")
+        mock_jj.git_push_bookmarks.assert_called_once_with("repoactive/foo")
         mock_jj.abandon.assert_not_called()
         assert result.produced_output is True
         assert result.effective_revsets == ["repoactive/foo"]
@@ -525,8 +525,7 @@ class TestRunJob:
         mock_jj.abandon.assert_called_once_with()
         mock_jj.bookmark_set.assert_not_called()
         mock_jj.bookmark_delete.assert_not_called()
-        mock_jj.git_push.assert_not_called()
-        mock_jj.git_push_delete.assert_not_called()
+        mock_jj.git_push_bookmarks.assert_not_called()
         assert result.produced_output is False
         assert result.effective_revsets == ["trunk()"]
 
@@ -544,15 +543,14 @@ class TestRunJob:
 
         mock_jj.abandon.assert_called_once_with()
         mock_jj.bookmark_delete.assert_called_once_with("repoactive/foo")
-        mock_jj.git_push_delete.assert_called_once_with("repoactive/foo")
+        mock_jj.git_push_bookmarks.assert_called_once_with("repoactive/foo")
         mock_jj.bookmark_set.assert_not_called()
-        mock_jj.git_push.assert_not_called()
         assert result.produced_output is False
         assert result.effective_revsets == ["trunk()"]
 
     @patch("repoactive.runner.JJ")
     @patch("repoactive.runner.subprocess.run")
-    def test_no_output_existing_bookmark_local_skips_push_delete(
+    def test_no_output_existing_bookmark_local_skips_push(
         self, mock_sub: MagicMock, mock_jj_cls: MagicMock
     ) -> None:
         mock_jj = mock_jj_cls.return_value
@@ -563,7 +561,7 @@ class TestRunJob:
         run_job(job=_job("foo"), parents=["trunk()"], repo_path=REPO, platform=None, local=True)
 
         mock_jj.bookmark_delete.assert_called_once_with("repoactive/foo")
-        mock_jj.git_push_delete.assert_not_called()
+        mock_jj.git_push_bookmarks.assert_not_called()
 
     @patch("repoactive.runner.JJ")
     @patch("repoactive.runner.subprocess.run")
@@ -693,7 +691,7 @@ class TestRunJob:
             local=True,
         )
 
-        mock_jj.git_push.assert_not_called()
+        mock_jj.git_push_bookmarks.assert_not_called()
         platform.ensure_mr.assert_not_called()
         assert result.produced_output is True
         assert result.effective_revsets == ["repoactive/foo"]
@@ -716,7 +714,7 @@ class TestRunJob:
 
         mock_jj.abandon.assert_called_once_with()
         mock_jj.bookmark_set.assert_not_called()
-        mock_jj.git_push.assert_not_called()
+        mock_jj.git_push_bookmarks.assert_not_called()
         assert result.produced_output is False
 
     @patch("repoactive.runner.JJ")
