@@ -12,6 +12,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 logger = logging.getLogger(__name__)
 
 _INTERVAL_RE = re.compile(r"^(\d+)([smhdw])$")
+_JOB_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+_BRANCH_PREFIX_RE = re.compile(r"^(?!/)(?!.*//)[a-zA-Z0-9_\-/]+$")
 _INTERVAL_UNITS = {"s": "seconds", "m": "minutes", "h": "hours", "d": "days", "w": "weeks"}
 
 
@@ -39,6 +41,14 @@ class PlatformConfig(BaseModel):
     token_env: str
 
 
+def _validate_branch_prefix(value: str) -> None:
+    if not _BRANCH_PREFIX_RE.match(value):
+        raise ValueError(
+            f"invalid branch_prefix {value!r}: only alphanumerics, hyphens, underscores, and "
+            "slashes are allowed; must not start with '/' or contain '//'"
+        )
+
+
 class JobDefaults(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -48,6 +58,12 @@ class JobDefaults(BaseModel):
     labels: list[str] = Field(default_factory=list)
     base_branch: str | None = None
     min_interval: str | None = None
+
+    @field_validator("branch_prefix")
+    @classmethod
+    def _check_branch_prefix(cls, value: str) -> str:
+        _validate_branch_prefix(value)
+        return value
 
     @field_validator("min_interval")
     @classmethod
@@ -77,6 +93,22 @@ class Job(BaseModel):
     commit_title_prefix: str | None = None
     labels: list[str] = Field(default_factory=list)
     min_interval: str | None = None
+
+    @field_validator("name")
+    @classmethod
+    def _check_name(cls, value: str) -> str:
+        if not _JOB_NAME_RE.match(value):
+            raise ValueError(
+                f"invalid job name {value!r}: only letters, digits, '-', and '_' are allowed"
+            )
+        return value
+
+    @field_validator("branch_prefix")
+    @classmethod
+    def _check_branch_prefix(cls, value: str | None) -> str | None:
+        if value is not None:
+            _validate_branch_prefix(value)
+        return value
 
     @field_validator("min_interval")
     @classmethod
@@ -165,7 +197,10 @@ def _merge_jobs(base: list[dict], override: list[dict]) -> list[dict]:
     job_by_name: dict[str, dict] = {}
     result: list[dict] = []
     for job in base + override:
-        name = job["name"]
+        name = job.get("name")
+        if name is None:
+            raise ValueError("Each [[job]] entry must have a 'name' field")
+
         if name in job_by_name:
             job_by_name[name].update(job)
         else:

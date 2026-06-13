@@ -19,6 +19,52 @@ def _config(**kwargs: object) -> Config:
     return Config.model_validate(data)
 
 
+class TestJobNameValidation:
+    @pytest.mark.parametrize("name", ["foo", "foo-bar", "foo_bar", "Foo123", "A-B_c9"])
+    def test_valid_names_accepted(self, name: str) -> None:
+        job = Job(name=name, command="cmd", title="T")
+        assert job.name == name
+
+    @pytest.mark.parametrize("name", ["foo bar", "foo/bar", "foo.bar", "", "foo@bar"])
+    def test_invalid_names_rejected(self, name: str) -> None:
+        with pytest.raises(ValueError, match="invalid job name"):
+            Job(name=name, command="cmd", title="T")
+
+
+class TestBranchPrefixValidation:
+    def test_valid_prefix_accepted(self) -> None:
+        Job(name="x", command="cmd", title="T", branch_prefix="bot/")
+
+    def test_nested_prefix_accepted(self) -> None:
+        Job(name="x", command="cmd", title="T", branch_prefix="org/team/")
+
+    def test_none_accepted(self) -> None:
+        Job(name="x", command="cmd", title="T", branch_prefix=None)
+
+    def test_leading_slash_rejected(self) -> None:
+        with pytest.raises(ValueError, match="invalid branch_prefix"):
+            Job(name="x", command="cmd", title="T", branch_prefix="/bot/")
+
+    def test_consecutive_slashes_rejected(self) -> None:
+        with pytest.raises(ValueError, match="invalid branch_prefix"):
+            Job(name="x", command="cmd", title="T", branch_prefix="bot//sub/")
+
+    def test_invalid_char_rejected(self) -> None:
+        with pytest.raises(ValueError, match="invalid branch_prefix"):
+            Job(name="x", command="cmd", title="T", branch_prefix="bot prefix/")
+
+    def test_defaults_valid_prefix_accepted(self) -> None:
+        JobDefaults(branch_prefix="custom/")
+
+    def test_defaults_leading_slash_rejected(self) -> None:
+        with pytest.raises(ValueError, match="invalid branch_prefix"):
+            JobDefaults(branch_prefix="/bad/")
+
+    def test_defaults_consecutive_slashes_rejected(self) -> None:
+        with pytest.raises(ValueError, match="invalid branch_prefix"):
+            JobDefaults(branch_prefix="bad//prefix/")
+
+
 class TestBranchName:
     def test_default_prefix(self) -> None:
         job = Job(name="foo", command="cmd", title="Foo", branch_prefix="repoactive/")
