@@ -435,7 +435,7 @@ class TestRunJob:
 
         mock_jj.new.assert_called_once_with("trunk()")
         mock_jj.bookmark_set.assert_called_once_with("repoactive/foo")
-        mock_jj.describe.assert_called_once_with("Change foo")
+        mock_jj.describe.assert_called_once_with("Change foo\n\nRepoactive-Job: foo")
         mock_jj.git_push_bookmarks.assert_called_once_with("repoactive/foo")
         mock_jj.abandon.assert_not_called()
         assert result.produced_output is True
@@ -452,7 +452,7 @@ class TestRunJob:
 
         run_job(job=job, parents=["trunk()"], repo_path=REPO, platform=None)
 
-        mock_jj.describe.assert_called_once_with("Change foo\n\nBody text.")
+        mock_jj.describe.assert_called_once_with("Change foo\n\nBody text.\n\nRepoactive-Job: foo")
 
     @patch("repoactive.runner.JJ")
     @patch("repoactive.runner.subprocess.run")
@@ -467,7 +467,9 @@ class TestRunJob:
 
         run_job(job=job, parents=["trunk()"], repo_path=REPO, platform=None)
 
-        mock_jj.describe.assert_called_once_with("Change foo\n\n  $ cmd-foo\n  did stuff")
+        mock_jj.describe.assert_called_once_with(
+            "Change foo\n\n  $ cmd-foo\n  did stuff\n\nRepoactive-Job: foo"
+        )
 
     @patch("repoactive.runner.JJ")
     @patch("repoactive.runner.subprocess.run")
@@ -489,7 +491,7 @@ class TestRunJob:
 
         run_job(job=job, parents=["trunk()"], repo_path=REPO, platform=None)
 
-        mock_jj.describe.assert_called_once_with("Change foo")
+        mock_jj.describe.assert_called_once_with("Change foo\n\nRepoactive-Job: foo")
 
     @patch("repoactive.runner.JJ")
     @patch("repoactive.runner.subprocess.run")
@@ -508,7 +510,7 @@ class TestRunJob:
             platform=None,
         )
 
-        mock_jj.describe.assert_called_once_with("[bot] Change foo")
+        mock_jj.describe.assert_called_once_with("[bot] Change foo\n\nRepoactive-Job: foo")
 
     @patch("repoactive.runner.JJ")
     @patch("repoactive.runner.subprocess.run")
@@ -890,6 +892,94 @@ class TestRunAll:
         b = _job("b", depends_on=["a"])
         with pytest.raises(ValueError, match="Cannot run disabled job"):
             run_all(config=_config(a, b), repo_path=REPO, requested_jobs=["b"])
+
+    @staticmethod
+    def _config_with_interval(name: str, interval: str, **fields: object) -> Config:
+        return Config.model_validate(
+            {
+                "platform": [{"url": "https://gitlab.com", "type": "gitlab", "token_env": "T"}],
+                "jobs": [
+                    {"name": name, "command": "cmd", "title": name, "min_interval": interval}
+                    | fields
+                ],
+            }
+        )
+
+    @patch("repoactive.runner.JJ")
+    @patch("repoactive.runner.run_job")
+    def test_cooldown_skips_job(self, mock_run_job: MagicMock, mock_jj_cls: MagicMock) -> None:
+        mock_jj_cls.return_value.has_recent_job_commit.return_value = True
+
+        summary = run_all(config=self._config_with_interval("a", "7d"), repo_path=REPO)
+
+        mock_run_job.assert_not_called()
+        assert summary.cooldown == {"a"}
+        assert summary.results["a"].produced_output is False
+        assert summary.ok  # cooldown is not a failure
+
+    @patch("repoactive.runner.JJ")
+    @patch("repoactive.runner.run_job")
+    def test_cooldown_queries_base_branch(
+        self, mock_run_job: MagicMock, mock_jj_cls: MagicMock
+    ) -> None:
+        mock_jj_cls.return_value.has_recent_job_commit.return_value = True
+
+        run_all(config=self._config_with_interval("a", "7d"), repo_path=REPO)
+
+        name, base, _since = mock_jj_cls.return_value.has_recent_job_commit.call_args.args
+        assert name == "a"
+        assert base == "trunk()"
+
+    @patch("repoactive.runner.JJ")
+    @patch("repoactive.runner.run_job")
+    def test_no_recent_commit_runs_job(
+        self, mock_run_job: MagicMock, mock_jj_cls: MagicMock
+    ) -> None:
+        mock_jj_cls.return_value.has_recent_job_commit.return_value = False
+        a = _job("a")
+        mock_run_job.return_value = _result(a, revsets=["repoactive/a"])
+
+        summary = run_all(config=self._config_with_interval("a", "7d"), repo_path=REPO)
+
+        mock_run_job.assert_called_once()
+        assert not summary.cooldown
+
+    @patch("repoactive.runner.JJ")
+    @patch("repoactive.runner.run_job")
+    def test_cooldown_dependent_falls_back_to_base(
+        self, mock_run_job: MagicMock, mock_jj_cls: MagicMock
+    ) -> None:
+        mock_jj_cls.return_value.has_recent_job_commit.return_value = True
+        b = _job("b", depends_on=["a"])
+        mock_run_job.return_value = _result(b, revsets=["repoactive/b"])
+        config = Config.model_validate(
+            {
+                "platform": [{"url": "https://gitlab.com", "type": "gitlab", "token_env": "T"}],
+                "jobs": [
+                    {"name": "a", "command": "cmd", "title": "a", "min_interval": "7d"},
+                    {"name": "b", "command": "cmd", "title": "b", "depends_on": ["a"]},
+                ],
+            }
+        )
+
+        summary = run_all(config=config, repo_path=REPO)
+
+        assert summary.cooldown == {"a"}
+        # b still runs, parented on the base branch since a was a no-op this run.
+        b_call = next(c for c in mock_run_job.call_args_list if c.kwargs["job"].name == "b")
+        assert b_call.kwargs["parents"] == ["trunk()"]
+
+    @patch("repoactive.runner.JJ")
+    @patch("repoactive.runner.run_job")
+    def test_no_min_interval_never_queries(
+        self, mock_run_job: MagicMock, mock_jj_cls: MagicMock
+    ) -> None:
+        a = _job("a")
+        mock_run_job.return_value = _result(a, revsets=["repoactive/a"])
+
+        run_all(config=_config(a), repo_path=REPO)
+
+        mock_jj_cls.return_value.has_recent_job_commit.assert_not_called()
 
     @patch("repoactive.runner.run_job")
     def test_run_all_resolves_jobs_with_defaults(self, mock_run_job: MagicMock) -> None:

@@ -1,8 +1,9 @@
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
 
-from repoactive.config import Config, Job, load_config
+from repoactive.config import Config, Job, JobDefaults, load_config, parse_interval
 
 
 def _platform(**kwargs: object) -> dict[str, object]:
@@ -78,6 +79,74 @@ class TestJobDefaults:
     def test_labels_default_empty(self) -> None:
         cfg = _config()
         assert cfg.job_defaults.labels == []
+
+
+class TestParseInterval:
+    def test_days(self) -> None:
+        assert parse_interval("7d") == timedelta(days=7)
+
+    def test_weeks(self) -> None:
+        assert parse_interval("2w") == timedelta(weeks=2)
+
+    def test_hours(self) -> None:
+        assert parse_interval("12h") == timedelta(hours=12)
+
+    def test_minutes(self) -> None:
+        assert parse_interval("30m") == timedelta(minutes=30)
+
+    def test_seconds(self) -> None:
+        assert parse_interval("45s") == timedelta(seconds=45)
+
+    def test_surrounding_whitespace_ignored(self) -> None:
+        assert parse_interval("  7d  ") == timedelta(days=7)
+
+    def test_unknown_unit_raises(self) -> None:
+        with pytest.raises(ValueError, match="invalid interval"):
+            parse_interval("7y")
+
+    def test_missing_unit_raises(self) -> None:
+        with pytest.raises(ValueError, match="invalid interval"):
+            parse_interval("7")
+
+    def test_empty_raises(self) -> None:
+        with pytest.raises(ValueError, match="invalid interval"):
+            parse_interval("")
+
+
+class TestMinInterval:
+    def test_valid_value_accepted(self) -> None:
+        job = Job(name="x", command="cmd", title="X", min_interval="7d")
+        assert job.min_interval == "7d"
+
+    def test_invalid_value_rejected(self) -> None:
+        with pytest.raises(ValueError, match="invalid interval"):
+            Job(name="x", command="cmd", title="X", min_interval="nope")
+
+    def test_invalid_value_rejected_in_defaults(self) -> None:
+        with pytest.raises(ValueError, match="invalid interval"):
+            JobDefaults(min_interval="nope")
+
+    def test_delta_none_when_unset(self) -> None:
+        job = Job(name="x", command="cmd", title="X")
+        assert job.min_interval_delta() is None
+
+    def test_delta_parsed_when_set(self) -> None:
+        job = Job(name="x", command="cmd", title="X", min_interval="7d")
+        assert job.min_interval_delta() == timedelta(days=7)
+
+    def test_falls_back_to_defaults(self) -> None:
+        job = Job(name="x", command="cmd", title="X")
+        resolved = job.resolve(JobDefaults(min_interval="3d"))
+        assert resolved.min_interval == "3d"
+
+    def test_per_job_overrides_defaults(self) -> None:
+        job = Job(name="x", command="cmd", title="X", min_interval="1d")
+        resolved = job.resolve(JobDefaults(min_interval="3d"))
+        assert resolved.min_interval == "1d"
+
+    def test_stays_none_when_neither_set(self) -> None:
+        job = Job(name="x", command="cmd", title="X")
+        assert job.resolve(JobDefaults()).min_interval is None
 
 
 class TestLoadConfig:

@@ -1,13 +1,34 @@
 from __future__ import annotations
 
 import logging
+import re
 import tomllib
+from datetime import timedelta
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 logger = logging.getLogger(__name__)
+
+_INTERVAL_RE = re.compile(r"^(\d+)([smhdw])$")
+_INTERVAL_UNITS = {"s": "seconds", "m": "minutes", "h": "hours", "d": "days", "w": "weeks"}
+
+
+def parse_interval(value: str) -> timedelta:
+    """Parse a duration like ``"7d"`` or ``"12h"`` into a timedelta.
+
+    The unit is one of s (seconds), m (minutes), h (hours), d (days), w (weeks).
+    Raises ValueError on anything else.
+    """
+    match = _INTERVAL_RE.match(value.strip())
+    if not match:
+        raise ValueError(
+            f"invalid interval {value!r}: expected <number><unit> "
+            "with unit one of s, m, h, d, w (e.g. '7d')"
+        )
+    amount, unit = int(match.group(1)), match.group(2)
+    return timedelta(**{_INTERVAL_UNITS[unit]: amount})
 
 
 class PlatformConfig(BaseModel):
@@ -26,6 +47,14 @@ class JobDefaults(BaseModel):
     commit_title_prefix: str = "[repoactive] "
     labels: list[str] = Field(default_factory=list)
     base_branch: str | None = None
+    min_interval: str | None = None
+
+    @field_validator("min_interval")
+    @classmethod
+    def _check_min_interval(cls, value: str | None) -> str | None:
+        if value is not None:
+            parse_interval(value)
+        return value
 
 
 class Job(BaseModel):
@@ -47,10 +76,22 @@ class Job(BaseModel):
     mr_title_prefix: str | None = None
     commit_title_prefix: str | None = None
     labels: list[str] = Field(default_factory=list)
+    min_interval: str | None = None
+
+    @field_validator("min_interval")
+    @classmethod
+    def _check_min_interval(cls, value: str | None) -> str | None:
+        if value is not None:
+            parse_interval(value)
+        return value
 
     def branch_name(self) -> str:
         assert self.branch_prefix is not None, "job must be resolved before calling branch_name()"
         return f"{self.branch_prefix}{self.name}"
+
+    def min_interval_delta(self) -> timedelta | None:
+        """Resolved minimum interval as a timedelta, or None when unset."""
+        return parse_interval(self.min_interval) if self.min_interval is not None else None
 
     def resolve(self, defaults: JobDefaults) -> Job:
         return self.model_copy(
@@ -67,6 +108,9 @@ class Job(BaseModel):
                 "base_branch": self.base_branch
                 if self.base_branch is not None
                 else defaults.base_branch,
+                "min_interval": self.min_interval
+                if self.min_interval is not None
+                else defaults.min_interval,
                 "labels": list(dict.fromkeys(defaults.labels + self.labels)),
             }
         )

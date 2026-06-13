@@ -5,10 +5,11 @@ import subprocess
 import tempfile
 import time
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 
 from repoactive.config import Config, Job
-from repoactive.jj import JJ, JJError
+from repoactive.jj import JJ, JOB_TRAILER_KEY, JJError
 from repoactive.platforms.base import MRParams, Platform
 
 logger = logging.getLogger(__name__)
@@ -32,9 +33,11 @@ class RunSummary:
     results: dict[str, JobResult] = field(default_factory=dict)
     failed: dict[str, Exception] = field(default_factory=dict)
     skipped: set[str] = field(default_factory=set)
+    cooldown: set[str] = field(default_factory=set)
 
     @property
     def ok(self) -> bool:
+        # cooldown is an intentional skip, not a failure, so it does not affect ok.
         return not self.failed and not self.skipped
 
 
@@ -195,6 +198,9 @@ def _publish_job(  # noqa: PLR0913
             f"  {line}" for line in f"$ {job.command}\n{command_output}".splitlines()
         )
         commit_message += f"\n\n{indented}"
+    # Trailer must be the final paragraph so jj/git recognise it as a trailer;
+    # it lets later runs detect when this job last landed (see cooldown handling).
+    commit_message += f"\n\n{JOB_TRAILER_KEY}: {job.name}"
     ws.describe(commit_message)
 
     if local:
@@ -303,6 +309,16 @@ def run_job(  # noqa: PLR0913
             repo.git_worktree_prune()
 
 
+def _on_cooldown(job: Job, repo_path: Path) -> bool:
+    """Whether the job landed on its base branch within its min_interval window."""
+    delta = job.min_interval_delta()
+    if delta is None:
+        return False
+    base = job.base_branch or "trunk()"
+    since = datetime.now(UTC) - delta
+    return JJ(repo_path).has_recent_job_commit(job.name, base, since)
+
+
 def _propagate_disabled(jobs: list[Job]) -> set[str]:
     """Return names of all disabled jobs, including those disabled transitively via depends_on."""
     disabled = {j.name for j in jobs if j.disabled}
@@ -351,6 +367,17 @@ def run_all(
             blocked.add(job.name)
             continue
 
+        resolved_job = job.resolve(config.job_defaults)
+        parents = _compute_parents(resolved_job, summary.results)
+        if _on_cooldown(resolved_job, repo_path):
+            print(f"==> [{job.name}] on cooldown ({resolved_job.min_interval}), skipped")
+            summary.cooldown.add(job.name)
+            # Treat like a no-op run so dependents proceed on the base branch.
+            summary.results[job.name] = JobResult(
+                job=resolved_job, effective_revsets=parents, produced_output=False
+            )
+            continue
+
         dep_outputs = [
             (summary.results[dep].job.command, summary.results[dep].command_output)
             for dep in job.depends_on
@@ -362,10 +389,9 @@ def run_all(
         ]
         start = time.monotonic()
         try:
-            resolved_job = job.resolve(config.job_defaults)
             result = run_job(
                 job=resolved_job,
-                parents=_compute_parents(resolved_job, summary.results),
+                parents=parents,
                 repo_path=repo_path,
                 platform=platform,
                 dep_outputs=dep_outputs,
@@ -385,6 +411,7 @@ def run_all(
         f"\nDone: {produced}/{total} produced output"
         + (f", {len(summary.failed)} failed" if summary.failed else "")
         + (f", {len(summary.skipped)} skipped" if summary.skipped else "")
+        + (f", {len(summary.cooldown)} on cooldown" if summary.cooldown else "")
         + "."
     )
     return summary

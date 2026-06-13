@@ -3,9 +3,14 @@ import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+# Trailer key recorded on every repoactive commit so later runs can tell which
+# job produced a commit (see JJ.has_recent_job_commit and runner._publish_job).
+JOB_TRAILER_KEY = "Repoactive-Job"
 
 
 class JJError(Exception):
@@ -87,6 +92,28 @@ class JJ:
 
     def describe(self, message: str) -> None:
         self._run("describe", "--message", message)
+
+    def has_recent_job_commit(self, job_name: str, base: str, since: datetime) -> bool:
+        """Whether ``base`` already carries a recent commit from the given job.
+
+        Matches commits that have a ``Repoactive-Job: <job_name>`` trailer and a
+        committer date at or after ``since``. Used to throttle jobs: a recent
+        landing on the base branch means the job is still on cooldown.
+
+        The trailer is matched via jj's trailer parsing, which only considers the
+        final paragraph of the description, so a stray matching line in the body
+        is correctly ignored.
+        """
+        value = job_name.replace("\\", "\\\\").replace('"', '\\"')
+        # jj's date parser rejects fractional seconds, so drop microseconds.
+        since_iso = since.replace(microsecond=0).isoformat()
+        revset = f'{base} & committer_date(after:"{since_iso}")'
+        template = (
+            f'if(trailers.any(|t| t.key() == "{JOB_TRAILER_KEY}" && t.value() == "{value}"),'
+            ' "x", "")'
+        )
+        output = self._run("log", "--no-graph", "-r", revset, "-T", template)
+        return bool(output.strip())
 
     def git_push_bookmarks(self, *bookmarks: str) -> None:
         """Push bookmarks to the remote.
