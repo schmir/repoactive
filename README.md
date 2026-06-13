@@ -184,6 +184,61 @@ repoactive run --debug
 | `--create-prs`  |       | Push branches and create or update pull requests           |
 | `--debug`       | `-d`  | Enable debug logging                                       |
 
+## Inspecting repoactive commits
+
+```
+repoactive recent-commits [OPTIONS] [JOBS]...
+```
+
+List commits produced by repoactive, filtered by a time window and
+optionally by job name or merge status:
+
+```bash
+# Show all repoactive commits from the last 2 weeks (default window)
+repoactive recent-commits --repo /path/to/repo
+
+# Narrow to a specific window
+repoactive recent-commits --within 30d --repo /path/to/repo
+
+# Filter by one or more job names
+repoactive recent-commits --within 7d uv-lock-upgrade prek-autoupdate
+
+# Only commits that have landed in trunk
+repoactive recent-commits --merged
+
+# Only commits still on open branches
+repoactive recent-commits --unmerged
+```
+
+| Option        | Short | Description                                            |
+| ------------- | ----- | ------------------------------------------------------ |
+| `--within`    |       | How far back to look (default: `2w`; e.g. `7d`, `24h`) |
+| `--repo PATH` | `-r`  | jj repository path (default: `.`)                      |
+| `--merged`    |       | Only commits that are ancestors of trunk               |
+| `--unmerged`  |       | Only commits not yet in trunk                          |
+
+### jj revset aliases
+
+To query repoactive commits directly in jj, add these aliases to your
+repository config (`jj config set --repo`) or your global config
+(`jj config set --user`):
+
+```toml
+[revset-aliases]
+'repoactive()' = 'description(regex:"(?m)^Repoactive-Job: ")'
+'repoactive_merged()' = 'repoactive() & ::trunk()'
+'repoactive_unmerged()' = 'repoactive() & ~(::trunk())'
+```
+
+Then use them directly in jj:
+
+```bash
+jj log -r 'repoactive()'
+jj log -r 'repoactive_unmerged()'
+jj log -r 'repoactive() & committer_date(after:"2025-01-01")'
+jj log -r 'repoactive() & description(regex:"(?m)^Repoactive-Job: uv-lock-upgrade$")'
+```
+
 ## Validating configuration
 
 ```

@@ -23,6 +23,14 @@ class Bookmark:
     name: str
 
 
+@dataclass
+class JobCommit:
+    commit_id: str
+    job_name: str
+    subject: str
+    ago: str
+
+
 class JJ:
     """Wrapper around the jj CLI, bound to a repository or workspace directory."""
 
@@ -92,6 +100,48 @@ class JJ:
 
     def describe(self, message: str) -> None:
         self._run("describe", "--message", message)
+
+    def recent_job_commits(self, since: datetime, revset: str = "all()") -> list[JobCommit]:
+        """Return commits matching ``revset`` within ``since`` that carry a repoactive job trailer.
+
+        Results are ordered newest-first (jj's default log order).
+        Pass ``revset="::trunk()"`` for merged commits only,
+        ``revset="~(::trunk())"`` for unmerged only.
+        """
+        since_iso = since.replace(microsecond=0).isoformat()
+        revset = f'{revset} & committer_date(after:"{since_iso}")'
+        # \x1f (ASCII Unit Separator) can't appear in commit subjects, job names, or timestamps,
+        # so it's safe as a field delimiter. jj templates use the escape form; Python splits on the
+        # actual byte.
+        sep = "\\x1f"
+        # Field order: commit_id, job_name, ago, subject
+        template = f"""
+        if(trailers.contains_key("{JOB_TRAILER_KEY}"),
+           join("{sep}",
+             commit_id.short(),
+             trailers.filter(|t| t.key() == "{JOB_TRAILER_KEY}").map(|t| t.value()).join(","),
+             committer.timestamp().local().ago(),
+             description.first_line()
+           ) ++ "\\n",
+           ""
+        )
+        """
+        output = self._run("log", "--no-graph", "-r", revset, "-T", template)
+        result = []
+        for line in output.splitlines():
+            if not line:
+                continue
+            parts = line.split("\x1f", 3)
+            if len(parts) == 4:  # noqa: PLR2004
+                result.append(
+                    JobCommit(
+                        commit_id=parts[0],
+                        job_name=parts[1],
+                        ago=parts[2],
+                        subject=parts[3],
+                    )
+                )
+        return result
 
     def has_recent_job_commit(self, job_name: str, base: str, since: datetime) -> bool:
         """Whether ``base`` already carries a recent commit from the given job.

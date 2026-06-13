@@ -1,11 +1,13 @@
 import logging
+from datetime import UTC, datetime
 from importlib.metadata import version
 from pathlib import Path
 from typing import Annotated
 
 import typer
 
-from repoactive.config import load_config
+from repoactive.config import load_config, parse_interval
+from repoactive.jj import JJ
 from repoactive.platforms import get_platform
 from repoactive.runner import run_all
 
@@ -86,6 +88,63 @@ def validate_config(
         typer.echo(f"Invalid config: {e}", err=True)
         raise typer.Exit(code=1) from e
     typer.echo(f"Config OK: {len(cfg.jobs)} job(s) defined.")
+
+
+@app.command("recent-commits")
+def recent_commits(
+    within: Annotated[
+        str,
+        typer.Option(
+            "--within",
+            help="How far back to look, e.g. '7d', '2w', '24h'. Same format as min_interval.",
+        ),
+    ] = "2w",
+    repo: Annotated[
+        Path, typer.Option("--repo", "-r", help="Path to the jj repository.")
+    ] = _DEFAULT_REPO,
+    merged: Annotated[
+        bool | None, typer.Option("--merged/--unmerged", help="Filter by merge status into trunk.")
+    ] = None,
+    jobs: Annotated[
+        list[str] | None,
+        typer.Argument(help="Job names to filter on (default: all)."),
+    ] = None,
+) -> None:
+    """List commits produced by repoactive within a time window.
+
+    Each commit carries a Repoactive-Job trailer written by repoactive. Pass
+    one or more job names to narrow the output; omit them to show all jobs.
+    By default shows all commits; use --merged or --unmerged to filter by
+    whether the commit has landed in trunk.
+    """
+    try:
+        delta = parse_interval(within)
+    except ValueError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(code=1) from e
+
+    if merged is True:
+        revset = "::trunk()"
+    elif merged is False:
+        revset = "~(::trunk())"
+    else:
+        revset = "all()"
+
+    cutoff = datetime.now(UTC) - delta
+    commits = JJ(repo).recent_job_commits(cutoff, revset=revset)
+
+    filter_names = set(jobs) if jobs else None
+    shown = [c for c in commits if filter_names is None or c.job_name in filter_names]
+
+    if not shown:
+        typer.echo("No matching commits found.")
+        return
+
+    id_w = max(len(c.commit_id) for c in shown)
+    name_w = max(len(c.job_name) for c in shown)
+    ago_w = max(len(c.ago) for c in shown)
+    for c in shown:
+        typer.echo(f"{c.commit_id:<{id_w}}  {c.job_name:<{name_w}}  {c.ago:<{ago_w}}  {c.subject}")
 
 
 def main() -> None:
