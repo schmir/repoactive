@@ -154,14 +154,15 @@ class JJ:
         final paragraph of the description, so a stray matching line in the body
         is correctly ignored.
         """
-        value = job_name.replace("\\", "\\\\").replace('"', '\\"')
         # jj's date parser rejects fractional seconds, so drop microseconds.
         since_iso = since.replace(microsecond=0).isoformat()
         revset = f'{base} & committer_date(after:"{since_iso}")'
-        template = (
-            f'if(trailers.any(|t| t.key() == "{JOB_TRAILER_KEY}" && t.value() == "{value}"),'
-            ' "x", "")'
+        template = f"""
+        if (trailers.any(|t| t.key() == "{JOB_TRAILER_KEY}" && t.value() == "{job_name}"),
+             "x",
+             ""
         )
+        """
         output = self._run("log", "--no-graph", "-r", revset, "-T", template)
         return bool(output.strip())
 
