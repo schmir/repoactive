@@ -317,7 +317,21 @@ def _on_cooldown(job: Job, repo_path: Path) -> bool:
 
 def _select_jobs(config: Config, requested_jobs: list[str] | None) -> list[Job]:
     """Return the enabled, filtered, topologically sorted jobs to run."""
+
     jobs = _topological_sort(config.jobs)
+
+    unknown = set(requested_jobs or []) - {j.name for j in jobs}
+    if unknown:
+        raise ValueError(f"Unknown job(s): {', '.join(sorted(unknown))}")
+
+    if requested_jobs:
+        selected: set[str] = set(requested_jobs)
+        for j in reversed(jobs):
+            if j.name in selected:
+                for dep in j.depends_on:
+                    selected.add(dep)
+
+        return [j for j in jobs if j.name in selected]
 
     disabled: set[str] = set()
     for j in jobs:
@@ -327,24 +341,7 @@ def _select_jobs(config: Config, requested_jobs: list[str] | None) -> list[Job]:
             print(f"==> [{j.name}] disabled (dependency disabled)")
             disabled.add(j.name)
 
-    if not requested_jobs:
-        return [j for j in jobs if j.name not in disabled]
-
-    unknown = set(requested_jobs) - {j.name for j in jobs}
-    if unknown:
-        raise ValueError(f"Unknown job(s): {', '.join(sorted(unknown))}")
-
-    disabled_requested = [name for name in requested_jobs if name in disabled]
-    if disabled_requested:
-        raise ValueError(f"Cannot run disabled job(s): {', '.join(sorted(disabled_requested))}")
-
-    selected: set[str] = set(requested_jobs)
-    for j in reversed(jobs):
-        if j.name in selected:
-            for dep in j.depends_on:
-                selected.add(dep)
-
-    return [j for j in jobs if j.name in selected]
+    return [j for j in jobs if j.name not in disabled]
 
 
 def run_all(

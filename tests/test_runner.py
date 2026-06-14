@@ -160,14 +160,13 @@ class TestSelectJobs:
         config = _config(_djob("a", disabled=True), _djob("b"), _djob("c", depends_on=["a", "b"]))
         assert _names(_select_jobs(config, None)) == ["b"]
 
-    def test_requesting_disabled_job_raises(self) -> None:
-        with pytest.raises(ValueError, match="Cannot run disabled job"):
-            _select_jobs(_config(_djob("a", disabled=True)), ["a"])
+    def test_requesting_disabled_job_runs_it(self) -> None:
+        config = _config(_djob("a", disabled=True))
+        assert _names(_select_jobs(config, ["a"])) == ["a"]
 
-    def test_requesting_transitively_disabled_job_raises(self) -> None:
+    def test_requesting_job_pulls_in_disabled_dependency(self) -> None:
         config = _config(_djob("a", disabled=True), _djob("b", depends_on=["a"]))
-        with pytest.raises(ValueError, match="Cannot run disabled job"):
-            _select_jobs(config, ["b"])
+        assert _names(_select_jobs(config, ["b"])) == ["a", "b"]
 
 
 class TestComputeParents:
@@ -873,17 +872,27 @@ class TestRunAll:
 
         assert mock_run_job.call_args.kwargs["local"] is True
 
-    def test_requesting_disabled_job_raises(self) -> None:
+    @patch("repoactive.runner.run_job")
+    def test_requesting_disabled_job_runs_it(self, mock_run_job: MagicMock) -> None:
         a = Job(name="a", command="cmd", title="A", disabled=True)
         b = _job("b")
-        with pytest.raises(ValueError, match="Cannot run disabled job"):
-            run_all(config=_config(a, b), repo_path=REPO, requested_jobs=["a"])
+        mock_run_job.return_value = _result(a, revsets=["repoactive/a"])
 
-    def test_requesting_transitively_disabled_job_raises(self) -> None:
+        run_all(config=_config(a, b), repo_path=REPO, requested_jobs=["a"])
+
+        called_names = {c.kwargs["job"].name for c in mock_run_job.call_args_list}
+        assert called_names == {"a"}
+
+    @patch("repoactive.runner.run_job")
+    def test_requesting_job_pulls_in_disabled_dependency(self, mock_run_job: MagicMock) -> None:
         a = Job(name="a", command="cmd", title="A", disabled=True)
         b = _job("b", depends_on=["a"])
-        with pytest.raises(ValueError, match="Cannot run disabled job"):
-            run_all(config=_config(a, b), repo_path=REPO, requested_jobs=["b"])
+        mock_run_job.return_value = _result(b, revsets=["repoactive/b"])
+
+        run_all(config=_config(a, b), repo_path=REPO, requested_jobs=["b"])
+
+        called_names = {c.kwargs["job"].name for c in mock_run_job.call_args_list}
+        assert called_names == {"a", "b"}
 
     @staticmethod
     def _cooldown_config(name: str, interval: str, **fields: object) -> Config:
