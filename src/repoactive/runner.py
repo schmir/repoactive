@@ -21,6 +21,15 @@ class CommandResult:
     elapsed: float
 
 
+class CommandError(RuntimeError):
+    """A job command exited non-zero. Carries the command's wall time so the
+    failure can be reported with the same elapsed semantics as a success."""
+
+    def __init__(self, message: str, elapsed: float) -> None:
+        super().__init__(message)
+        self.elapsed = elapsed
+
+
 @dataclass
 class JobResult:
     job: Job
@@ -31,7 +40,6 @@ class JobResult:
     produced_output: bool
     mr_url: str | None = None
     command_output: str = ""
-    duration: float = 0.0
 
 
 @dataclass
@@ -140,8 +148,9 @@ def _run_command(job: Job, ws: JJ) -> CommandResult:
     except subprocess.CalledProcessError as e:
         ws.abandon()
         output = e.stdout or ""
-        raise RuntimeError(
-            f"command failed with exit code {e.returncode}" + (f":\n{output}" if output else "")
+        raise CommandError(
+            f"command failed with exit code {e.returncode}" + (f":\n{output}" if output else ""),
+            elapsed=time.monotonic() - start,
         ) from e
     return CommandResult(output=proc.stdout.strip(), elapsed=time.monotonic() - start)
 
@@ -169,7 +178,6 @@ def _handle_empty(  # noqa: PLR0913
         effective_revsets=parents,
         produced_output=False,
         command_output=command_result.output,
-        duration=command_result.elapsed,
     )
 
 
@@ -209,7 +217,6 @@ def _publish_job(  # noqa: PLR0913
             effective_revsets=[bookmark],
             produced_output=True,
             command_output=command_result.output,
-            duration=command_result.elapsed,
         )
 
     ws.git_push_bookmarks(bookmark)
@@ -238,7 +245,6 @@ def _publish_job(  # noqa: PLR0913
         produced_output=True,
         mr_url=mr_url,
         command_output=command_result.output,
-        duration=command_result.elapsed,
     )
 
 
@@ -396,7 +402,10 @@ def run_all(
             )
             summary.results[job.name] = result
         except Exception as e:
-            elapsed = time.monotonic() - start
+            # A command failure reports the command's own time (matching the
+            # success prints); other failures have no command time, so fall back
+            # to the wall time spent in run_job.
+            elapsed = e.elapsed if isinstance(e, CommandError) else time.monotonic() - start
             print(f"==> [{job.name}] failed: {e} ({elapsed:.1f}s)")
             summary.failed[job.name] = e
             blocked.add(job.name)
