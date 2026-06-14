@@ -27,17 +27,18 @@ class Platform(ABC):
 
 def parse_repo_from_url(url: str) -> str:
     """Extract 'namespace/repo' from an HTTPS or SSH git remote URL."""
-    ssh = re.match(r"git@[^:]+:(.+?)(?:\.git)?$", url)
-    if ssh:
-        return ssh.group(1)
-    # HTTPS
-    return re.sub(r"https?://[^/]+/", "", url).removesuffix(".git")
+    scp = re.match(r"git@[^:]+:(.+?)(?:\.git)?$", url)
+    if scp:
+        return scp.group(1)
+    # ssh:// and https:// share a 'scheme://host/path' shape.
+    return re.sub(r"[a-z]+://[^/]+/", "", url).removesuffix(".git")
 
 
 def extract_host(url: str) -> str:
     """Extract hostname from an SSH or HTTPS URL."""
-    ssh = re.match(r"git@([^:]+):", url)
-    if ssh:
-        return ssh.group(1)
-    m = re.match(r"https?://([^/]+)", url)
+    scp = re.match(r"git@([^:]+):", url)
+    if scp:
+        return scp.group(1)
+    # ssh://git@github.com/owner/repo or https://github.com/owner/repo
+    m = re.match(r"[a-z]+://(?:[^@/]+@)?([^/]+)", url)
     return m.group(1) if m else ""

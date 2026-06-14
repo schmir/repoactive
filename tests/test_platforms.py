@@ -8,7 +8,7 @@ import pytest
 
 from repoactive.config import Config, PlatformConfig, load_config
 from repoactive.platforms import _match_platform, get_platform
-from repoactive.platforms.base import parse_repo_from_url
+from repoactive.platforms.base import extract_host, parse_repo_from_url
 from repoactive.platforms.github import GitHubPlatform
 
 
@@ -22,10 +22,26 @@ class TestParseRepoFromUrl:
             ("git@gitlab.com:namespace/project.git", "namespace/project"),
             ("git@gitlab.com:namespace/project", "namespace/project"),
             ("git@github.com:owner/repo.git", "owner/repo"),
+            ("ssh://git@github.com/owner/repo.git", "owner/repo"),
+            ("ssh://git@gitlab.example.com/group/subgroup/repo.git", "group/subgroup/repo"),
         ],
     )
     def test_parses_url(self, url: str, expected: str) -> None:
         assert parse_repo_from_url(url) == expected
+
+
+class TestExtractHost:
+    @pytest.mark.parametrize(
+        ("url", "expected"),
+        [
+            ("https://gitlab.com/namespace/project.git", "gitlab.com"),
+            ("git@github.com:owner/repo.git", "github.com"),
+            ("ssh://git@github.com/owner/repo.git", "github.com"),
+            ("ssh://git@gitlab.example.com/group/repo.git", "gitlab.example.com"),
+        ],
+    )
+    def test_extracts_host(self, url: str, expected: str) -> None:
+        assert extract_host(url) == expected
 
 
 class TestMatchPlatform:
