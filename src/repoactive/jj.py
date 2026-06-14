@@ -172,7 +172,9 @@ class JJ:
         Pushing a locally-deleted bookmark propagates the deletion; a no-op if
         the bookmark was never pushed.
         """
-        bookmark_args = [arg for bookmark in bookmarks for arg in ("--bookmark", bookmark)]
+        bookmark_args = []
+        for bookmark in bookmarks:
+            bookmark_args += ["--bookmark", bookmark]
         self._run("git", "push", *bookmark_args)
 
     def get_remote_url(self, remote: str = "origin") -> str:
