@@ -16,6 +16,12 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
+class CommandResult:
+    output: str
+    elapsed: float
+
+
+@dataclass
 class JobResult:
     job: Job
     # Revsets dependents should use as parents. Either the bookmark name (if
@@ -127,7 +133,8 @@ def _mr_params(  # noqa: PLR0913
     )
 
 
-def _run_command(job: Job, ws: JJ) -> str:
+def _run_command(job: Job, ws: JJ) -> CommandResult:
+    start = time.monotonic()
     try:
         proc = subprocess.run(
             job.command,
@@ -144,7 +151,7 @@ def _run_command(job: Job, ws: JJ) -> str:
         raise RuntimeError(
             f"command failed with exit code {e.returncode}" + (f":\n{output}" if output else "")
         ) from e
-    return proc.stdout.strip()
+    return CommandResult(output=proc.stdout.strip(), elapsed=time.monotonic() - start)
 
 
 def _handle_empty(  # noqa: PLR0913
@@ -153,26 +160,24 @@ def _handle_empty(  # noqa: PLR0913
     bookmark: str,
     parents: list[str],
     ws: JJ,
-    command_output: str,
+    command_result: CommandResult,
     bookmark_existed: bool,
     local: bool = False,
-    start: float = 0.0,
 ) -> JobResult:
     ws.abandon()
-    elapsed = time.monotonic() - start
     if bookmark_existed:
         ws.bookmark_delete(bookmark)
         if not local:
             ws.git_push_bookmarks(bookmark)
-        print(f"==> [{job.name}] no changes, bookmark deleted ({elapsed:.1f}s)")
+        print(f"==> [{job.name}] no changes, bookmark deleted ({command_result.elapsed:.1f}s)")
     else:
-        print(f"==> [{job.name}] no changes ({elapsed:.1f}s)")
+        print(f"==> [{job.name}] no changes ({command_result.elapsed:.1f}s)")
     return JobResult(
         job=job,
         effective_revsets=parents,
         produced_output=False,
-        command_output=command_output,
-        duration=elapsed,
+        command_output=command_result.output,
+        duration=command_result.elapsed,
     )
 
 
@@ -182,20 +187,19 @@ def _publish_job(  # noqa: PLR0913
     bookmark: str,
     ws: JJ,
     platform: Platform | None,
-    command_output: str,
+    command_result: CommandResult,
     dep_outputs: list[tuple[str, str]] | None,
     dep_mr_urls: list[tuple[str, str]] | None,
     local: bool = False,
-    start: float = 0.0,
 ) -> JobResult:
     stat = ws.diff_stat()
     ws.bookmark_set(bookmark)
     commit_message = f"{job.commit_title_prefix}{job.title}"
     if job.description:
         commit_message += f"\n\n{job.description}"
-    if job.output_in_commit and command_output:
+    if job.output_in_commit and command_result.output:
         indented = "\n".join(
-            f"  {line}" for line in f"$ {job.command}\n{command_output}".splitlines()
+            f"  {line}" for line in f"$ {job.command}\n{command_result.output}".splitlines()
         )
         commit_message += f"\n\n{indented}"
     # Trailer must be the final paragraph so jj/git recognise it as a trailer;
@@ -204,8 +208,7 @@ def _publish_job(  # noqa: PLR0913
     ws.describe(commit_message)
 
     if local:
-        elapsed = time.monotonic() - start
-        print(f"==> [{job.name}] bookmark set (local) ({elapsed:.1f}s)")
+        print(f"==> [{job.name}] bookmark set (local) ({command_result.elapsed:.1f}s)")
         if stat:
             print("\n".join(f"    {line}" for line in stat.splitlines()))
             print()
@@ -213,8 +216,8 @@ def _publish_job(  # noqa: PLR0913
             job=job,
             effective_revsets=[bookmark],
             produced_output=True,
-            command_output=command_output,
-            duration=elapsed,
+            command_output=command_result.output,
+            duration=command_result.elapsed,
         )
 
     ws.git_push_bookmarks(bookmark)
@@ -225,16 +228,14 @@ def _publish_job(  # noqa: PLR0913
             job=job,
             bookmark=bookmark,
             base_branch=base_branch,
-            command_output=command_output,
+            command_output=command_result.output,
             dep_outputs=dep_outputs,
             dep_mr_urls=dep_mr_urls,
         )
         mr_url = platform.ensure_mr(params)
-        elapsed = time.monotonic() - start
-        print(f"==> [{job.name}] {mr_url} ({elapsed:.1f}s)")
+        print(f"==> [{job.name}] {mr_url} ({command_result.elapsed:.1f}s)")
     else:
-        elapsed = time.monotonic() - start
-        print(f"==> [{job.name}] pushed ({elapsed:.1f}s)")
+        print(f"==> [{job.name}] pushed ({command_result.elapsed:.1f}s)")
     if stat:
         print("\n".join(f"    {line}" for line in stat.splitlines()))
         print()
@@ -244,8 +245,8 @@ def _publish_job(  # noqa: PLR0913
         effective_revsets=[bookmark],
         produced_output=True,
         mr_url=mr_url,
-        command_output=command_output,
-        duration=elapsed,
+        command_output=command_result.output,
+        duration=command_result.elapsed,
     )
 
 
@@ -261,7 +262,6 @@ def run_job(  # noqa: PLR0913
 ) -> JobResult:
     logger.debug("starting job: %s", job.model_dump_json(indent=2))
     logger.debug("parents: %s", parents)
-    start = time.monotonic()
     bookmark = job.branch_name()
     repo = JJ(repo_path)
     bookmark_existed = repo.bookmark_exists(bookmark)
@@ -278,28 +278,26 @@ def run_job(  # noqa: PLR0913
         else:
             ws.new(*parents)
         ws.git_sync_head()
-        command_output = _run_command(job, ws)
+        command_result = _run_command(job, ws)
         if ws.is_empty():
             return _handle_empty(
                 job=job,
                 bookmark=bookmark,
                 parents=parents,
                 ws=ws,
-                command_output=command_output,
+                command_result=command_result,
                 bookmark_existed=bookmark_existed,
                 local=local,
-                start=start,
             )
         return _publish_job(
             job=job,
             bookmark=bookmark,
             ws=ws,
             platform=platform,
-            command_output=command_output,
+            command_result=command_result,
             dep_outputs=dep_outputs,
             dep_mr_urls=dep_mr_urls,
             local=local,
-            start=start,
         )
     finally:
         with contextlib.suppress(JJError):
