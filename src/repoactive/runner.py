@@ -46,6 +46,19 @@ class RunSummary:
         # cooldown is an intentional skip, not a failure, so it does not affect ok.
         return not self.failed and not self.skipped
 
+    def print_report(self) -> None:
+        # Cooldown jobs are also stored in results (so dependents can read their
+        # effective_revsets), so omit len(self.cooldown) to avoid counting them twice.
+        total = len(self.results) + len(self.failed) + len(self.skipped)
+        produced = sum(1 for r in self.results.values() if r.produced_output)
+        print(
+            f"\nDone: {produced}/{total} produced output"
+            + (f", {len(self.failed)} failed" if self.failed else "")
+            + (f", {len(self.skipped)} skipped" if self.skipped else "")
+            + (f", {len(self.cooldown)} on cooldown" if self.cooldown else "")
+            + "."
+        )
+
 
 def _resolve_jobs(all_jobs: list[Job], requested: list[str]) -> list[Job]:
     by_name = {j.name: j for j in all_jobs}
@@ -330,14 +343,8 @@ def _propagate_disabled(jobs: list[Job]) -> set[str]:
     return disabled
 
 
-def run_all(
-    *,
-    config: Config,
-    repo_path: Path,
-    platform: Platform | None = None,
-    requested_jobs: list[str] | None = None,
-    local: bool = False,
-) -> RunSummary:
+def _select_jobs(config: Config, requested_jobs: list[str] | None) -> list[Job]:
+    """Return the enabled, filtered, topologically sorted jobs to run."""
     disabled = _propagate_disabled(config.jobs)
     for j in config.jobs:
         if j.name in disabled and not j.disabled:
@@ -350,8 +357,19 @@ def run_all(
                 f"Cannot run disabled job(s): {', '.join(sorted(disabled_requested))}"
             )
     enabled = [j for j in config.jobs if j.name not in disabled]
-    selected_jobs = _resolve_jobs(enabled, requested_jobs) if requested_jobs else enabled
-    ordered_jobs = _topological_sort(selected_jobs)
+    selected = _resolve_jobs(enabled, requested_jobs) if requested_jobs else enabled
+    return _topological_sort(selected)
+
+
+def run_all(
+    *,
+    config: Config,
+    repo_path: Path,
+    platform: Platform | None = None,
+    requested_jobs: list[str] | None = None,
+    local: bool = False,
+) -> RunSummary:
+    ordered_jobs = _select_jobs(config, requested_jobs)
     summary = RunSummary()
     # Names of jobs that failed or were skipped - their dependents are blocked.
     blocked: set[str] = set()
@@ -403,13 +421,5 @@ def run_all(
             summary.failed[job.name] = e
             blocked.add(job.name)
 
-    produced = sum(1 for r in summary.results.values() if r.produced_output)
-    total = len(ordered_jobs)
-    print(
-        f"\nDone: {produced}/{total} produced output"
-        + (f", {len(summary.failed)} failed" if summary.failed else "")
-        + (f", {len(summary.skipped)} skipped" if summary.skipped else "")
-        + (f", {len(summary.cooldown)} on cooldown" if summary.cooldown else "")
-        + "."
-    )
+    summary.print_report()
     return summary
