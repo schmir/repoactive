@@ -9,8 +9,7 @@ from repoactive.runner import (
     JobResult,
     _compute_parents,
     _mr_params,
-    _propagate_disabled,
-    _resolve_jobs,
+    _select_jobs,
     _topological_sort,
     run_all,
     run_job,
@@ -89,93 +88,86 @@ class TestTopologicalSort:
         assert names.index("c") < names.index("d")
 
 
-class TestResolveJobs:
-    def test_all_when_no_filter(self) -> None:
-        jobs = [_job("a"), _job("b")]
-        assert _resolve_jobs(jobs, ["a", "b"]) == jobs
+def _djob(name: str, *, disabled: bool = False, depends_on: list[str] | None = None) -> Job:
+    return Job(
+        name=name, command="cmd", title=name, disabled=disabled, depends_on=depends_on or []
+    )
 
-    def test_subset(self) -> None:
-        a, b, c = _job("a"), _job("b"), _job("c")
-        result = _resolve_jobs([a, b, c], ["a"])
-        assert [x.name for x in result] == ["a"]
 
-    def test_includes_transitive_deps(self) -> None:
-        a = _job("a")
-        b = _job("b", depends_on=["a"])
-        c = _job("c", depends_on=["b"])
-        result = {x.name for x in _resolve_jobs([a, b, c], ["c"])}
-        assert result == {"a", "b", "c"}
+def _names(jobs: list[Job]) -> list[str]:
+    return [j.name for j in jobs]
 
-    def test_unknown_name_raises(self) -> None:
+
+class TestSelectJobs:
+    def test_no_filter_returns_all(self) -> None:
+        assert _names(_select_jobs(_config(_job("a"), _job("b")), None)) == ["a", "b"]
+
+    def test_requested_subset(self) -> None:
+        config = _config(_job("a"), _job("b"), _job("c"))
+        assert _names(_select_jobs(config, ["a"])) == ["a"]
+
+    def test_requested_includes_transitive_deps(self) -> None:
+        config = _config(_job("a"), _job("b", depends_on=["a"]), _job("c", depends_on=["b"]))
+        assert _names(_select_jobs(config, ["c"])) == ["a", "b", "c"]
+
+    def test_unknown_job_raises(self) -> None:
         with pytest.raises(ValueError, match="Unknown job"):
-            _resolve_jobs([_job("a")], ["nonexistent"])
-
-    def test_multiple_unknown_names_in_error(self) -> None:
-        with pytest.raises(ValueError, match="x"):
-            _resolve_jobs([_job("a")], ["x", "y"])
-
-
-class TestPropagateDisabled:
-    def _job(
-        self, name: str, *, disabled: bool = False, depends_on: list[str] | None = None
-    ) -> Job:
-        return Job(
-            name=name, command="cmd", title=name, disabled=disabled, depends_on=depends_on or []
-        )
+            _select_jobs(_config(_job("a")), ["nonexistent"])
 
     def test_no_disabled_jobs(self) -> None:
-        jobs = [self._job("a"), self._job("b")]
-        assert _propagate_disabled(jobs) == set()
+        config = _config(_djob("a"), _djob("b"))
+        assert _names(_select_jobs(config, None)) == ["a", "b"]
 
-    def test_explicitly_disabled(self) -> None:
-        jobs = [self._job("a", disabled=True), self._job("b")]
-        assert _propagate_disabled(jobs) == {"a"}
+    def test_explicitly_disabled_excluded(self) -> None:
+        config = _config(_djob("a", disabled=True), _djob("b"))
+        assert _names(_select_jobs(config, None)) == ["b"]
 
-    def test_direct_dependent_disabled(self) -> None:
-        jobs = [self._job("a", disabled=True), self._job("b", depends_on=["a"])]
-        assert _propagate_disabled(jobs) == {"a", "b"}
+    def test_direct_dependent_excluded(self) -> None:
+        config = _config(_djob("a", disabled=True), _djob("b", depends_on=["a"]))
+        assert _names(_select_jobs(config, None)) == []
 
     def test_transitive_propagation(self) -> None:
-        jobs = [
-            self._job("a", disabled=True),
-            self._job("b", depends_on=["a"]),
-            self._job("c", depends_on=["b"]),
-        ]
-        assert _propagate_disabled(jobs) == {"a", "b", "c"}
+        config = _config(
+            _djob("a", disabled=True),
+            _djob("b", depends_on=["a"]),
+            _djob("c", depends_on=["b"]),
+        )
+        assert _names(_select_jobs(config, None)) == []
 
-    def test_unrelated_job_not_disabled(self) -> None:
-        jobs = [
-            self._job("a", disabled=True),
-            self._job("b", depends_on=["a"]),
-            self._job("c"),
-        ]
-        assert _propagate_disabled(jobs) == {"a", "b"}
+    def test_unrelated_job_not_excluded(self) -> None:
+        config = _config(_djob("a", disabled=True), _djob("b", depends_on=["a"]), _djob("c"))
+        assert _names(_select_jobs(config, None)) == ["c"]
 
     def test_multiple_disabled_roots(self) -> None:
-        jobs = [
-            self._job("a", disabled=True),
-            self._job("b", disabled=True),
-            self._job("c", depends_on=["a"]),
-            self._job("d", depends_on=["b"]),
-        ]
-        assert _propagate_disabled(jobs) == {"a", "b", "c", "d"}
+        config = _config(
+            _djob("a", disabled=True),
+            _djob("b", disabled=True),
+            _djob("c", depends_on=["a"]),
+            _djob("d", depends_on=["b"]),
+        )
+        assert _names(_select_jobs(config, None)) == []
 
     def test_diamond_propagation(self) -> None:
-        jobs = [
-            self._job("a", disabled=True),
-            self._job("b", depends_on=["a"]),
-            self._job("c", depends_on=["a"]),
-            self._job("d", depends_on=["b", "c"]),
-        ]
-        assert _propagate_disabled(jobs) == {"a", "b", "c", "d"}
+        config = _config(
+            _djob("a", disabled=True),
+            _djob("b", depends_on=["a"]),
+            _djob("c", depends_on=["a"]),
+            _djob("d", depends_on=["b", "c"]),
+        )
+        assert _names(_select_jobs(config, None)) == []
 
-    def test_only_one_dep_disabled_propagates(self) -> None:
-        jobs = [
-            self._job("a", disabled=True),
-            self._job("b"),
-            self._job("c", depends_on=["a", "b"]),
-        ]
-        assert _propagate_disabled(jobs) == {"a", "c"}
+    def test_only_one_dep_disabled(self) -> None:
+        config = _config(_djob("a", disabled=True), _djob("b"), _djob("c", depends_on=["a", "b"]))
+        assert _names(_select_jobs(config, None)) == ["b"]
+
+    def test_requesting_disabled_job_raises(self) -> None:
+        with pytest.raises(ValueError, match="Cannot run disabled job"):
+            _select_jobs(_config(_djob("a", disabled=True)), ["a"])
+
+    def test_requesting_transitively_disabled_job_raises(self) -> None:
+        config = _config(_djob("a", disabled=True), _djob("b", depends_on=["a"]))
+        with pytest.raises(ValueError, match="Cannot run disabled job"):
+            _select_jobs(config, ["b"])
 
 
 class TestComputeParents:

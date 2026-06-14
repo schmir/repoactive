@@ -60,27 +60,6 @@ class RunSummary:
         )
 
 
-def _resolve_jobs(all_jobs: list[Job], requested: list[str]) -> list[Job]:
-    by_name = {j.name: j for j in all_jobs}
-    unknown = set(requested) - by_name.keys()
-    if unknown:
-        raise ValueError(f"Unknown job(s): {', '.join(sorted(unknown))}")
-
-    included: set[str] = set()
-
-    def include(name: str) -> None:
-        if name in included:
-            return
-        included.add(name)
-        for dep in by_name[name].depends_on:
-            include(dep)
-
-    for name in requested:
-        include(name)
-
-    return [j for j in all_jobs if j.name in included]
-
-
 def _topological_sort(jobs: list[Job]) -> list[Job]:
     by_name = {j.name: j for j in jobs}
     visited: set[str] = set()
@@ -330,35 +309,36 @@ def _on_cooldown(job: Job, repo_path: Path) -> bool:
     return JJ(repo_path).has_recent_job_commit(job.name, base, since)
 
 
-def _propagate_disabled(jobs: list[Job]) -> set[str]:
-    """Return names of all disabled jobs, including those disabled transitively via depends_on."""
-    disabled = {j.name for j in jobs if j.disabled}
-    changed = True
-    while changed:
-        changed = False
-        for j in jobs:
-            if j.name not in disabled and any(dep in disabled for dep in j.depends_on):
-                disabled.add(j.name)
-                changed = True
-    return disabled
-
-
 def _select_jobs(config: Config, requested_jobs: list[str] | None) -> list[Job]:
     """Return the enabled, filtered, topologically sorted jobs to run."""
-    disabled = _propagate_disabled(config.jobs)
-    for j in config.jobs:
-        if j.name in disabled and not j.disabled:
-            print(f"==> [{j.name}] disabled (dependency disabled)")
+    jobs = _topological_sort(config.jobs)
 
-    if requested_jobs:
-        disabled_requested = [name for name in requested_jobs if name in disabled]
-        if disabled_requested:
-            raise ValueError(
-                f"Cannot run disabled job(s): {', '.join(sorted(disabled_requested))}"
-            )
-    enabled = [j for j in config.jobs if j.name not in disabled]
-    selected = _resolve_jobs(enabled, requested_jobs) if requested_jobs else enabled
-    return _topological_sort(selected)
+    disabled: set[str] = set()
+    for j in jobs:
+        if j.disabled:
+            disabled.add(j.name)
+        elif any(dep in disabled for dep in j.depends_on):
+            print(f"==> [{j.name}] disabled (dependency disabled)")
+            disabled.add(j.name)
+
+    if not requested_jobs:
+        return [j for j in jobs if j.name not in disabled]
+
+    unknown = set(requested_jobs) - {j.name for j in jobs}
+    if unknown:
+        raise ValueError(f"Unknown job(s): {', '.join(sorted(unknown))}")
+
+    disabled_requested = [name for name in requested_jobs if name in disabled]
+    if disabled_requested:
+        raise ValueError(f"Cannot run disabled job(s): {', '.join(sorted(disabled_requested))}")
+
+    selected: set[str] = set(requested_jobs)
+    for j in reversed(jobs):
+        if j.name in selected:
+            for dep in j.depends_on:
+                selected.add(dep)
+
+    return [j for j in jobs if j.name in selected]
 
 
 def run_all(
