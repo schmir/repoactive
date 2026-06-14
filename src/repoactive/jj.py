@@ -96,7 +96,7 @@ class JJ:
         self._run("abandon", "@")
 
     def diff_stat(self) -> str:
-        return self._run("diff", "--stat").strip()
+        return self._run("log", "--no-graph", "-r", "@", "-T", "self.diff().stat(50)").strip()
 
     def describe(self, message: str) -> None:
         self._run("describe", "--message", message)
