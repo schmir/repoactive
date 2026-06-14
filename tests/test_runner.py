@@ -160,6 +160,10 @@ class TestSelectJobs:
         config = _config(_djob("a", disabled=True), _djob("b"), _djob("c", depends_on=["a", "b"]))
         assert _names(_select_jobs(config.jobs, set())) == ["b"]
 
+    def test_disabled_job_depends_on_disabled_job(self) -> None:
+        config = _config(_djob("a", disabled=True), _djob("b", disabled=True, depends_on=["a"]))
+        assert _names(_select_jobs(config.jobs, set())) == []
+
     def test_requesting_disabled_job_runs_it(self) -> None:
         config = _config(_djob("a", disabled=True))
         assert _names(_select_jobs(config.jobs, {"a"})) == ["a"]

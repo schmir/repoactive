@@ -326,24 +326,21 @@ def _select_jobs(jobs: list[Job], requested_jobs: set[str]) -> list[Job]:
     if unknown:
         raise ValueError(f"Unknown job(s): {', '.join(sorted(unknown))}")
 
+    selected: set[str]
     if requested_jobs:
-        selected: set[str] = set(requested_jobs)
+        selected = set(requested_jobs)
         for j in reversed(jobs):
             if j.name in selected:
                 for dep in j.depends_on:
                     selected.add(dep)
+    else:
+        selected = {j.name for j in jobs if not j.disabled}
+        for j in jobs:
+            if j.name in selected and any(dep not in selected for dep in j.depends_on):
+                print(f"==> [{j.name}] disabled (dependency disabled)")
+                selected.remove(j.name)
 
-        return [j for j in jobs if j.name in selected]
-
-    disabled: set[str] = set()
-    for j in jobs:
-        if j.disabled:
-            disabled.add(j.name)
-        elif any(dep in disabled for dep in j.depends_on):
-            print(f"==> [{j.name}] disabled (dependency disabled)")
-            disabled.add(j.name)
-
-    return [j for j in jobs if j.name not in disabled]
+    return [j for j in jobs if j.name in selected]
 
 
 def run_all(
