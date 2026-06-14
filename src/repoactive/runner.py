@@ -315,12 +315,14 @@ def _on_cooldown(job: Job, repo_path: Path) -> bool:
     return JJ(repo_path).has_recent_job_commit(job.name, base, since)
 
 
-def _select_jobs(config: Config, requested_jobs: list[str] | None) -> list[Job]:
-    """Return the enabled, filtered, topologically sorted jobs to run."""
+def _select_jobs(jobs: list[Job], requested_jobs: set[str]) -> list[Job]:
+    """Return the enabled, filtered, topologically sorted jobs to run.
 
-    jobs = _topological_sort(config.jobs)
+    An empty requested_jobs means "run all enabled jobs"."""
 
-    unknown = set(requested_jobs or []) - {j.name for j in jobs}
+    jobs = _topological_sort(jobs)
+
+    unknown = requested_jobs - {j.name for j in jobs}
     if unknown:
         raise ValueError(f"Unknown job(s): {', '.join(sorted(unknown))}")
 
@@ -352,7 +354,7 @@ def run_all(
     requested_jobs: list[str] | None = None,
     local: bool = False,
 ) -> RunSummary:
-    ordered_jobs = _select_jobs(config, requested_jobs)
+    ordered_jobs = _select_jobs(config.jobs, set(requested_jobs or []))
     summary = RunSummary()
     # Names of jobs that failed or were skipped - their dependents are blocked.
     blocked: set[str] = set()
