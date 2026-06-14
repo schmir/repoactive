@@ -96,7 +96,7 @@ def recent_commits(
         str,
         typer.Option(
             "--within",
-            help="How far back to look, e.g. '7d', '2w', '24h'. Same format as min_interval.",
+            help="How far back to look, e.g. '7d', '2w', '24h'. Same format as cooldown_period.",
         ),
     ] = "2w",
     repo: Annotated[

@@ -57,7 +57,7 @@ class JobDefaults(BaseModel):
     commit_title_prefix: str = "[repoactive] "
     labels: list[str] = Field(default_factory=list)
     base_branch: str | None = None
-    min_interval: str | None = None
+    cooldown_period: str | None = None
 
     @field_validator("branch_prefix")
     @classmethod
@@ -65,9 +65,9 @@ class JobDefaults(BaseModel):
         _validate_branch_prefix(value)
         return value
 
-    @field_validator("min_interval")
+    @field_validator("cooldown_period")
     @classmethod
-    def _check_min_interval(cls, value: str | None) -> str | None:
+    def _check_cooldown_period(cls, value: str | None) -> str | None:
         if value is not None:
             parse_interval(value)
         return value
@@ -92,7 +92,7 @@ class Job(BaseModel):
     mr_title_prefix: str | None = None
     commit_title_prefix: str | None = None
     labels: list[str] = Field(default_factory=list)
-    min_interval: str | None = None
+    cooldown_period: str | None = None
 
     @field_validator("name")
     @classmethod
@@ -110,9 +110,9 @@ class Job(BaseModel):
             _validate_branch_prefix(value)
         return value
 
-    @field_validator("min_interval")
+    @field_validator("cooldown_period")
     @classmethod
-    def _check_min_interval(cls, value: str | None) -> str | None:
+    def _check_cooldown_period(cls, value: str | None) -> str | None:
         if value is not None:
             parse_interval(value)
         return value
@@ -121,9 +121,8 @@ class Job(BaseModel):
         assert self.branch_prefix is not None, "job must be resolved before calling branch_name()"
         return f"{self.branch_prefix}{self.name}"
 
-    def min_interval_delta(self) -> timedelta | None:
-        """Resolved minimum interval as a timedelta, or None when unset."""
-        return parse_interval(self.min_interval) if self.min_interval is not None else None
+    def cooldown_timedelta(self) -> timedelta | None:
+        return parse_interval(self.cooldown_period) if self.cooldown_period is not None else None
 
     def resolve(self, defaults: JobDefaults) -> Job:
         return self.model_copy(
@@ -140,9 +139,9 @@ class Job(BaseModel):
                 "base_branch": self.base_branch
                 if self.base_branch is not None
                 else defaults.base_branch,
-                "min_interval": self.min_interval
-                if self.min_interval is not None
-                else defaults.min_interval,
+                "cooldown_period": self.cooldown_period
+                if self.cooldown_period is not None
+                else defaults.cooldown_period,
                 "labels": list(dict.fromkeys(defaults.labels + self.labels)),
             }
         )

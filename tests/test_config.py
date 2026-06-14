@@ -159,40 +159,40 @@ class TestParseInterval:
             parse_interval("")
 
 
-class TestMinInterval:
+class TestCooldownPeriod:
     def test_valid_value_accepted(self) -> None:
-        job = Job(name="x", command="cmd", title="X", min_interval="7d")
-        assert job.min_interval == "7d"
+        job = Job(name="x", command="cmd", title="X", cooldown_period="7d")
+        assert job.cooldown_period == "7d"
 
     def test_invalid_value_rejected(self) -> None:
         with pytest.raises(ValueError, match="invalid interval"):
-            Job(name="x", command="cmd", title="X", min_interval="nope")
+            Job(name="x", command="cmd", title="X", cooldown_period="nope")
 
     def test_invalid_value_rejected_in_defaults(self) -> None:
         with pytest.raises(ValueError, match="invalid interval"):
-            JobDefaults(min_interval="nope")
+            JobDefaults(cooldown_period="nope")
 
     def test_delta_none_when_unset(self) -> None:
         job = Job(name="x", command="cmd", title="X")
-        assert job.min_interval_delta() is None
+        assert job.cooldown_timedelta() is None
 
     def test_delta_parsed_when_set(self) -> None:
-        job = Job(name="x", command="cmd", title="X", min_interval="7d")
-        assert job.min_interval_delta() == timedelta(days=7)
+        job = Job(name="x", command="cmd", title="X", cooldown_period="7d")
+        assert job.cooldown_timedelta() == timedelta(days=7)
 
     def test_falls_back_to_defaults(self) -> None:
         job = Job(name="x", command="cmd", title="X")
-        resolved = job.resolve(JobDefaults(min_interval="3d"))
-        assert resolved.min_interval == "3d"
+        resolved = job.resolve(JobDefaults(cooldown_period="3d"))
+        assert resolved.cooldown_period == "3d"
 
     def test_per_job_overrides_defaults(self) -> None:
-        job = Job(name="x", command="cmd", title="X", min_interval="1d")
-        resolved = job.resolve(JobDefaults(min_interval="3d"))
-        assert resolved.min_interval == "1d"
+        job = Job(name="x", command="cmd", title="X", cooldown_period="1d")
+        resolved = job.resolve(JobDefaults(cooldown_period="3d"))
+        assert resolved.cooldown_period == "1d"
 
     def test_stays_none_when_neither_set(self) -> None:
         job = Job(name="x", command="cmd", title="X")
-        assert job.resolve(JobDefaults()).min_interval is None
+        assert job.resolve(JobDefaults()).cooldown_period is None
 
 
 class TestLoadConfig:

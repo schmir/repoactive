@@ -308,8 +308,8 @@ def run_job(  # noqa: PLR0913
 
 
 def _on_cooldown(job: Job, repo_path: Path) -> bool:
-    """Whether the job landed on its base branch within its min_interval window."""
-    delta = job.min_interval_delta()
+    """Whether the job landed on its base branch within its cooldown_period window."""
+    delta = job.cooldown_timedelta()
     if delta is None:
         return False
     base = job.base_branch or "trunk()"
@@ -368,7 +368,7 @@ def run_all(
         resolved_job = job.resolve(config.job_defaults)
         parents = _compute_parents(resolved_job, summary.results)
         if _on_cooldown(resolved_job, repo_path):
-            print(f"==> [{job.name}] on cooldown ({resolved_job.min_interval}), skipped")
+            print(f"==> [{job.name}] on cooldown ({resolved_job.cooldown_period}), skipped")
             summary.cooldown.add(job.name)
             # Treat like a no-op run so dependents proceed on the base branch.
             summary.results[job.name] = JobResult(

@@ -88,7 +88,7 @@ output_in_commit = true
 # Optional: minimum time between landed changes for this job. If a commit
 # from this job landed on the base branch within this window, the job is
 # skipped. Format: <number><unit>, unit one of s, m, h, d, w (e.g. "7d").
-min_interval = "7d"
+cooldown_period = "7d"
 
 [[job]]
 name = "sync-license-headers"
@@ -127,10 +127,10 @@ than from the plain base branch. The resulting MR branch will therefore
 include both the dependency jobs and the new job on top. Links to the parent
 MRs are automatically added to the MR description.
 
-## Throttling jobs with `min_interval`
+## Throttling jobs with `cooldown_period`
 
 Every commit `repoactive` creates carries a `Repoactive-Job: <name>` trailer
-identifying the job that produced it. When a job sets `min_interval`,
+identifying the job that produced it. When a job sets `cooldown_period`,
 `repoactive` looks at the base branch for a commit with that job's trailer
 and a committer date inside the window before running. If one is found the
 job is on cooldown and is skipped for this run (dependents proceed as if it

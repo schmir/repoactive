@@ -894,12 +894,12 @@ class TestRunAll:
             run_all(config=_config(a, b), repo_path=REPO, requested_jobs=["b"])
 
     @staticmethod
-    def _config_with_interval(name: str, interval: str, **fields: object) -> Config:
+    def _cooldown_config(name: str, interval: str, **fields: object) -> Config:
         return Config.model_validate(
             {
                 "platform": [{"url": "https://gitlab.com", "type": "gitlab", "token_env": "T"}],
                 "jobs": [
-                    {"name": name, "command": "cmd", "title": name, "min_interval": interval}
+                    {"name": name, "command": "cmd", "title": name, "cooldown_period": interval}
                     | fields
                 ],
             }
@@ -910,7 +910,7 @@ class TestRunAll:
     def test_cooldown_skips_job(self, mock_run_job: MagicMock, mock_jj_cls: MagicMock) -> None:
         mock_jj_cls.return_value.has_recent_job_commit.return_value = True
 
-        summary = run_all(config=self._config_with_interval("a", "7d"), repo_path=REPO)
+        summary = run_all(config=self._cooldown_config("a", "7d"), repo_path=REPO)
 
         mock_run_job.assert_not_called()
         assert summary.cooldown == {"a"}
@@ -924,7 +924,7 @@ class TestRunAll:
     ) -> None:
         mock_jj_cls.return_value.has_recent_job_commit.return_value = True
 
-        run_all(config=self._config_with_interval("a", "7d"), repo_path=REPO)
+        run_all(config=self._cooldown_config("a", "7d"), repo_path=REPO)
 
         name, base, _since = mock_jj_cls.return_value.has_recent_job_commit.call_args.args
         assert name == "a"
@@ -939,7 +939,7 @@ class TestRunAll:
         a = _job("a")
         mock_run_job.return_value = _result(a, revsets=["repoactive/a"])
 
-        summary = run_all(config=self._config_with_interval("a", "7d"), repo_path=REPO)
+        summary = run_all(config=self._cooldown_config("a", "7d"), repo_path=REPO)
 
         mock_run_job.assert_called_once()
         assert not summary.cooldown
@@ -956,7 +956,7 @@ class TestRunAll:
             {
                 "platform": [{"url": "https://gitlab.com", "type": "gitlab", "token_env": "T"}],
                 "jobs": [
-                    {"name": "a", "command": "cmd", "title": "a", "min_interval": "7d"},
+                    {"name": "a", "command": "cmd", "title": "a", "cooldown_period": "7d"},
                     {"name": "b", "command": "cmd", "title": "b", "depends_on": ["a"]},
                 ],
             }
@@ -971,7 +971,7 @@ class TestRunAll:
 
     @patch("repoactive.runner.JJ")
     @patch("repoactive.runner.run_job")
-    def test_no_min_interval_never_queries(
+    def test_no_cooldown_period_never_queries(
         self, mock_run_job: MagicMock, mock_jj_cls: MagicMock
     ) -> None:
         a = _job("a")
