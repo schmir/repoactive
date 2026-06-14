@@ -6,7 +6,7 @@ from typing import Annotated
 
 import typer
 
-from repoactive.config import load_config, parse_interval
+from repoactive.config import load_config, parse_duration
 from repoactive.jj import JJ
 from repoactive.platforms import get_platform
 from repoactive.runner import run_all
@@ -118,7 +118,7 @@ def recent_commits(
     whether the commit has landed in trunk.
     """
     try:
-        delta = parse_interval(within)
+        delta = parse_duration(within)
     except ValueError as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(code=1) from e

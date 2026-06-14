@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from repoactive.config import Config, Job, JobDefaults, load_config, parse_interval
+from repoactive.config import Config, Job, JobDefaults, load_config, parse_duration
 
 
 def _platform(**kwargs: object) -> dict[str, object]:
@@ -129,34 +129,34 @@ class TestJobDefaults:
 
 class TestParseInterval:
     def test_days(self) -> None:
-        assert parse_interval("7d") == timedelta(days=7)
+        assert parse_duration("7d") == timedelta(days=7)
 
     def test_weeks(self) -> None:
-        assert parse_interval("2w") == timedelta(weeks=2)
+        assert parse_duration("2w") == timedelta(weeks=2)
 
     def test_hours(self) -> None:
-        assert parse_interval("12h") == timedelta(hours=12)
+        assert parse_duration("12h") == timedelta(hours=12)
 
     def test_minutes(self) -> None:
-        assert parse_interval("30m") == timedelta(minutes=30)
+        assert parse_duration("30m") == timedelta(minutes=30)
 
     def test_seconds(self) -> None:
-        assert parse_interval("45s") == timedelta(seconds=45)
+        assert parse_duration("45s") == timedelta(seconds=45)
 
     def test_surrounding_whitespace_ignored(self) -> None:
-        assert parse_interval("  7d  ") == timedelta(days=7)
+        assert parse_duration("  7d  ") == timedelta(days=7)
 
     def test_unknown_unit_raises(self) -> None:
-        with pytest.raises(ValueError, match="invalid interval"):
-            parse_interval("7y")
+        with pytest.raises(ValueError, match="invalid duration"):
+            parse_duration("7y")
 
     def test_missing_unit_raises(self) -> None:
-        with pytest.raises(ValueError, match="invalid interval"):
-            parse_interval("7")
+        with pytest.raises(ValueError, match="invalid duration"):
+            parse_duration("7")
 
     def test_empty_raises(self) -> None:
-        with pytest.raises(ValueError, match="invalid interval"):
-            parse_interval("")
+        with pytest.raises(ValueError, match="invalid duration"):
+            parse_duration("")
 
 
 class TestCooldownPeriod:
@@ -165,11 +165,11 @@ class TestCooldownPeriod:
         assert job.cooldown_period == "7d"
 
     def test_invalid_value_rejected(self) -> None:
-        with pytest.raises(ValueError, match="invalid interval"):
+        with pytest.raises(ValueError, match="invalid duration"):
             Job(name="x", command="cmd", title="X", cooldown_period="nope")
 
     def test_invalid_value_rejected_in_defaults(self) -> None:
-        with pytest.raises(ValueError, match="invalid interval"):
+        with pytest.raises(ValueError, match="invalid duration"):
             JobDefaults(cooldown_period="nope")
 
     def test_delta_none_when_unset(self) -> None:

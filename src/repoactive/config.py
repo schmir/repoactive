@@ -11,26 +11,26 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 logger = logging.getLogger(__name__)
 
-_INTERVAL_RE = re.compile(r"^(\d+)([smhdw])$")
+_DURATION_RE = re.compile(r"^(\d+)([smhdw])$")
 _JOB_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 _BRANCH_PREFIX_RE = re.compile(r"^(?!/)(?!.*//)[a-zA-Z0-9_\-/]+$")
-_INTERVAL_UNITS = {"s": "seconds", "m": "minutes", "h": "hours", "d": "days", "w": "weeks"}
+_DURATION_UNITS = {"s": "seconds", "m": "minutes", "h": "hours", "d": "days", "w": "weeks"}
 
 
-def parse_interval(value: str) -> timedelta:
+def parse_duration(value: str) -> timedelta:
     """Parse a duration like ``"7d"`` or ``"12h"`` into a timedelta.
 
     The unit is one of s (seconds), m (minutes), h (hours), d (days), w (weeks).
     Raises ValueError on anything else.
     """
-    match = _INTERVAL_RE.match(value.strip())
+    match = _DURATION_RE.match(value.strip())
     if not match:
         raise ValueError(
-            f"invalid interval {value!r}: expected <number><unit> "
+            f"invalid duration {value!r}: expected <number><unit> "
             "with unit one of s, m, h, d, w (e.g. '7d')"
         )
     amount, unit = int(match.group(1)), match.group(2)
-    return timedelta(**{_INTERVAL_UNITS[unit]: amount})
+    return timedelta(**{_DURATION_UNITS[unit]: amount})
 
 
 class PlatformConfig(BaseModel):
@@ -69,7 +69,7 @@ class JobDefaults(BaseModel):
     @classmethod
     def _check_cooldown_period(cls, value: str | None) -> str | None:
         if value is not None:
-            parse_interval(value)
+            parse_duration(value)
         return value
 
 
@@ -114,7 +114,7 @@ class Job(BaseModel):
     @classmethod
     def _check_cooldown_period(cls, value: str | None) -> str | None:
         if value is not None:
-            parse_interval(value)
+            parse_duration(value)
         return value
 
     def branch_name(self) -> str:
@@ -122,7 +122,7 @@ class Job(BaseModel):
         return f"{self.branch_prefix}{self.name}"
 
     def cooldown_timedelta(self) -> timedelta | None:
-        return parse_interval(self.cooldown_period) if self.cooldown_period is not None else None
+        return parse_duration(self.cooldown_period) if self.cooldown_period is not None else None
 
     def resolve(self, defaults: JobDefaults) -> Job:
         return self.model_copy(
