@@ -317,39 +317,6 @@ class TestMrParams:
         )
         assert params.description == "Details."
 
-    def test_dep_outputs_included_before_own_output(self) -> None:
-        dep_outputs = [("dep-cmd", "dep output")]
-        params = _mr_params(
-            job=_job("x"),
-            bookmark=_BM,
-            base_branch=_BASE_BRANCH,
-            command_output="own output",
-            dep_outputs=dep_outputs,
-        )
-        assert params.description == "```\n$ dep-cmd\ndep output\n\n$ cmd-x\nown output\n```"
-
-    def test_dep_outputs_without_own_output(self) -> None:
-        dep_outputs = [("dep-cmd", "dep output")]
-        params = _mr_params(
-            job=_job("x"),
-            bookmark=_BM,
-            base_branch=_BASE_BRANCH,
-            command_output="",
-            dep_outputs=dep_outputs,
-        )
-        assert params.description == "```\n$ dep-cmd\ndep output\n```"
-
-    def test_dep_outputs_with_empty_output_skipped(self) -> None:
-        dep_outputs = [("dep-cmd", ""), ("dep2-cmd", "dep2 output")]
-        params = _mr_params(
-            job=_job("x"),
-            bookmark=_BM,
-            base_branch=_BASE_BRANCH,
-            command_output="",
-            dep_outputs=dep_outputs,
-        )
-        assert params.description == "```\n$ dep2-cmd\ndep2 output\n```"
-
     def test_title_prefix_applied(self) -> None:
         params = _mr_params(
             job=_job("x", mr_title_prefix="[bot] "),

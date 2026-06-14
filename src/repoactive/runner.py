@@ -101,13 +101,12 @@ def _compute_parents(job: Job, results: dict[str, JobResult]) -> list[str]:
     return parents
 
 
-def _mr_params(  # noqa: PLR0913
+def _mr_params(
     *,
     job: Job,
     bookmark: str,
     base_branch: str,
     command_output: str = "",
-    dep_outputs: list[tuple[str, str]] | None = None,
     dep_mr_urls: list[tuple[str, str]] | None = None,
 ) -> MRParams:
     description = job.description or ""
@@ -116,13 +115,10 @@ def _mr_params(  # noqa: PLR0913
             description += "\n\n"
         links = "\n".join(f"- [{title}]({url})" for title, url in dep_mr_urls)
         description += f"Depends on:\n{links}"
-    all_entries = [*(dep_outputs or []), (job.command, command_output)]
-    output_entries = [(cmd, out) for cmd, out in all_entries if out]
-    if output_entries:
+    if command_output:
         if description:
             description += "\n\n"
-        blocks = "\n\n".join(f"$ {cmd}\n{out}" for cmd, out in output_entries)
-        description += f"```\n{blocks}\n```"
+        description += f"```\n$ {job.command}\n{command_output}\n```"
     return MRParams(
         source_branch=bookmark,
         target_branch=base_branch,
@@ -188,7 +184,6 @@ def _publish_job(  # noqa: PLR0913
     ws: JJ,
     platform: Platform | None,
     command_result: CommandResult,
-    dep_outputs: list[tuple[str, str]] | None,
     dep_mr_urls: list[tuple[str, str]] | None,
     local: bool = False,
 ) -> JobResult:
@@ -228,7 +223,6 @@ def _publish_job(  # noqa: PLR0913
             bookmark=bookmark,
             base_branch=base_branch,
             command_output=command_result.output,
-            dep_outputs=dep_outputs,
             dep_mr_urls=dep_mr_urls,
         )
         mr_url = platform.ensure_mr(params)
@@ -254,7 +248,6 @@ def run_job(  # noqa: PLR0913
     parents: list[str],
     repo_path: Path,
     platform: Platform | None,
-    dep_outputs: list[tuple[str, str]] | None = None,
     dep_mr_urls: list[tuple[str, str]] | None = None,
     local: bool = False,
 ) -> JobResult:
@@ -293,7 +286,6 @@ def run_job(  # noqa: PLR0913
             ws=ws,
             platform=platform,
             command_result=command_result,
-            dep_outputs=dep_outputs,
             dep_mr_urls=dep_mr_urls,
             local=local,
         )
@@ -376,10 +368,6 @@ def run_all(
             )
             continue
 
-        dep_outputs = [
-            (summary.results[dep].job.command, summary.results[dep].command_output)
-            for dep in job.depends_on
-        ]
         dep_mr_urls = [
             (summary.results[dep].job.title, url)
             for dep in job.depends_on
@@ -392,7 +380,6 @@ def run_all(
                 parents=parents,
                 repo_path=repo_path,
                 platform=platform,
-                dep_outputs=dep_outputs,
                 dep_mr_urls=dep_mr_urls,
                 local=local,
             )
