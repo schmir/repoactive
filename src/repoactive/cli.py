@@ -12,7 +12,7 @@ from repoactive.config import (
     load_config,
     parse_duration,
 )
-from repoactive.jj import JJ
+from repoactive.jj import JJ, NotAColocatedRepoError, ensure_colocated_repo
 from repoactive.platforms import get_platform
 from repoactive.runner import run_all
 
@@ -24,6 +24,15 @@ _DEFAULT_REPO = Path()
 def _resolve_config(config: list[Path] | None, repo: Path) -> list[Path]:
     """Resolve config paths relative to ``repo``, or discover defaults inside it."""
     return config or default_config_paths(repo)
+
+
+def _check_repo(repo: Path) -> None:
+    """Exit with a clear error unless ``repo`` is a colocated jj repository root."""
+    try:
+        ensure_colocated_repo(repo)
+    except NotAColocatedRepoError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(code=1) from e
 
 
 def _version_callback(value: bool) -> None:
@@ -73,6 +82,7 @@ def run(  # noqa: PLR0913
     """Apply jobs locally; use --push or --create-prs to publish."""
     if debug:
         logging.basicConfig(level=logging.DEBUG)
+    _check_repo(repo)
     try:
         cfg = load_config(_resolve_config(config, repo))
     except ConfigNotFoundError as e:
@@ -141,6 +151,7 @@ def recent_commits(
     By default shows all commits; use --merged or --unmerged to filter by
     whether the commit has landed in trunk.
     """
+    _check_repo(repo)
     try:
         delta = parse_duration(within)
     except ValueError as e:

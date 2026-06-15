@@ -17,6 +17,34 @@ class JJError(Exception):
     pass
 
 
+class NotAColocatedRepoError(Exception):
+    """Raised when --repo does not point at the root of a colocated jj repository."""
+
+
+def ensure_colocated_repo(repo: Path) -> None:
+    """Verify ``repo`` is the root of a colocated jj repository.
+
+    A colocated repository has a ``.jj`` directory next to a ``.git`` directory.
+    Raises NotAColocatedRepoError otherwise.
+    """
+    has_jj = (repo / ".jj").is_dir()
+    has_git = (repo / ".git").is_dir()
+    if not has_jj:
+        if has_git:
+            raise NotAColocatedRepoError(
+                f"{repo} is a git repository but not colocated with jj (no .jj directory). "
+                "Run 'jj git init --colocate' to create a colocated repository."
+            )
+        raise NotAColocatedRepoError(
+            f"{repo} is not a jj repository: no .jj directory found. "
+            "--repo must point at the root of a colocated jj repository."
+        )
+    if not has_git:
+        raise NotAColocatedRepoError(
+            f"{repo} is not a colocated jj repository: no .git directory found next to .jj."
+        )
+
+
 @dataclass
 class Bookmark:
     change_id: str
