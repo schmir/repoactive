@@ -55,6 +55,9 @@ passed via `--config`). See [Config file locations](#config-file-locations)
 for how the defaults are discovered and how to split the config across
 several files.
 
+Every key in `[job-defaults]` supplies the default for the matching per-job
+key; any job may override it by setting the same key in its `[[job]]` block.
+
 ```toml
 [job-defaults]
 # Prefix prepended to job.name to form the branch name
@@ -65,6 +68,12 @@ mr_title_prefix = "[repoactive] "
 commit_title_prefix = "[repoactive] "
 # Labels applied to every MR/PR unless overridden per job
 labels = ["repoactive"]
+# Optional: default target branch for jobs that do not set their own
+# (default: repo default branch)
+base_branch = "main"
+# Optional: default cooldown_period applied to jobs that do not set their own
+# (default: none). See "Throttling jobs with cooldown_period" below.
+cooldown_period = "7d"
 
 [[job]]
 # Unique identifier - branch name is always <branch_prefix><name>
@@ -87,6 +96,12 @@ create_mr = true
 # Optional: append the job's command and its output to the commit message
 # (default: true). Set to false to keep the commit message clean.
 output_in_commit = true
+# Optional: skip this job on "run all" invocations (default: false). See
+# "Disabling jobs" below.
+disabled = false
+# Optional: override branch_prefix/mr_title_prefix/commit_title_prefix from
+# job-defaults for this job only.
+mr_title_prefix = "[api] "
 # Optional: minimum time between landed changes for this job. If a commit
 # from this job landed on the base branch within this window, the job is
 # skipped. Format: <number><unit>, unit one of s, m, h, d, w (e.g. "7d").
@@ -119,9 +134,10 @@ token_env = "GITLAB_TOKEN"
 type = "gitlab"
 ```
 
-The branch for each job is always `job-defaults.branch_prefix + job.name`.
-Secrets are kept out of the config file by referencing environment variable
-names rather than inline values.
+The branch for each job is always `branch_prefix + job.name`, where
+`branch_prefix` is the job's own value if set, otherwise
+`job-defaults.branch_prefix`. Secrets are kept out of the config file by
+referencing environment variable names rather than inline values.
 
 When `depends_on` is set, `repoactive` starts the job's script from a
 working tree that has all listed dependency branches merged together, rather
@@ -148,6 +164,20 @@ touching a single large config.
 directory of `*.toml` files, and may be repeated to merge several sources;
 later sources win. Explicit paths are resolved relative to the current
 directory, not `--repo`.
+
+## Disabling jobs
+
+Set `disabled = true` on a `[[job]]` to keep it in the config but leave it
+out of normal runs. The flag only affects "run all" invocations
+(`repoactive run` with no job names):
+
+- On `repoactive run`, disabled jobs are skipped. Any job that `depends_on`
+  a disabled job is skipped too, since its dependency would not be produced
+  (`==> [name] disabled (dependency disabled)`).
+- Naming a job explicitly overrides the flag: `repoactive run my-job` runs
+  `my-job` even when it is disabled. This makes `disabled` a way to keep a
+  job available for on-demand runs while excluding it from the default
+  schedule.
 
 ## Throttling jobs with `cooldown_period`
 
