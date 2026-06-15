@@ -314,11 +314,21 @@ class TestHasRecentJobCommit:
     def test_matches_only_on_given_base(self, repo: JJ) -> None:
         repo.describe("on main\n\nRepoactive-Job: my-job")
         repo.bookmark_set("main")
-        repo.new("main")
+        # a sibling branch off the root, not descending from the job commit
+        repo.new("root()")
         repo.describe("unrelated work")
-        # base "main" excludes the working-copy commit, which lacks the trailer
+        repo.bookmark_set("other")
+        # the trailer is reachable from "main" but not from the sibling "other"
         assert repo.has_recent_job_commit("my-job", "main", self._day_ago()) is True
-        assert repo.has_recent_job_commit("my-job", "@", self._day_ago()) is False
+        assert repo.has_recent_job_commit("my-job", "other", self._day_ago()) is False
+
+    def test_finds_commit_in_ancestor_not_just_tip(self, repo: JJ) -> None:
+        # The job commit is an ancestor of base, not base itself.
+        repo.describe("upgrade deps\n\nRepoactive-Job: my-job")
+        repo.new("@")
+        repo.describe("later unrelated work")
+        # base "@" is the tip; the trailer lives one commit below it
+        assert repo.has_recent_job_commit("my-job", "@", self._day_ago()) is True
 
 
 class TestWorkspaceColocation:

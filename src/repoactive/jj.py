@@ -156,7 +156,7 @@ class JJ:
         """
         # jj's date parser rejects fractional seconds, so drop microseconds.
         since_iso = since.replace(microsecond=0).isoformat()
-        revset = f'{base} & committer_date(after:"{since_iso}")'
+        revset = f'::{base} & committer_date(after:"{since_iso}")'
         template = f"""
         if (trailers.any(|t| t.key() == "{JOB_TRAILER_KEY}" && t.value() == "{job_name}"),
              "x",
