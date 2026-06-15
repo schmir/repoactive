@@ -235,6 +235,35 @@ token_env="GITLAB_TOKEN"
 """
 
 
+_DEFAULT_CONFIG_FILE = Path(".repoactive.toml")
+_DEFAULT_CONFIG_DIR = Path(".repoactive.d")
+
+
+class ConfigNotFoundError(Exception):
+    """Raised when no configuration is given and no default config exists."""
+
+
+def default_config_paths(repo: Path) -> list[Path]:
+    """Config paths to use when none are passed on the command line.
+
+    Looks inside ``repo`` for the ``.repoactive.d`` directory and the
+    ``.repoactive.toml`` file; the file is applied last so it overrides the
+    directory. Raises ConfigNotFoundError when neither exists.
+    """
+    config_dir = repo / _DEFAULT_CONFIG_DIR
+    config_file = repo / _DEFAULT_CONFIG_FILE
+    paths: list[Path] = []
+    if config_dir.is_dir():
+        paths.append(config_dir)
+    if config_file.is_file():
+        paths.append(config_file)
+    if not paths:
+        raise ConfigNotFoundError(
+            f"no configuration found: neither {config_file} nor {config_dir}/ exists"
+        )
+    return paths
+
+
 def _expand_paths(paths: list[Path]) -> list[Path]:
     """Expand any directory into its sorted ``*.toml`` files; files pass through unchanged."""
     expanded: list[Path] = []

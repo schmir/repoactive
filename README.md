@@ -51,7 +51,9 @@ need to write is the script that produces the change.
 ## Configuration
 
 `repoactive` is configured via `.repoactive.toml` in the repository root (or
-passed via `--config`).
+passed via `--config`). See [Config file locations](#config-file-locations)
+for how the defaults are discovered and how to split the config across
+several files.
 
 ```toml
 [job-defaults]
@@ -127,6 +129,26 @@ than from the plain base branch. The resulting MR branch will therefore
 include both the dependency jobs and the new job on top. Links to the parent
 MRs are automatically added to the MR description.
 
+### Config file locations
+
+When no `--config`/`-c` option is given, `repoactive` looks for
+configuration inside the `--repo` directory (the current directory by
+default):
+
+- the `.repoactive.d/` directory, if present, contributes every `*.toml`
+  file it contains, merged in sorted filename order;
+- the `.repoactive.toml` file, if present, is merged last so it overrides
+  the directory.
+
+If neither exists, `repoactive` exits with an error. Splitting configuration
+across `.repoactive.d/*.toml` is handy for dropping in per-job files without
+touching a single large config.
+
+`--config`/`-c` overrides this discovery. It may point at a file or at a
+directory of `*.toml` files, and may be repeated to merge several sources;
+later sources win. Explicit paths are resolved relative to the current
+directory, not `--repo`.
+
 ## Throttling jobs with `cooldown_period`
 
 Every commit `repoactive` creates carries a `Repoactive-Job: <name>` trailer
@@ -176,13 +198,13 @@ repoactive run --create-prs
 repoactive run --debug
 ```
 
-| Option          | Short | Description                                                |
-| --------------- | ----- | ---------------------------------------------------------- |
-| `--config PATH` | `-c`  | Config file (default: `.repoactive.toml`); repeat to merge |
-| `--repo PATH`   | `-r`  | jj repository path (default: `.`)                          |
-| `--push`        |       | Push branches to the remote repository                     |
-| `--create-prs`  |       | Push branches and create or update pull requests           |
-| `--debug`       | `-d`  | Enable debug logging                                       |
+| Option          | Short | Description                                                                                                                  |
+| --------------- | ----- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `--config PATH` | `-c`  | Config file or directory of `*.toml` files; repeat to merge. Default: `.repoactive.d/` and `.repoactive.toml` under `--repo` |
+| `--repo PATH`   | `-r`  | jj repository path (default: `.`)                                                                                            |
+| `--push`        |       | Push branches to the remote repository                                                                                       |
+| `--create-prs`  |       | Push branches and create or update pull requests                                                                             |
+| `--debug`       | `-d`  | Enable debug logging                                                                                                         |
 
 ## Inspecting repoactive commits
 
@@ -249,10 +271,10 @@ Check that a config file is syntactically and semantically valid without
 running any jobs:
 
 ```bash
-# Validate the default .repoactive.toml
+# Validate the discovered defaults (.repoactive.d/ and .repoactive.toml)
 repoactive validate-config
 
-# Validate a specific config file
+# Validate a specific config file or directory
 repoactive validate-config --config myconfig.toml
 
 # Validate a merged config (same merging rules as `run`)
@@ -266,9 +288,10 @@ code 1.
 Validation checks include unknown keys, missing required fields, invalid
 `depends_on` references, and circular job dependencies.
 
-| Option          | Short | Description                                                |
-| --------------- | ----- | ---------------------------------------------------------- |
-| `--config PATH` | `-c`  | Config file (default: `.repoactive.toml`); repeat to merge |
+| Option          | Short | Description                                                                                                                  |
+| --------------- | ----- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `--config PATH` | `-c`  | Config file or directory of `*.toml` files; repeat to merge. Default: `.repoactive.d/` and `.repoactive.toml` under `--repo` |
+| `--repo PATH`   | `-r`  | jj repository path (default: `.`)                                                                                            |
 
 ## Requirements
 

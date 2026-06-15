@@ -6,15 +6,24 @@ from typing import Annotated
 
 import typer
 
-from repoactive.config import load_config, parse_duration
+from repoactive.config import (
+    ConfigNotFoundError,
+    default_config_paths,
+    load_config,
+    parse_duration,
+)
 from repoactive.jj import JJ
 from repoactive.platforms import get_platform
 from repoactive.runner import run_all
 
 app = typer.Typer(no_args_is_help=True)
 
-_DEFAULT_CONFIG = Path(".repoactive.toml")
 _DEFAULT_REPO = Path()
+
+
+def _resolve_config(config: list[Path] | None, repo: Path) -> list[Path]:
+    """Resolve config paths relative to ``repo``, or discover defaults inside it."""
+    return config or default_config_paths(repo)
 
 
 def _version_callback(value: bool) -> None:
@@ -64,7 +73,11 @@ def run(  # noqa: PLR0913
     """Apply jobs locally; use --push or --create-prs to publish."""
     if debug:
         logging.basicConfig(level=logging.DEBUG)
-    cfg = load_config(config or [_DEFAULT_CONFIG])
+    try:
+        cfg = load_config(_resolve_config(config, repo))
+    except ConfigNotFoundError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(code=1) from e
     local = not push and not create_prs
     platform = get_platform(cfg, repo) if create_prs else None
     summary = run_all(
@@ -84,6 +97,9 @@ def validate_config(
             help="Config file or directory of *.toml files; repeat to merge, later files win.",
         ),
     ] = None,
+    repo: Annotated[
+        Path, typer.Option("--repo", "-r", help="Path to the jj repository.")
+    ] = _DEFAULT_REPO,
 ) -> None:
     """Validate configuration and exit.
 
@@ -91,7 +107,7 @@ def validate_config(
     Prints the error to stderr and exits with code 1 on failure.
     """
     try:
-        cfg = load_config(config or [_DEFAULT_CONFIG])
+        cfg = load_config(_resolve_config(config, repo))
     except Exception as e:
         typer.echo(f"Invalid config: {e}", err=True)
         raise typer.Exit(code=1) from e

@@ -3,7 +3,15 @@ from pathlib import Path
 
 import pytest
 
-from repoactive.config import Config, Job, JobDefaults, load_config, parse_duration
+from repoactive.config import (
+    Config,
+    ConfigNotFoundError,
+    Job,
+    JobDefaults,
+    default_config_paths,
+    load_config,
+    parse_duration,
+)
 
 
 def _platform(**kwargs: object) -> dict[str, object]:
@@ -378,3 +386,31 @@ class TestLoadConfig:
         override.write_text('[job-defaults]\nbranch_prefix = "file/"\n')
         cfg = load_config([conf_dir, override])
         assert cfg.job_defaults.branch_prefix == "file/"
+
+
+class TestDefaultConfigPaths:
+    def test_picks_up_file_and_directory(self, tmp_path: Path) -> None:
+        (tmp_path / ".repoactive.toml").write_text("")
+        (tmp_path / ".repoactive.d").mkdir()
+        assert default_config_paths(tmp_path) == [
+            tmp_path / ".repoactive.d",
+            tmp_path / ".repoactive.toml",
+        ]
+
+    def test_only_file(self, tmp_path: Path) -> None:
+        (tmp_path / ".repoactive.toml").write_text("")
+        assert default_config_paths(tmp_path) == [tmp_path / ".repoactive.toml"]
+
+    def test_only_directory(self, tmp_path: Path) -> None:
+        (tmp_path / ".repoactive.d").mkdir()
+        assert default_config_paths(tmp_path) == [tmp_path / ".repoactive.d"]
+
+    def test_raises_when_neither_exists(self, tmp_path: Path) -> None:
+        with pytest.raises(ConfigNotFoundError, match="no configuration found"):
+            default_config_paths(tmp_path)
+
+    def test_directory_path_must_be_a_directory(self, tmp_path: Path) -> None:
+        # a plain file named .repoactive.d is ignored, so nothing is found
+        (tmp_path / ".repoactive.d").write_text("")
+        with pytest.raises(ConfigNotFoundError, match="no configuration found"):
+            default_config_paths(tmp_path)
