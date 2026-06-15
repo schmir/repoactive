@@ -264,7 +264,7 @@ def default_config_paths(repo: Path) -> list[Path]:
     return paths
 
 
-def _expand_paths(paths: list[Path]) -> list[Path]:
+def expand_config_paths(paths: list[Path]) -> list[Path]:
     """Expand any directory into its sorted ``*.toml`` files; files pass through unchanged."""
     expanded: list[Path] = []
     for path in paths:
@@ -279,7 +279,7 @@ def load_config(paths: list[Path]) -> Config:
     assert paths
     configs = [
         tomllib.loads(_default_platforms),
-        *(tomllib.loads(path.read_text()) for path in _expand_paths(paths)),
+        *(tomllib.loads(path.read_text()) for path in expand_config_paths(paths)),
     ]
 
     merged = {}

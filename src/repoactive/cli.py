@@ -9,6 +9,7 @@ import typer
 from repoactive.config import (
     ConfigNotFoundError,
     default_config_paths,
+    expand_config_paths,
     load_config,
     parse_duration,
 )
@@ -113,14 +114,20 @@ def validate_config(
 ) -> None:
     """Validate configuration and exit.
 
-    Prints 'Config OK: N job(s) defined.' on success (exit 0).
-    Prints the error to stderr and exits with code 1 on failure.
+    Lists the configuration files used and prints 'Config OK: N job(s)
+    defined.' on success (exit 0). Prints the error to stderr and exits with
+    code 1 on failure.
     """
     try:
-        cfg = load_config(_resolve_config(config, repo))
+        paths = _resolve_config(config, repo)
+        files = expand_config_paths(paths)
+        cfg = load_config(paths)
     except Exception as e:
         typer.echo(f"Invalid config: {e}", err=True)
         raise typer.Exit(code=1) from e
+    typer.echo("Configuration files:")
+    for file in files:
+        typer.echo(f"  {file}")
     typer.echo(f"Config OK: {len(cfg.jobs)} job(s) defined.")
 
 
