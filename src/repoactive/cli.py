@@ -39,7 +39,11 @@ def callback(
 def run(  # noqa: PLR0913
     config: Annotated[
         list[Path] | None,
-        typer.Option("--config", "-c", help="Config file; repeat to merge, later files win."),
+        typer.Option(
+            "--config",
+            "-c",
+            help="Config file or directory of *.toml files; repeat to merge, later files win.",
+        ),
     ] = None,
     repo: Annotated[
         Path, typer.Option("--repo", "-r", help="Path to the jj repository.")
@@ -74,7 +78,11 @@ def run(  # noqa: PLR0913
 def validate_config(
     config: Annotated[
         list[Path] | None,
-        typer.Option("--config", "-c", help="Config file; repeat to merge, later files win."),
+        typer.Option(
+            "--config",
+            "-c",
+            help="Config file or directory of *.toml files; repeat to merge, later files win.",
+        ),
     ] = None,
 ) -> None:
     """Validate configuration and exit.

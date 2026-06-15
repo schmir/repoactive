@@ -330,3 +330,51 @@ class TestLoadConfig:
         )
         with pytest.raises(ValueError, match="unknown jobs"):
             load_config([base, override])
+
+    def test_directory_reads_toml_files_sorted(self, tmp_path: Path) -> None:
+        conf_dir = tmp_path / "conf.d"
+        conf_dir.mkdir()
+        (conf_dir / "02-override.toml").write_text('[job-defaults]\nbranch_prefix = "second/"\n')
+        (conf_dir / "01-base.toml").write_text(
+            '[[platform]]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
+            '[job-defaults]\nbranch_prefix = "first/"\n'
+            '[[job]]\nname = "a"\ncommand = "cmd"\ntitle = "A"\n'
+        )
+        cfg = load_config([conf_dir])
+        # 02-override.toml is applied after 01-base.toml because entries are sorted
+        assert cfg.job_defaults.branch_prefix == "second/"
+        assert cfg.jobs[0].name == "a"
+
+    def test_directory_ignores_non_toml_files(self, tmp_path: Path) -> None:
+        conf_dir = tmp_path / "conf.d"
+        conf_dir.mkdir()
+        (conf_dir / "a.toml").write_text(
+            '[[platform]]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
+            '[[job]]\nname = "x"\ncommand = "cmd"\ntitle = "X"\n'
+        )
+        (conf_dir / "README.md").write_text("not a config\n")
+        cfg = load_config([conf_dir])
+        assert [j.name for j in cfg.jobs] == ["x"]
+
+    def test_directory_ignores_subdirectories_named_toml(self, tmp_path: Path) -> None:
+        conf_dir = tmp_path / "conf.d"
+        conf_dir.mkdir()
+        (conf_dir / "nested.toml").mkdir()
+        (conf_dir / "a.toml").write_text(
+            '[[platform]]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
+            '[[job]]\nname = "x"\ncommand = "cmd"\ntitle = "X"\n'
+        )
+        cfg = load_config([conf_dir])
+        assert [j.name for j in cfg.jobs] == ["x"]
+
+    def test_directory_mixed_with_files(self, tmp_path: Path) -> None:
+        conf_dir = tmp_path / "conf.d"
+        conf_dir.mkdir()
+        (conf_dir / "base.toml").write_text(
+            '[[platform]]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
+            '[job-defaults]\nbranch_prefix = "dir/"\n'
+        )
+        override = tmp_path / "override.toml"
+        override.write_text('[job-defaults]\nbranch_prefix = "file/"\n')
+        cfg = load_config([conf_dir, override])
+        assert cfg.job_defaults.branch_prefix == "file/"

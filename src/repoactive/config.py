@@ -235,11 +235,22 @@ token_env="GITLAB_TOKEN"
 """
 
 
+def _expand_paths(paths: list[Path]) -> list[Path]:
+    """Expand any directory into its sorted ``*.toml`` files; files pass through unchanged."""
+    expanded: list[Path] = []
+    for path in paths:
+        if path.is_dir():
+            expanded.extend(sorted(p for p in path.glob("*.toml") if p.is_file()))
+        else:
+            expanded.append(path)
+    return expanded
+
+
 def load_config(paths: list[Path]) -> Config:
     assert paths
     configs = [
         tomllib.loads(_default_platforms),
-        *(tomllib.loads(path.read_text()) for path in paths),
+        *(tomllib.loads(path.read_text()) for path in _expand_paths(paths)),
     ]
 
     merged = {}
