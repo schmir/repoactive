@@ -234,9 +234,9 @@ class TestTimeout:
         resolved = job.resolve(JobDefaults(timeout="1h"))
         assert resolved.timeout == "10m"
 
-    def test_stays_none_when_neither_set(self) -> None:
+    def test_defaults_to_two_minutes_when_neither_set(self) -> None:
         job = Job(name="x", command="cmd", title="X")
-        assert job.resolve(JobDefaults()).timeout is None
+        assert job.resolve(JobDefaults()).timeout == "2m"
 
 
 class TestLoadConfig:

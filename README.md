@@ -75,7 +75,7 @@ base_branch = "main"
 # (default: none). See "Throttling jobs with cooldown_period" below.
 cooldown_period = "7d"
 # Optional: default timeout applied to jobs that do not set their own
-# (default: none). See "Limiting job runtime with timeout" below.
+# (default: "2m"). See "Limiting job runtime with timeout" below.
 timeout = "1h"
 
 [[job]]
@@ -303,8 +303,8 @@ job fails (its workspace is abandoned, no branch or MR is created). The
 command runs in its own session/process group to make this possible. The
 value uses the same `<number><unit>` format as `cooldown_period` (e.g.
 `"30m"`, `"2h"`). `timeout` may be set per job or in `job-defaults`; a
-per-job value overrides the default. With no timeout configured the command
-runs without a time limit.
+per-job value overrides the default. The built-in default is `"2m"`; set
+`timeout` to a larger value in `job-defaults` for longer-running commands.
 
 ## Usage
 

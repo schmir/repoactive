@@ -65,7 +65,7 @@ class JobDefaults(BaseModel):
     labels: list[str] = Field(default_factory=list)
     base_branch: str | None = None
     cooldown_period: str | None = None
-    timeout: str | None = None
+    timeout: str | None = "2m"
 
     @field_validator("branch_prefix")
     @classmethod
