@@ -179,6 +179,34 @@ out of normal runs. The flag only affects "run all" invocations
   job available for on-demand runs while excluding it from the default
   schedule.
 
+### Running a job on a schedule
+
+`repoactive` is not a daemon and has no built-in scheduler — the cadence of a
+job is whatever cadence you invoke it with. To run a job on a fixed schedule,
+combine `disabled = true` with an OS cron job that invokes it by name:
+
+```toml
+[[job]]
+name = "uv-lock-upgrade"
+command = "uv lock --upgrade"
+title = "build: upgrade all dependencies"
+# Kept out of the default `repoactive run`; only runs when named explicitly.
+disabled = true
+```
+
+```cron
+# Run only this job every Sunday at 03:00
+0 3 * * 0  repoactive run uv-lock-upgrade --create-prs
+```
+
+Because the cron is the sole trigger, the command runs exactly when cron fires —
+once, whether or not it produces a diff. This is more reliable than inferring a
+schedule from `repoactive`'s own history: real cron is stateful and excludes the
+other days, whereas `repoactive` only ever sees what has _landed_ (see
+`cooldown_period` below). Note that a job which `depends_on` a disabled job is
+skipped in the default run, so don't put a daily job downstream of one driven
+this way.
+
 ## Throttling jobs with `cooldown_period`
 
 Every commit `repoactive` creates carries a `Repoactive-Job: <name>` trailer
