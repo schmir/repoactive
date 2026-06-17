@@ -1,3 +1,4 @@
+import json
 import logging
 from datetime import UTC, datetime
 from importlib.metadata import version
@@ -7,6 +8,7 @@ from typing import Annotated
 import typer
 
 from repoactive.config import (
+    Config,
     ConfigNotFoundError,
     default_config_paths,
     expand_config_paths,
@@ -142,6 +144,19 @@ def validate_config(
     for file in files:
         typer.echo(f"  {file}")
     typer.echo(f"Config OK: {len(cfg.jobs)} job(s) defined.")
+
+
+@app.command("dump-schema")
+def dump_schema(
+    output: Annotated[
+        Path,
+        typer.Option("--output", "-o", help="File to write the JSON schema to."),
+    ],
+) -> None:
+    """Write the JSON schema of the TOML config to a file."""
+    schema = Config.model_json_schema()
+    output.write_text(json.dumps(schema, indent=2) + "\n")
+    typer.echo(f"Wrote schema to {output}")
 
 
 @app.command("recent-commits")

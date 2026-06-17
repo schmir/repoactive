@@ -16,6 +16,11 @@ ci:
     uv run ty check
     uv run pytest -m "not slow"
     uv run nox -s validate_config
+    uv run nox -s check_schema
+
+# Write the config JSON schema to config-schema.json
+dump-schema:
+    uv run repoactive dump-schema -o config-schema.json
 
 # Install repoactive in editable mode
 dev:

@@ -1,3 +1,5 @@
+"$schema" = "https://raw.githubusercontent.com/schmir/repoactive/refs/heads/main/config-schema.json"
+
 [job-defaults]
 branch_prefix = "repoactive/"
 

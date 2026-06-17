@@ -32,3 +32,19 @@ def validate_config(session: nox.Session) -> None:
         f.write(match.group(1))
         tmpfile = f.name
     session.run("repoactive", "validate-config", "-c", tmpfile)
+
+
+@nox_uv.session
+def check_schema(session: nox.Session) -> None:
+    """Check that config-schema.json is up-to-date."""
+    committed = Path("config-schema.json")
+    if not committed.exists():
+        session.error("config-schema.json is missing; run 'just dump-schema'")
+        return
+    with tempfile.NamedTemporaryFile(
+        mode="r", prefix="config-schema-", suffix=".json", delete=False
+    ) as f:
+        tmpfile = f.name
+        session.run("repoactive", "dump-schema", "-o", tmpfile)
+        if Path(tmpfile).read_text() != committed.read_text():
+            session.error("config-schema.json is out of date; run 'just dump-schema'")

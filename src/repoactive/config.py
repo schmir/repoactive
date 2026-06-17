@@ -331,6 +331,7 @@ def load_config(paths: list[Path]) -> Config:
         merged = _deep_merge(merged, data)
         merged["job"] = jobs
         merged["platform"] = platforms
+        merged.pop("$schema", None)
         Config.model_validate(merged)  # ensure it's valid after each merge
     config = Config.model_validate(merged)
     logger.debug("loaded config: %s", config.model_dump_json(indent=2))

@@ -1,0 +1,268 @@
+{
+  "$defs": {
+    "Job": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "command": {
+          "title": "Command",
+          "type": "string"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
+        "base_branch": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Base Branch"
+        },
+        "draft": {
+          "default": false,
+          "title": "Draft",
+          "type": "boolean"
+        },
+        "create_mr": {
+          "default": true,
+          "title": "Create Mr",
+          "type": "boolean"
+        },
+        "disabled": {
+          "default": false,
+          "title": "Disabled",
+          "type": "boolean"
+        },
+        "tags": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Tags",
+          "type": "array"
+        },
+        "depends_on": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Depends On",
+          "type": "array"
+        },
+        "output_in_commit": {
+          "default": true,
+          "title": "Output In Commit",
+          "type": "boolean"
+        },
+        "branch_prefix": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Branch Prefix"
+        },
+        "mr_title_prefix": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mr Title Prefix"
+        },
+        "commit_title_prefix": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Commit Title Prefix"
+        },
+        "labels": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Labels",
+          "type": "array"
+        },
+        "cooldown_period": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cooldown Period"
+        },
+        "timeout": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Timeout"
+        }
+      },
+      "required": [
+        "name",
+        "command",
+        "title"
+      ],
+      "title": "Job",
+      "type": "object"
+    },
+    "JobDefaults": {
+      "additionalProperties": false,
+      "properties": {
+        "branch_prefix": {
+          "default": "repoactive/",
+          "title": "Branch Prefix",
+          "type": "string"
+        },
+        "mr_title_prefix": {
+          "default": "[repoactive] ",
+          "title": "Mr Title Prefix",
+          "type": "string"
+        },
+        "commit_title_prefix": {
+          "default": "[repoactive] ",
+          "title": "Commit Title Prefix",
+          "type": "string"
+        },
+        "labels": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Labels",
+          "type": "array"
+        },
+        "base_branch": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Base Branch"
+        },
+        "cooldown_period": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cooldown Period"
+        },
+        "timeout": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": "2m",
+          "title": "Timeout"
+        }
+      },
+      "title": "JobDefaults",
+      "type": "object"
+    },
+    "PlatformConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "url": {
+          "title": "Url",
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "gitlab",
+            "github"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "token_env": {
+          "title": "Token Env",
+          "type": "string"
+        }
+      },
+      "required": [
+        "url",
+        "type",
+        "token_env"
+      ],
+      "title": "PlatformConfig",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "platform": {
+      "items": {
+        "$ref": "#/$defs/PlatformConfig"
+      },
+      "title": "Platform",
+      "type": "array"
+    },
+    "job-defaults": {
+      "$ref": "#/$defs/JobDefaults"
+    },
+    "job": {
+      "items": {
+        "$ref": "#/$defs/Job"
+      },
+      "title": "Job",
+      "type": "array"
+    }
+  },
+  "title": "Config",
+  "type": "object"
+}

@@ -3,7 +3,7 @@ name: CI
 on:
   push:
     branches:
-      - '**'
+      - "**"
   pull_request:
 
 jobs:
@@ -28,6 +28,9 @@ jobs:
 
       - name: Validate config
         run: uv run nox -s validate_config
+
+      - name: Ensure config-schema.json is up-to-date
+        run: uv run nox -s check_schema
 
   tests:
     runs-on: ubuntu-latest
