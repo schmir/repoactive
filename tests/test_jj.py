@@ -6,10 +6,12 @@ import pytest
 
 from repoactive.jj import (
     JJ,
+    WORKSPACE_PREFIX,
     Bookmark,
     JJError,
     NotAColocatedRepoError,
     ensure_colocated_repo,
+    workspace_name,
 )
 
 REPO = Path("/repo")
@@ -235,6 +237,30 @@ class TestWorkspaceAdd:
         mock_run.return_value.stdout = ""
         _jj().workspace_add("ws", Path("/tmp/ws"))
         assert mock_run.call_args_list == [_call("workspace", "add", "--name", "ws", "/tmp/ws")]
+
+
+class TestWorkspaceName:
+    def test_prefixes_job_name(self) -> None:
+        assert workspace_name("foo") == f"{WORKSPACE_PREFIX}foo"
+
+
+class TestForgetStaleWorkspaces:
+    @patch("repoactive.jj.subprocess.run")
+    def test_forgets_only_prefixed_workspaces(self, mock_run: MagicMock) -> None:
+        mock_run.return_value.stdout = f"default\n{WORKSPACE_PREFIX}a\n{WORKSPACE_PREFIX}b\n"
+        _jj().forget_stale_workspaces()
+        # REPO has no .git directory, so no worktree prune happens.
+        assert mock_run.call_args_list == [
+            _call("workspace", "list", "-T", 'name ++ "\\n"'),
+            _call("workspace", "forget", f"{WORKSPACE_PREFIX}a"),
+            _call("workspace", "forget", f"{WORKSPACE_PREFIX}b"),
+        ]
+
+    @patch("repoactive.jj.subprocess.run")
+    def test_keeps_unrelated_workspaces(self, mock_run: MagicMock) -> None:
+        mock_run.return_value.stdout = "default\nmine\n"
+        _jj().forget_stale_workspaces()
+        assert mock_run.call_args_list == [_call("workspace", "list", "-T", 'name ++ "\\n"')]
 
 
 class TestGitSyncHead:

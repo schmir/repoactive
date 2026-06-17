@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from repoactive.jj import JJ, JJError
+from repoactive.jj import JJ, WORKSPACE_PREFIX, JJError
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
 
@@ -402,3 +402,23 @@ class TestWorkspaceColocation:
         shutil.rmtree(ws_path)
         repo.git_worktree_prune()
         assert _git(repo.cwd, "worktree", "list", "--porcelain").count("worktree ") == 1
+
+    def test_workspace_names_lists_added_workspace(self, repo: JJ, tmp_path: Path) -> None:
+        self._commit(repo, "a.txt", "initial")
+        repo.workspace_add("ws", tmp_path / "ws")
+        assert sorted(repo.workspace_names()) == ["default", "ws"]
+
+    def test_forget_stale_workspaces_drops_only_prefixed(self, repo: JJ, tmp_path: Path) -> None:
+        self._commit(repo, "a.txt", "initial")
+        stale = f"{WORKSPACE_PREFIX}job"
+        repo.workspace_add(stale, tmp_path / "stale")
+        repo.workspace_add("mine", tmp_path / "mine")
+        shutil.rmtree(tmp_path / "stale")
+
+        repo.forget_stale_workspaces()
+
+        assert sorted(repo.workspace_names()) == ["default", "mine"]
+        # The dead git worktree of the forgotten workspace is pruned too.
+        worktrees = _git(repo.cwd, "worktree", "list", "--porcelain")
+        assert f"worktree {tmp_path / 'stale'}" not in worktrees
+        assert f"worktree {tmp_path / 'mine'}" in worktrees

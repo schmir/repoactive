@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from repoactive.config import DEFAULT_TAG, Config, Job
-from repoactive.jj import JJ, JOB_TRAILER_KEY, JJError
+from repoactive.jj import JJ, JOB_TRAILER_KEY, JJError, workspace_name
 from repoactive.platforms.base import MRParams, Platform
 
 logger = logging.getLogger(__name__)
@@ -285,7 +285,8 @@ def run_job(  # noqa: PLR0913
 
     tmp_parent = Path(tempfile.mkdtemp(prefix="repoactive_"))
     workspace_path = tmp_parent / "workspace"
-    repo.workspace_add(job.name, workspace_path)
+    ws_name = workspace_name(job.name)
+    repo.workspace_add(ws_name, workspace_path)
     ws = JJ(workspace_path)
     try:
         if bookmark_existed:
@@ -317,7 +318,7 @@ def run_job(  # noqa: PLR0913
         )
     finally:
         with contextlib.suppress(JJError):
-            repo.workspace_forget(job.name)
+            repo.workspace_forget(ws_name)
         shutil.rmtree(tmp_parent, ignore_errors=True)
         with contextlib.suppress(JJError):
             repo.git_worktree_prune()
@@ -398,6 +399,10 @@ def run_all(  # noqa: PLR0913
     requested_tags: list[str] | None = None,
     local: bool = False,
 ) -> RunSummary:
+    # Drop any temporary workspaces a previous, killed run left behind before we
+    # start adding fresh ones.
+    JJ(repo_path).forget_stale_workspaces()
+
     # On the bare default run, also refresh jobs with an unmerged branch so a
     # stale branch is rebased on trunk now rather than at the job's next run.
     refresh_jobs: set[str] = set()

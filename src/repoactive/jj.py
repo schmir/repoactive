@@ -12,6 +12,16 @@ logger = logging.getLogger(__name__)
 # job produced a commit (see JJ.has_recent_job_commit and runner._publish_job).
 JOB_TRAILER_KEY = "Repoactive-Job"
 
+# Prefix for the temporary workspaces repoactive creates for each job. It is not
+# configurable so that stale workspaces (left behind by a killed run) can always
+# be recognised and reclaimed by name (see JJ.forget_stale_workspaces).
+WORKSPACE_PREFIX = "repoactive-tmp-"
+
+
+def workspace_name(job_name: str) -> str:
+    """Workspace name repoactive uses for a job's temporary workspace."""
+    return f"{WORKSPACE_PREFIX}{job_name}"
+
 
 class JJError(Exception):
     pass
@@ -281,6 +291,25 @@ class JJ:
         """Drop git worktree registrations of workspaces whose directory is gone."""
         if self.is_colocated():
             self._git("worktree", "prune")
+
+    def workspace_names(self) -> set[str]:
+        """Names of the workspaces jj currently tracks for this repo."""
+        return set(self._run("workspace", "list", "-T", 'name ++ "\\n"').splitlines())
+
+    def forget_stale_workspaces(self) -> None:
+        """Forget any leftover repoactive workspaces and prune their dead worktrees.
+
+        A run killed before its `finally` could call workspace_forget leaves its
+        temporary workspace (named with WORKSPACE_PREFIX) registered in jj. Because
+        the prefix is fixed, every such workspace can be recognised and dropped here,
+        even for jobs that have since been renamed or removed.
+        """
+        stale = sorted(n for n in self.workspace_names() if n.startswith(WORKSPACE_PREFIX))
+        logger.debug("stale workspaces to forget: %s", stale)
+        for name in stale:
+            self.workspace_forget(name)
+        if stale:
+            self.git_worktree_prune()
 
     def workspace_add(self, name: str, path: Path) -> None:
         self._run("workspace", "add", "--name", name, str(path))
