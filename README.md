@@ -207,6 +207,25 @@ the `enabled`/`disabled` defaults and force-includes dependencies. The bare
 itself selected is dropped
 (`==> [name] skipped (dependency not in default run)`).
 
+### Keeping unmerged branches current
+
+The bare `repoactive run` additionally refreshes **any job that currently
+has an unmerged branch**, regardless of its tags. A branch is "unmerged"
+when the job's last commit has not yet landed in `trunk()`; repoactive finds
+these via the `Repoactive-Job` trailer on unmerged commits and pulls those
+jobs (and their dependencies) into the run, so each branch is rebased on the
+latest `trunk()` and the command is re-run against it. (With `--create-prs`
+such a branch has an open MR; with a plain `run` or `--push` it is just a
+branch.)
+
+This means a job's schedule tag governs when a _new_ branch is created,
+while the default run keeps an existing branch rebased and current — you
+don't have to wait for the next weekly run to resolve a conflict with
+`trunk()`. Once the branch lands, its commit becomes an ancestor of
+`trunk()`, so the job drops back to its normal tag-driven cadence. (A
+disabled job's unmerged branch is refreshed too: it was most likely created
+by an explicit run, and letting it drift out of date helps no one.)
+
 ## Disabling jobs
 
 Set `disabled = true` on a `[[job]]` to keep it in the config but leave it

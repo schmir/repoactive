@@ -307,10 +307,21 @@ def _on_cooldown(job: Job, repo_path: Path) -> bool:
     return JJ(repo_path).has_recent_job_commit(job.name, base, since)
 
 
+def _include_dependencies(jobs: list[Job], selected: set[str]) -> None:
+    """Add the transitive dependencies of every selected job to ``selected``.
+
+    ``jobs`` must be topologically sorted; iterating in reverse propagates
+    dependencies of dependencies in a single pass."""
+    for j in reversed(jobs):
+        if j.name in selected:
+            selected.update(j.depends_on)
+
+
 def _select_jobs(
     jobs: list[Job],
     requested_jobs: set[str],
     requested_tags: set[str] | None = None,
+    refresh_jobs: set[str] | None = None,
 ) -> list[Job]:
     """Return the filtered, topologically sorted jobs to run.
 
@@ -319,8 +330,14 @@ def _select_jobs(
     dropped if any dependency is not itself selected. Naming jobs or passing
     tags is explicit selection: the union of the named jobs and the jobs
     matching any requested tag (``DEFAULT_TAG`` is not implied), with all
-    dependencies force-included."""
+    dependencies force-included.
+
+    ``refresh_jobs`` (jobs that currently have an unmerged branch) are
+    force-included regardless of tag, along with their dependencies, so the
+    default run keeps unmerged branches rebased on trunk rather than waiting for
+    the job's next run."""
     requested_tags = requested_tags or set()
+    refresh_jobs = refresh_jobs or set()
     jobs = _topological_sort(jobs)
 
     unknown = requested_jobs - {j.name for j in jobs}
@@ -331,16 +348,17 @@ def _select_jobs(
     if requested_jobs or requested_tags:
         selected = set(requested_jobs)
         selected.update(j.name for j in jobs if j.effective_tags() & requested_tags)
-        for j in reversed(jobs):
-            if j.name in selected:
-                for dep in j.depends_on:
-                    selected.add(dep)
+        _include_dependencies(jobs, selected)
     else:
         selected = {j.name for j in jobs if DEFAULT_TAG in j.effective_tags()}
         for j in jobs:
             if j.name in selected and any(dep not in selected for dep in j.depends_on):
                 print(f"==> [{j.name}] skipped (dependency not in default run)")
                 selected.remove(j.name)
+
+    if refresh_jobs:
+        selected.update(refresh_jobs & {j.name for j in jobs})
+        _include_dependencies(jobs, selected)
 
     return [j for j in jobs if j.name in selected]
 
@@ -354,7 +372,17 @@ def run_all(  # noqa: PLR0913
     requested_tags: list[str] | None = None,
     local: bool = False,
 ) -> RunSummary:
-    ordered_jobs = _select_jobs(config.jobs, set(requested_jobs or []), set(requested_tags or []))
+    # On the bare default run, also refresh jobs with an unmerged branch so a
+    # stale branch is rebased on trunk now rather than at the job's next run.
+    refresh_jobs: set[str] = set()
+    if not requested_jobs and not requested_tags:
+        refresh_jobs = JJ(repo_path).unmerged_job_names()
+    ordered_jobs = _select_jobs(
+        config.jobs,
+        set(requested_jobs or []),
+        set(requested_tags or []),
+        refresh_jobs,
+    )
     summary = RunSummary()
     # Names of jobs that failed or were skipped - their dependents are blocked.
     blocked: set[str] = set()

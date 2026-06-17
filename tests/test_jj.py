@@ -311,3 +311,23 @@ class TestEnsureColocatedRepo:
         subdir.mkdir()
         with pytest.raises(NotAColocatedRepoError):
             ensure_colocated_repo(subdir)
+
+
+class TestUnmergedJobNames:
+    @patch("repoactive.jj.subprocess.run")
+    def test_parses_job_names(self, mock_run: MagicMock) -> None:
+        mock_run.return_value.stdout = "uv-lock-upgrade\nprek-autoupdate\n"
+        assert _jj().unmerged_job_names() == {"uv-lock-upgrade", "prek-autoupdate"}
+
+    @patch("repoactive.jj.subprocess.run")
+    def test_empty_when_no_unmerged_commits(self, mock_run: MagicMock) -> None:
+        mock_run.return_value.stdout = ""
+        assert _jj().unmerged_job_names() == set()
+
+    @patch("repoactive.jj.subprocess.run")
+    def test_queries_unmerged_revset(self, mock_run: MagicMock) -> None:
+        mock_run.return_value.stdout = ""
+        _jj().unmerged_job_names()
+        args = mock_run.call_args[0][0]
+        assert "log" in args
+        assert "~(::trunk())" in args

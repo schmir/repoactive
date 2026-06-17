@@ -15,3 +15,7 @@ it.
   Accepted. Per-job `tags` and a `--tag` selector; the sanctioned answer to
   "run this job on a schedule" (real cron decides _when_, tags decide
   _which_).
+- [0003 — Refresh unmerged branches in the default run](0003-refresh-unmerged-branches-in-default-run.md)
+  — Accepted. The bare `repoactive run` rebases any job with an unmerged
+  branch onto the latest `trunk()`, regardless of tags, so a stale branch
+  isn't stuck until the job's next scheduled run.

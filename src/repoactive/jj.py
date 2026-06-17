@@ -171,6 +171,26 @@ class JJ:
                 )
         return result
 
+    def unmerged_job_names(self) -> set[str]:
+        """Job names that currently have an unmerged commit (a branch not in trunk).
+
+        Returns the ``Repoactive-Job`` trailer value of every commit not yet
+        landed in trunk. The default run refreshes these jobs so a stale branch
+        is kept rebased on the latest trunk instead of waiting for the job's next
+        scheduled run. Unbounded in time: an unmerged branch may be arbitrarily
+        old. (With ``--create-prs`` such a branch has an open MR, but a branch
+        may also exist without one.)
+        """
+        template = f"""
+        if(trailers.contains_key("{JOB_TRAILER_KEY}"),
+           trailers.filter(|t| t.key() == "{JOB_TRAILER_KEY}").map(|t| t.value()).join(",")
+             ++ "\\n",
+           ""
+        )
+        """
+        output = self._run("log", "--no-graph", "-r", "~(::trunk())", "-T", template)
+        return {line.strip() for line in output.splitlines() if line.strip()}
+
     def has_recent_job_commit(self, job_name: str, base: str, since: datetime) -> bool:
         """Whether ``base`` already carries a recent commit from the given job.
 

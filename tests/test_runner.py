@@ -1,4 +1,5 @@
 import subprocess
+from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -224,6 +225,27 @@ class TestSelectJobs:
         # b is out of the default run (tagged weekly); its dependent c is dropped too.
         config = _config(_djob("a"), _djob("b", tags=["weekly"]), _djob("c", depends_on=["b"]))
         assert _names(_select_jobs(config.jobs, set())) == ["a"]
+
+    def test_refresh_job_pulled_into_default_run(self) -> None:
+        # A weekly job with an unmerged branch is refreshed by the default run.
+        config = _config(_djob("a"), _djob("b", tags=["weekly"]))
+        assert _names(_select_jobs(config.jobs, set(), refresh_jobs={"b"})) == ["a", "b"]
+
+    def test_refresh_includes_dependencies(self) -> None:
+        config = _config(
+            _djob("a", tags=["weekly"]), _djob("b", tags=["weekly"], depends_on=["a"])
+        )
+        assert _names(_select_jobs(config.jobs, set(), refresh_jobs={"b"})) == ["a", "b"]
+
+    def test_refresh_includes_disabled_job(self) -> None:
+        # An unmerged branch for a disabled job (likely from an explicit run) is refreshed.
+        config = _config(_djob("a"), _djob("b", disabled=True))
+        assert _names(_select_jobs(config.jobs, set(), refresh_jobs={"b"})) == ["a", "b"]
+
+    def test_refresh_ignores_unknown_names(self) -> None:
+        # A trailer for a removed/renamed job must not blow up selection.
+        config = _config(_djob("a"))
+        assert _names(_select_jobs(config.jobs, set(), refresh_jobs={"gone"})) == ["a"]
 
 
 class TestComputeParents:
@@ -790,6 +812,14 @@ class TestRunJob:
 
 
 class TestRunAll:
+    @pytest.fixture(autouse=True)
+    def mock_jj(self) -> Iterator[MagicMock]:
+        """Stub the JJ class run_all constructs (unmerged_job_names + cooldown query)."""
+        with patch("repoactive.runner.JJ") as cls:
+            cls.return_value.unmerged_job_names.return_value = set()
+            cls.return_value.has_recent_job_commit.return_value = False
+            yield cls
+
     @patch("repoactive.runner.run_job")
     def test_independent_jobs_all_run(self, mock_run_job: MagicMock) -> None:
         a, b = _job("a"), _job("b")
@@ -930,10 +960,9 @@ class TestRunAll:
             }
         )
 
-    @patch("repoactive.runner.JJ")
     @patch("repoactive.runner.run_job")
-    def test_cooldown_skips_job(self, mock_run_job: MagicMock, mock_jj_cls: MagicMock) -> None:
-        mock_jj_cls.return_value.has_recent_job_commit.return_value = True
+    def test_cooldown_skips_job(self, mock_run_job: MagicMock, mock_jj: MagicMock) -> None:
+        mock_jj.return_value.has_recent_job_commit.return_value = True
 
         summary = run_all(config=self._cooldown_config("a", "7d"), repo_path=REPO)
 
@@ -942,25 +971,21 @@ class TestRunAll:
         assert summary.results["a"].produced_output is False
         assert summary.ok  # cooldown is not a failure
 
-    @patch("repoactive.runner.JJ")
     @patch("repoactive.runner.run_job")
     def test_cooldown_queries_base_branch(
-        self, mock_run_job: MagicMock, mock_jj_cls: MagicMock
+        self, mock_run_job: MagicMock, mock_jj: MagicMock
     ) -> None:
-        mock_jj_cls.return_value.has_recent_job_commit.return_value = True
+        mock_jj.return_value.has_recent_job_commit.return_value = True
 
         run_all(config=self._cooldown_config("a", "7d"), repo_path=REPO)
 
-        name, base, _since = mock_jj_cls.return_value.has_recent_job_commit.call_args.args
+        name, base, _since = mock_jj.return_value.has_recent_job_commit.call_args.args
         assert name == "a"
         assert base == "trunk()"
 
-    @patch("repoactive.runner.JJ")
     @patch("repoactive.runner.run_job")
-    def test_no_recent_commit_runs_job(
-        self, mock_run_job: MagicMock, mock_jj_cls: MagicMock
-    ) -> None:
-        mock_jj_cls.return_value.has_recent_job_commit.return_value = False
+    def test_no_recent_commit_runs_job(self, mock_run_job: MagicMock, mock_jj: MagicMock) -> None:
+        mock_jj.return_value.has_recent_job_commit.return_value = False
         a = _job("a")
         mock_run_job.return_value = _result(a, revsets=["repoactive/a"])
 
@@ -969,12 +994,11 @@ class TestRunAll:
         mock_run_job.assert_called_once()
         assert not summary.cooldown
 
-    @patch("repoactive.runner.JJ")
     @patch("repoactive.runner.run_job")
     def test_cooldown_dependent_falls_back_to_base(
-        self, mock_run_job: MagicMock, mock_jj_cls: MagicMock
+        self, mock_run_job: MagicMock, mock_jj: MagicMock
     ) -> None:
-        mock_jj_cls.return_value.has_recent_job_commit.return_value = True
+        mock_jj.return_value.has_recent_job_commit.return_value = True
         b = _job("b", depends_on=["a"])
         mock_run_job.return_value = _result(b, revsets=["repoactive/b"])
         config = Config.model_validate(
@@ -994,17 +1018,16 @@ class TestRunAll:
         b_call = next(c for c in mock_run_job.call_args_list if c.kwargs["job"].name == "b")
         assert b_call.kwargs["parents"] == ["trunk()"]
 
-    @patch("repoactive.runner.JJ")
     @patch("repoactive.runner.run_job")
     def test_no_cooldown_period_never_queries(
-        self, mock_run_job: MagicMock, mock_jj_cls: MagicMock
+        self, mock_run_job: MagicMock, mock_jj: MagicMock
     ) -> None:
         a = _job("a")
         mock_run_job.return_value = _result(a, revsets=["repoactive/a"])
 
         run_all(config=_config(a), repo_path=REPO)
 
-        mock_jj_cls.return_value.has_recent_job_commit.assert_not_called()
+        mock_jj.return_value.has_recent_job_commit.assert_not_called()
 
     @patch("repoactive.runner.run_job")
     def test_run_all_resolves_jobs_with_defaults(self, mock_run_job: MagicMock) -> None:
@@ -1017,3 +1040,30 @@ class TestRunAll:
         assert passed_job.branch_prefix == "repoactive/"
         assert passed_job.mr_title_prefix == "[repoactive] "
         assert passed_job.commit_title_prefix == "[repoactive] "
+
+    @patch("repoactive.runner.run_job")
+    def test_unmerged_branch_refreshes_tagged_job_in_default_run(
+        self, mock_run_job: MagicMock, mock_jj: MagicMock
+    ) -> None:
+        # b is weekly (not in the default run) but has an unmerged branch, so it runs.
+        mock_jj.return_value.unmerged_job_names.return_value = {"b"}
+        config = _config(_djob("a"), _djob("b", tags=["weekly"]))
+        mock_run_job.return_value = _result(_job("x"), revsets=["repoactive/x"])
+
+        run_all(config=config, repo_path=REPO)
+
+        called_names = {c.kwargs["job"].name for c in mock_run_job.call_args_list}
+        assert called_names == {"a", "b"}
+
+    @patch("repoactive.runner.run_job")
+    def test_unmerged_branches_not_queried_for_explicit_selection(
+        self, mock_run_job: MagicMock, mock_jj: MagicMock
+    ) -> None:
+        config = _config(_djob("a"), _djob("b", tags=["weekly"]))
+        mock_run_job.return_value = _result(_job("x"), revsets=["repoactive/x"])
+
+        run_all(config=config, repo_path=REPO, requested_jobs=["a"])
+
+        mock_jj.return_value.unmerged_job_names.assert_not_called()
+        called_names = {c.kwargs["job"].name for c in mock_run_job.call_args_list}
+        assert called_names == {"a"}
