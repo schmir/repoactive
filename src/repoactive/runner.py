@@ -376,7 +376,11 @@ def run_all(  # noqa: PLR0913
     # stale branch is rebased on trunk now rather than at the job's next run.
     refresh_jobs: set[str] = set()
     if not requested_jobs and not requested_tags:
-        refresh_jobs = JJ(repo_path).unmerged_job_names()
+        refresh_jobs = JJ(repo_path).unmerged_job_names() & {j.name for j in config.jobs}
+        if refresh_jobs:
+            print(f"==> refreshing unmerged branches: {', '.join(sorted(refresh_jobs))}")
+        else:
+            print("==> no unmerged branches to refresh")
     ordered_jobs = _select_jobs(
         config.jobs,
         set(requested_jobs or []),
