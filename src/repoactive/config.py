@@ -65,6 +65,7 @@ class JobDefaults(BaseModel):
     labels: list[str] = Field(default_factory=list)
     base_branch: str | None = None
     cooldown_period: str | None = None
+    timeout: str | None = None
 
     @field_validator("branch_prefix")
     @classmethod
@@ -72,9 +73,9 @@ class JobDefaults(BaseModel):
         _validate_branch_prefix(value)
         return value
 
-    @field_validator("cooldown_period")
+    @field_validator("cooldown_period", "timeout")
     @classmethod
-    def _check_cooldown_period(cls, value: str | None) -> str | None:
+    def _check_duration(cls, value: str | None) -> str | None:
         if value is not None:
             parse_duration(value)
         return value
@@ -101,6 +102,7 @@ class Job(BaseModel):
     commit_title_prefix: str | None = None
     labels: list[str] = Field(default_factory=list)
     cooldown_period: str | None = None
+    timeout: str | None = None
 
     @field_validator("name")
     @classmethod
@@ -118,9 +120,9 @@ class Job(BaseModel):
             _validate_branch_prefix(value)
         return value
 
-    @field_validator("cooldown_period")
+    @field_validator("cooldown_period", "timeout")
     @classmethod
-    def _check_cooldown_period(cls, value: str | None) -> str | None:
+    def _check_duration(cls, value: str | None) -> str | None:
         if value is not None:
             parse_duration(value)
         return value
@@ -160,6 +162,9 @@ class Job(BaseModel):
     def cooldown_timedelta(self) -> timedelta | None:
         return parse_duration(self.cooldown_period) if self.cooldown_period is not None else None
 
+    def timeout_seconds(self) -> float | None:
+        return parse_duration(self.timeout).total_seconds() if self.timeout is not None else None
+
     def resolve(self, defaults: JobDefaults) -> Job:
         return self.model_copy(
             update={
@@ -178,6 +183,7 @@ class Job(BaseModel):
                 "cooldown_period": self.cooldown_period
                 if self.cooldown_period is not None
                 else defaults.cooldown_period,
+                "timeout": self.timeout if self.timeout is not None else defaults.timeout,
                 "labels": list(dict.fromkeys(defaults.labels + self.labels)),
             }
         )

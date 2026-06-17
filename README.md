@@ -74,6 +74,9 @@ base_branch = "main"
 # Optional: default cooldown_period applied to jobs that do not set their own
 # (default: none). See "Throttling jobs with cooldown_period" below.
 cooldown_period = "7d"
+# Optional: default timeout applied to jobs that do not set their own
+# (default: none). See "Limiting job runtime with timeout" below.
+timeout = "1h"
 
 [[job]]
 # Unique identifier - branch name is always <branch_prefix><name>
@@ -111,6 +114,9 @@ mr_title_prefix = "[api] "
 # from this job landed on the base branch within this window, the job is
 # skipped. Format: <number><unit>, unit one of s, m, h, d, w (e.g. "7d").
 cooldown_period = "7d"
+# Optional: maximum runtime for this job's command. When it expires the
+# command process is killed and the job fails. Same format as cooldown_period.
+timeout = "30m"
 
 [[job]]
 name = "sync-license-headers"
@@ -286,6 +292,16 @@ existing MR keeps being updated as usual). Because the check relies on the
 commit trailer reaching the base branch, MRs for throttled jobs must be
 merged with a merge commit or rebase - a **squash merge discards the commit
 message** and with it the trailer, so the cooldown would never trigger.
+
+## Limiting job runtime with `timeout`
+
+A job's `command` can hang or run away. Setting `timeout` caps how long the
+command may run; when the limit is reached `repoactive` kills the command
+process and the job fails (its workspace is abandoned, no branch or MR is
+created). The value uses the same `<number><unit>` format as
+`cooldown_period` (e.g. `"30m"`, `"2h"`). `timeout` may be set per job or in
+`job-defaults`; a per-job value overrides the default. With no timeout
+configured the command runs without a time limit.
 
 ## Usage
 

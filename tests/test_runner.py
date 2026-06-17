@@ -641,6 +641,64 @@ class TestRunJob:
 
     @patch("repoactive.runner.JJ")
     @patch("repoactive.runner.subprocess.run")
+    def test_passes_timeout_to_subprocess(
+        self, mock_sub: MagicMock, mock_jj_cls: MagicMock
+    ) -> None:
+        mock_jj = mock_jj_cls.return_value
+        mock_sub.return_value.stdout = ""
+        mock_jj.bookmark_exists.return_value = False
+        mock_jj.is_empty.return_value = False
+        job = Job(
+            name="foo",
+            command="cmd-foo",
+            title="Change foo",
+            timeout="30m",
+            branch_prefix="repoactive/",
+            commit_title_prefix="",
+        )
+
+        run_job(job=job, parents=["trunk()"], repo_path=REPO, platform=None)
+
+        assert mock_sub.call_args.kwargs["timeout"] == 30 * 60
+
+    @patch("repoactive.runner.JJ")
+    @patch(
+        "repoactive.runner.subprocess.run",
+        side_effect=subprocess.TimeoutExpired("cmd", 1800, output="partial\n"),
+    )
+    def test_command_timeout_abandons_and_raises(
+        self, mock_sub: MagicMock, mock_jj_cls: MagicMock
+    ) -> None:
+        mock_jj = mock_jj_cls.return_value
+        mock_jj.bookmark_exists.return_value = False
+        job = Job(
+            name="foo",
+            command="cmd-foo",
+            title="Change foo",
+            timeout="30m",
+            branch_prefix="repoactive/",
+            commit_title_prefix="",
+        )
+        with pytest.raises(RuntimeError, match="timed out after 30m"):
+            run_job(job=job, parents=["trunk()"], repo_path=REPO, platform=None)
+
+        mock_jj.abandon.assert_called_once_with()
+        mock_jj.bookmark_set.assert_not_called()
+
+    @patch("repoactive.runner.JJ")
+    @patch("repoactive.runner.subprocess.run")
+    def test_no_timeout_passes_none(self, mock_sub: MagicMock, mock_jj_cls: MagicMock) -> None:
+        mock_jj = mock_jj_cls.return_value
+        mock_sub.return_value.stdout = ""
+        mock_jj.bookmark_exists.return_value = False
+        mock_jj.is_empty.return_value = False
+
+        run_job(job=_job("foo"), parents=["trunk()"], repo_path=REPO, platform=None)
+
+        assert mock_sub.call_args.kwargs["timeout"] is None
+
+    @patch("repoactive.runner.JJ")
+    @patch("repoactive.runner.subprocess.run")
     def test_command_output_in_mr_description(
         self, mock_sub: MagicMock, mock_jj_cls: MagicMock
     ) -> None:

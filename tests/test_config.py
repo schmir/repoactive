@@ -203,6 +203,42 @@ class TestCooldownPeriod:
         assert job.resolve(JobDefaults()).cooldown_period is None
 
 
+class TestTimeout:
+    def test_valid_value_accepted(self) -> None:
+        job = Job(name="x", command="cmd", title="X", timeout="30m")
+        assert job.timeout == "30m"
+
+    def test_invalid_value_rejected(self) -> None:
+        with pytest.raises(ValueError, match="invalid duration"):
+            Job(name="x", command="cmd", title="X", timeout="nope")
+
+    def test_invalid_value_rejected_in_defaults(self) -> None:
+        with pytest.raises(ValueError, match="invalid duration"):
+            JobDefaults(timeout="nope")
+
+    def test_seconds_none_when_unset(self) -> None:
+        job = Job(name="x", command="cmd", title="X")
+        assert job.timeout_seconds() is None
+
+    def test_seconds_parsed_when_set(self) -> None:
+        job = Job(name="x", command="cmd", title="X", timeout="30m")
+        assert job.timeout_seconds() == 30 * 60
+
+    def test_falls_back_to_defaults(self) -> None:
+        job = Job(name="x", command="cmd", title="X")
+        resolved = job.resolve(JobDefaults(timeout="1h"))
+        assert resolved.timeout == "1h"
+
+    def test_per_job_overrides_defaults(self) -> None:
+        job = Job(name="x", command="cmd", title="X", timeout="10m")
+        resolved = job.resolve(JobDefaults(timeout="1h"))
+        assert resolved.timeout == "10m"
+
+    def test_stays_none_when_neither_set(self) -> None:
+        job = Job(name="x", command="cmd", title="X")
+        assert job.resolve(JobDefaults()).timeout is None
+
+
 class TestLoadConfig:
     def test_minimal_config(self, tmp_path: Path) -> None:
         f = tmp_path / ".repoactive.toml"

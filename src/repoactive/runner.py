@@ -140,7 +140,17 @@ def _run_command(job: Job, ws: JJ) -> CommandResult:
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            timeout=job.timeout_seconds(),
         )
+    except subprocess.TimeoutExpired as e:
+        # subprocess.run kills the command process before raising; ``e.output``
+        # holds whatever it printed before the timeout.
+        ws.abandon()
+        output = e.output or ""
+        raise CommandError(
+            f"command timed out after {job.timeout}" + (f":\n{output}" if output else ""),
+            elapsed=time.monotonic() - start,
+        ) from e
     except subprocess.CalledProcessError as e:
         ws.abandon()
         output = e.stdout or ""
