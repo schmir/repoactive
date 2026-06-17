@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
-from repoactive.config import Config, Job
+from repoactive.config import DEFAULT_TAG, Config, Job
 from repoactive.jj import JJ, JOB_TRAILER_KEY, JJError
 from repoactive.platforms.base import MRParams, Platform
 
@@ -307,11 +307,20 @@ def _on_cooldown(job: Job, repo_path: Path) -> bool:
     return JJ(repo_path).has_recent_job_commit(job.name, base, since)
 
 
-def _select_jobs(jobs: list[Job], requested_jobs: set[str]) -> list[Job]:
-    """Return the enabled, filtered, topologically sorted jobs to run.
+def _select_jobs(
+    jobs: list[Job],
+    requested_jobs: set[str],
+    requested_tags: set[str] | None = None,
+) -> list[Job]:
+    """Return the filtered, topologically sorted jobs to run.
 
-    An empty requested_jobs means "run all enabled jobs"."""
-
+    Selection is by tag. With no names and no tags this is the default run:
+    every job carrying ``DEFAULT_TAG`` (see ``Job.effective_tags``), with a job
+    dropped if any dependency is not itself selected. Naming jobs or passing
+    tags is explicit selection: the union of the named jobs and the jobs
+    matching any requested tag (``DEFAULT_TAG`` is not implied), with all
+    dependencies force-included."""
+    requested_tags = requested_tags or set()
     jobs = _topological_sort(jobs)
 
     unknown = requested_jobs - {j.name for j in jobs}
@@ -319,31 +328,33 @@ def _select_jobs(jobs: list[Job], requested_jobs: set[str]) -> list[Job]:
         raise ValueError(f"Unknown job(s): {', '.join(sorted(unknown))}")
 
     selected: set[str]
-    if requested_jobs:
+    if requested_jobs or requested_tags:
         selected = set(requested_jobs)
+        selected.update(j.name for j in jobs if j.effective_tags() & requested_tags)
         for j in reversed(jobs):
             if j.name in selected:
                 for dep in j.depends_on:
                     selected.add(dep)
     else:
-        selected = {j.name for j in jobs if not j.disabled}
+        selected = {j.name for j in jobs if DEFAULT_TAG in j.effective_tags()}
         for j in jobs:
             if j.name in selected and any(dep not in selected for dep in j.depends_on):
-                print(f"==> [{j.name}] disabled (dependency disabled)")
+                print(f"==> [{j.name}] skipped (dependency not in default run)")
                 selected.remove(j.name)
 
     return [j for j in jobs if j.name in selected]
 
 
-def run_all(
+def run_all(  # noqa: PLR0913
     *,
     config: Config,
     repo_path: Path,
     platform: Platform | None = None,
     requested_jobs: list[str] | None = None,
+    requested_tags: list[str] | None = None,
     local: bool = False,
 ) -> RunSummary:
-    ordered_jobs = _select_jobs(config.jobs, set(requested_jobs or []))
+    ordered_jobs = _select_jobs(config.jobs, set(requested_jobs or []), set(requested_tags or []))
     summary = RunSummary()
     # Names of jobs that failed or were skipped - their dependents are blocked.
     blocked: set[str] = set()

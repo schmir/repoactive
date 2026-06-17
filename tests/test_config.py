@@ -414,3 +414,34 @@ class TestDefaultConfigPaths:
         (tmp_path / ".repoactive.d").write_text("")
         with pytest.raises(ConfigNotFoundError, match="no configuration found"):
             default_config_paths(tmp_path)
+
+
+class TestTags:
+    @pytest.mark.parametrize("tag", ["weekly", "nightly-build", "tier_1", "Weekly2"])
+    def test_valid_tags_accepted(self, tag: str) -> None:
+        job = Job(name="j", command="cmd", title="T", tags=[tag])
+        assert job.tags == [tag]
+
+    @pytest.mark.parametrize("tag", ["has space", "comma,tag", "dot.tag", ""])
+    def test_invalid_tags_rejected(self, tag: str) -> None:
+        with pytest.raises(ValueError, match="invalid tag"):
+            Job(name="j", command="cmd", title="T", tags=[tag])
+
+    def test_disabled_and_tags_together_rejected(self) -> None:
+        with pytest.raises(ValueError, match="both 'disabled' and 'tags'"):
+            Job(name="j", command="cmd", title="T", disabled=True, tags=["weekly"])
+
+    def test_plain_job_is_enabled(self) -> None:
+        assert Job(name="j", command="cmd", title="T").effective_tags() == {"enabled"}
+
+    def test_disabled_job_is_disabled_tag(self) -> None:
+        job = Job(name="j", command="cmd", title="T", disabled=True)
+        assert job.effective_tags() == {"disabled"}
+
+    def test_explicit_tags_replace_default(self) -> None:
+        job = Job(name="j", command="cmd", title="T", tags=["weekly"])
+        assert job.effective_tags() == {"weekly"}
+
+    def test_explicit_enabled_keeps_job_in_default_run(self) -> None:
+        job = Job(name="j", command="cmd", title="T", tags=["enabled", "weekly"])
+        assert job.effective_tags() == {"enabled", "weekly"}

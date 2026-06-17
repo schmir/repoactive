@@ -56,6 +56,7 @@ def _config(*jobs: Job) -> Config:
                     "title": j.title,
                     "depends_on": j.depends_on,
                     "disabled": j.disabled,
+                    "tags": j.tags,
                 }
                 for j in jobs
             ],
@@ -88,9 +89,20 @@ class TestTopologicalSort:
         assert names.index("c") < names.index("d")
 
 
-def _djob(name: str, *, disabled: bool = False, depends_on: list[str] | None = None) -> Job:
+def _djob(
+    name: str,
+    *,
+    disabled: bool = False,
+    tags: list[str] | None = None,
+    depends_on: list[str] | None = None,
+) -> Job:
     return Job(
-        name=name, command="cmd", title=name, disabled=disabled, depends_on=depends_on or []
+        name=name,
+        command="cmd",
+        title=name,
+        disabled=disabled,
+        tags=tags or [],
+        depends_on=depends_on or [],
     )
 
 
@@ -171,6 +183,47 @@ class TestSelectJobs:
     def test_requesting_job_pulls_in_disabled_dependency(self) -> None:
         config = _config(_djob("a", disabled=True), _djob("b", depends_on=["a"]))
         assert _names(_select_jobs(config.jobs, {"b"})) == ["a", "b"]
+
+    def test_tagged_job_excluded_from_default_run(self) -> None:
+        config = _config(_djob("a"), _djob("b", tags=["weekly"]))
+        assert _names(_select_jobs(config.jobs, set())) == ["a"]
+
+    def test_tag_selects_matching_jobs(self) -> None:
+        config = _config(_djob("a"), _djob("b", tags=["weekly"]), _djob("c", tags=["weekly"]))
+        assert _names(_select_jobs(config.jobs, set(), {"weekly"})) == ["b", "c"]
+
+    def test_tag_does_not_imply_enabled(self) -> None:
+        config = _config(_djob("a"), _djob("b", tags=["weekly"]))
+        assert _names(_select_jobs(config.jobs, set(), {"weekly"})) == ["b"]
+
+    def test_explicit_enabled_tag_keeps_job_in_both(self) -> None:
+        config = _config(_djob("a"), _djob("b", tags=["enabled", "weekly"]))
+        assert _names(_select_jobs(config.jobs, set())) == ["a", "b"]
+        assert _names(_select_jobs(config.jobs, set(), {"weekly"})) == ["b"]
+
+    def test_multiple_tags_are_ored(self) -> None:
+        config = _config(
+            _djob("a", tags=["weekly"]), _djob("b", tags=["monthly"]), _djob("c", tags=["daily"])
+        )
+        assert _names(_select_jobs(config.jobs, set(), {"weekly", "monthly"})) == ["a", "b"]
+
+    def test_tag_selection_overrides_disabled(self) -> None:
+        # disabled is sugar for the 'disabled' tag, so --tag disabled runs them.
+        config = _config(_djob("a", disabled=True), _djob("b"))
+        assert _names(_select_jobs(config.jobs, set(), {"disabled"})) == ["a"]
+
+    def test_names_and_tags_are_unioned(self) -> None:
+        config = _config(_djob("a"), _djob("b", tags=["weekly"]), _djob("c"))
+        assert _names(_select_jobs(config.jobs, {"a"}, {"weekly"})) == ["a", "b"]
+
+    def test_tag_selection_force_includes_dependencies(self) -> None:
+        config = _config(_djob("a"), _djob("b", tags=["weekly"], depends_on=["a"]))
+        assert _names(_select_jobs(config.jobs, set(), {"weekly"})) == ["a", "b"]
+
+    def test_tagged_dependency_dropped_from_default_run(self) -> None:
+        # b is out of the default run (tagged weekly); its dependent c is dropped too.
+        config = _config(_djob("a"), _djob("b", tags=["weekly"]), _djob("c", depends_on=["b"]))
+        assert _names(_select_jobs(config.jobs, set())) == ["a"]
 
 
 class TestComputeParents:

@@ -13,8 +13,15 @@ logger = logging.getLogger(__name__)
 
 _DURATION_RE = re.compile(r"^(\d+)([smhdw])$")
 _JOB_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+_TAG_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 _BRANCH_PREFIX_RE = re.compile(r"^(?!/)(?!.*//)[a-zA-Z0-9_\-/]+$")
 _DURATION_UNITS = {"s": "seconds", "m": "minutes", "h": "hours", "d": "days", "w": "weeks"}
+
+# Reserved tags driving job selection. A plain job carries DEFAULT_TAG, which is
+# what the bare ``repoactive run`` selects; ``disabled = true`` is sugar for
+# DISABLED_TAG. See docs/adr/0002-tag-based-job-selection.md.
+DEFAULT_TAG = "enabled"
+DISABLED_TAG = "disabled"
 
 
 def parse_duration(value: str) -> timedelta:
@@ -84,6 +91,7 @@ class Job(BaseModel):
     draft: bool = False
     create_mr: bool = True
     disabled: bool = False
+    tags: list[str] = Field(default_factory=list)
     depends_on: list[str] = Field(default_factory=list)
     output_in_commit: bool = True
 
@@ -116,6 +124,34 @@ class Job(BaseModel):
         if value is not None:
             parse_duration(value)
         return value
+
+    @field_validator("tags")
+    @classmethod
+    def _check_tags(cls, value: list[str]) -> list[str]:
+        for tag in value:
+            if not _TAG_RE.match(tag):
+                raise ValueError(
+                    f"invalid tag {tag!r}: only letters, digits, '-', and '_' are allowed"
+                )
+        return value
+
+    @model_validator(mode="after")
+    def _check_disabled_tags(self) -> Job:
+        if self.disabled and self.tags:
+            raise ValueError(
+                f"job {self.name!r} sets both 'disabled' and 'tags'; "
+                f"set one or the other (disabled is sugar for tags = ['{DISABLED_TAG}'])"
+            )
+        return self
+
+    def effective_tags(self) -> set[str]:
+        """Tags driving selection: explicit tags, else DISABLED_TAG if disabled,
+        else DEFAULT_TAG. ``disabled`` and ``tags`` are mutually exclusive."""
+        if self.disabled:
+            return {DISABLED_TAG}
+        if self.tags:
+            return set(self.tags)
+        return {DEFAULT_TAG}
 
     def branch_name(self) -> str:
         assert self.branch_prefix is not None, "job must be resolved before calling branch_name()"

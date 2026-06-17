@@ -75,6 +75,14 @@ def run(  # noqa: PLR0913
         typer.Option("--create-prs", help="Push bookmarks and create or update pull requests."),
     ] = False,
     debug: Annotated[bool, typer.Option("--debug", "-d", help="Enable debug logging.")] = False,
+    tags: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--tag",
+            "-t",
+            help="Run jobs carrying any of these tags (repeatable). Default run targets 'enabled'.",
+        ),
+    ] = None,
     jobs: Annotated[
         list[str] | None,
         typer.Argument(help="Jobs to run (default: all); dependencies are auto-included."),
@@ -92,7 +100,12 @@ def run(  # noqa: PLR0913
     local = not push and not create_prs
     platform = get_platform(cfg, repo) if create_prs else None
     summary = run_all(
-        config=cfg, repo_path=repo, platform=platform, requested_jobs=jobs or None, local=local
+        config=cfg,
+        repo_path=repo,
+        platform=platform,
+        requested_jobs=jobs or None,
+        requested_tags=tags or None,
+        local=local,
     )
     if not summary.ok:
         raise typer.Exit(code=1)

@@ -96,9 +96,14 @@ create_mr = true
 # Optional: append the job's command and its output to the commit message
 # (default: true). Set to false to keep the commit message clean.
 output_in_commit = true
-# Optional: skip this job on "run all" invocations (default: false). See
-# "Disabling jobs" below.
+# Optional: skip this job on "run all" invocations (default: false). Sugar for
+# tags = ["disabled"]; mutually exclusive with tags. See "Disabling jobs" below.
 disabled = false
+# Optional: tags for job selection (default: none -> the job carries the
+# implicit "enabled" tag and runs in the bare `repoactive run`). Setting any tag
+# removes "enabled", so the job runs only via `repoactive run --tag <tag>`. See
+# "Selecting jobs with tags" below.
+# tags = ["nightly"]
 # Optional: override branch_prefix/mr_title_prefix/commit_title_prefix from
 # job-defaults for this job only.
 mr_title_prefix = "[api] "
@@ -165,47 +170,85 @@ directory of `*.toml` files, and may be repeated to merge several sources;
 later sources win. Explicit paths are resolved relative to the current
 directory, not `--repo`.
 
+## Selecting jobs with tags
+
+Which jobs a `repoactive run` touches is decided by **tags**. Every job has
+a set of tags, with a smart default:
+
+- a plain job (no `tags`, not `disabled`) carries the implicit `enabled`
+  tag;
+- `disabled = true` is sugar for `tags = ["disabled"]`;
+- setting `tags = [...]` uses exactly those tags — and, importantly, **drops
+  the implicit `enabled` tag** unless you list it yourself.
+
+`repoactive run` with no arguments is shorthand for
+`repoactive run --tag enabled`: it runs every job carrying `enabled`. Pass
+`--tag`/`-t` (repeatable) to select a different set; a job runs if it
+carries **any** of the requested tags. Naming jobs and passing tags can be
+combined — the selection is the union of the two.
+
+```bash
+# Run all jobs tagged "weekly" (regardless of whether they also have "enabled")
+repoactive run --tag weekly
+
+# Union: the "nightly" jobs plus one named job
+repoactive run --tag nightly regenerate-api-client
+```
+
+Because assigning a tag removes the implicit `enabled` tag, **tags are
+load-bearing, not free-form labels**: tagging a job takes it out of the bare
+`repoactive run`. If you want a job to stay in the default run _and_ belong
+to a group, list both: `tags = ["enabled", "weekly"]`. (For MR/PR labels,
+use `labels` — a separate concept.)
+
+Tag selection is _explicit_ selection, so — like naming a job — it ignores
+the `enabled`/`disabled` defaults and force-includes dependencies. The bare
+`repoactive run` is _implicit_ selection: a job whose dependency is not
+itself selected is dropped
+(`==> [name] skipped (dependency not in default run)`).
+
 ## Disabling jobs
 
 Set `disabled = true` on a `[[job]]` to keep it in the config but leave it
-out of normal runs. The flag only affects "run all" invocations
-(`repoactive run` with no job names):
+out of normal runs; it is exactly sugar for `tags = ["disabled"]` (so the
+two are mutually exclusive). The flag only affects the bare
+`repoactive run`:
 
-- On `repoactive run`, disabled jobs are skipped. Any job that `depends_on`
-  a disabled job is skipped too, since its dependency would not be produced
-  (`==> [name] disabled (dependency disabled)`).
-- Naming a job explicitly overrides the flag: `repoactive run my-job` runs
-  `my-job` even when it is disabled. This makes `disabled` a way to keep a
-  job available for on-demand runs while excluding it from the default
-  schedule.
+- On `repoactive run`, disabled jobs are skipped, along with any job that
+  `depends_on` one (its dependency would not be produced).
+- Naming a job explicitly overrides it: `repoactive run my-job` runs
+  `my-job` even when it is disabled. So does
+  `repoactive run --tag disabled`, which runs everything currently turned
+  off.
 
 ### Running a job on a schedule
 
-`repoactive` is not a daemon and has no built-in scheduler — the cadence of a
-job is whatever cadence you invoke it with. To run a job on a fixed schedule,
-combine `disabled = true` with an OS cron job that invokes it by name:
+`repoactive` is not a daemon and has no built-in scheduler — the cadence of
+a job is whatever cadence you invoke it with. To run a job on a fixed
+schedule, tag it and have an OS cron job select that tag. The tag keeps the
+job out of the bare `repoactive run`, and the crontab decides the membership
+in one place — add or remove `weekly` jobs by editing the config, not the
+crontab:
 
 ```toml
 [[job]]
 name = "uv-lock-upgrade"
 command = "uv lock --upgrade"
 title = "build: upgrade all dependencies"
-# Kept out of the default `repoactive run`; only runs when named explicitly.
-disabled = true
+# Not in the bare `repoactive run`; runs only via `--tag weekly`.
+tags = ["weekly"]
 ```
 
 ```cron
-# Run only this job every Sunday at 03:00
-0 3 * * 0  repoactive run uv-lock-upgrade --create-prs
+# Run every job tagged "weekly" each Sunday at 03:00
+0 3 * * 0  repoactive run --tag weekly --create-prs
 ```
 
-Because the cron is the sole trigger, the command runs exactly when cron fires —
-once, whether or not it produces a diff. This is more reliable than inferring a
-schedule from `repoactive`'s own history: real cron is stateful and excludes the
-other days, whereas `repoactive` only ever sees what has _landed_ (see
-`cooldown_period` below). Note that a job which `depends_on` a disabled job is
-skipped in the default run, so don't put a daily job downstream of one driven
-this way.
+Because the cron is the sole trigger, the command runs exactly when cron
+fires — once, whether or not it produces a diff. This is more reliable than
+inferring a schedule from `repoactive`'s own history: real cron is stateful
+and excludes the other days, whereas `repoactive` only ever sees what has
+_landed_ (see `cooldown_period` below).
 
 ## Throttling jobs with `cooldown_period`
 
@@ -246,6 +289,9 @@ repoactive run
 # Apply specific jobs locally
 repoactive run regenerate-api-client sync-license-headers
 
+# Run every job carrying a given tag (see "Selecting jobs with tags")
+repoactive run --tag weekly
+
 # Push branches to the remote without creating MRs
 repoactive run --push
 
@@ -262,6 +308,7 @@ repoactive run --debug
 | `--repo PATH`   | `-r`  | jj repository path (default: `.`)                                                                                            |
 | `--push`        |       | Push branches to the remote repository                                                                                       |
 | `--create-prs`  |       | Push branches and create or update pull requests                                                                             |
+| `--tag TAG`     | `-t`  | Run jobs carrying any of these tags (repeatable). With no tags/jobs the default run targets the `enabled` tag                |
 | `--debug`       | `-d`  | Enable debug logging                                                                                                         |
 
 ## Inspecting repoactive commits
