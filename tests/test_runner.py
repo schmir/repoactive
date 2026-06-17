@@ -1,4 +1,7 @@
+import os
+import signal
 import subprocess
+import time
 from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -7,9 +10,11 @@ import pytest
 
 from repoactive.config import Config, Job, JobDefaults
 from repoactive.runner import (
+    CommandError,
     JobResult,
     _compute_parents,
     _mr_params,
+    _run_command,
     _select_jobs,
     _topological_sort,
     run_all,
@@ -44,6 +49,14 @@ def _job(  # noqa: PLR0913
 
 def _result(job: Job, *, revsets: list[str], produced: bool = True) -> JobResult:
     return JobResult(job=job, effective_revsets=revsets, produced_output=produced)
+
+
+def _mock_popen(mock_popen: MagicMock, *, output: str = "", returncode: int = 0) -> MagicMock:
+    """Configure a patched subprocess.Popen to behave like a finished command."""
+    proc = mock_popen.return_value
+    proc.communicate.return_value = (output, None)
+    proc.returncode = returncode
+    return proc
 
 
 def _config(*jobs: Job) -> Config:
@@ -458,12 +471,50 @@ class TestMrParams:
         )
 
 
+def _alive(pid: int) -> bool:
+    """Whether ``pid`` still names a live (non-reaped) process."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+class TestRunCommand:
+    @pytest.mark.slow
+    def test_timeout_kills_whole_process_group(self, tmp_path: Path) -> None:
+        # The command backgrounds a long sleep, records its PID, then waits. The
+        # sleep shares the command's process group, so the timeout must kill it
+        # too - not just the top-level shell.
+        pidfile = tmp_path / "child.pid"
+        job = Job(
+            name="foo",
+            command=f"sleep 30 & echo $! > {pidfile}; wait",
+            title="t",
+            timeout="1s",
+            branch_prefix="repoactive/",
+            commit_title_prefix="",
+        )
+        ws = MagicMock()
+        ws.cwd = tmp_path
+
+        with pytest.raises(CommandError, match="timed out after 1s"):
+            _run_command(job, ws)
+
+        ws.abandon.assert_called_once_with()
+        child_pid = int(pidfile.read_text())
+        deadline = time.monotonic() + 5
+        while _alive(child_pid) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert not _alive(child_pid), "backgrounded child survived the timeout kill"
+
+
 class TestRunJob:
     @patch("repoactive.runner.JJ")
-    @patch("repoactive.runner.subprocess.run")
+    @patch("repoactive.runner.subprocess.Popen")
     def test_produces_output(self, mock_sub: MagicMock, mock_jj_cls: MagicMock) -> None:
         mock_jj = mock_jj_cls.return_value
-        mock_sub.return_value.stdout = ""
+        _mock_popen(mock_sub)
         mock_jj.bookmark_exists.return_value = False
         mock_jj.is_empty.return_value = False
         job = _job("foo")
@@ -479,10 +530,10 @@ class TestRunJob:
         assert result.effective_revsets == ["repoactive/foo"]
 
     @patch("repoactive.runner.JJ")
-    @patch("repoactive.runner.subprocess.run")
+    @patch("repoactive.runner.subprocess.Popen")
     def test_describe_includes_body(self, mock_sub: MagicMock, mock_jj_cls: MagicMock) -> None:
         mock_jj = mock_jj_cls.return_value
-        mock_sub.return_value.stdout = ""
+        _mock_popen(mock_sub)
         mock_jj.bookmark_exists.return_value = False
         mock_jj.is_empty.return_value = False
         job = _job("foo", description="Body text.")
@@ -492,12 +543,12 @@ class TestRunJob:
         mock_jj.describe.assert_called_once_with("Change foo\n\nBody text.\n\nRepoactive-Job: foo")
 
     @patch("repoactive.runner.JJ")
-    @patch("repoactive.runner.subprocess.run")
+    @patch("repoactive.runner.subprocess.Popen")
     def test_output_appended_to_commit_message(
         self, mock_sub: MagicMock, mock_jj_cls: MagicMock
     ) -> None:
         mock_jj = mock_jj_cls.return_value
-        mock_sub.return_value.stdout = "did stuff\n"
+        _mock_popen(mock_sub, output="did stuff\n")
         mock_jj.bookmark_exists.return_value = False
         mock_jj.is_empty.return_value = False
         job = _job("foo")
@@ -509,12 +560,12 @@ class TestRunJob:
         )
 
     @patch("repoactive.runner.JJ")
-    @patch("repoactive.runner.subprocess.run")
+    @patch("repoactive.runner.subprocess.Popen")
     def test_output_in_commit_false_suppresses_output(
         self, mock_sub: MagicMock, mock_jj_cls: MagicMock
     ) -> None:
         mock_jj = mock_jj_cls.return_value
-        mock_sub.return_value.stdout = "did stuff\n"
+        _mock_popen(mock_sub, output="did stuff\n")
         mock_jj.bookmark_exists.return_value = False
         mock_jj.is_empty.return_value = False
         job = Job(
@@ -531,12 +582,12 @@ class TestRunJob:
         mock_jj.describe.assert_called_once_with("Change foo\n\nRepoactive-Job: foo")
 
     @patch("repoactive.runner.JJ")
-    @patch("repoactive.runner.subprocess.run")
+    @patch("repoactive.runner.subprocess.Popen")
     def test_commit_title_prefix_applied(
         self, mock_sub: MagicMock, mock_jj_cls: MagicMock
     ) -> None:
         mock_jj = mock_jj_cls.return_value
-        mock_sub.return_value.stdout = ""
+        _mock_popen(mock_sub)
         mock_jj.bookmark_exists.return_value = False
         mock_jj.is_empty.return_value = False
 
@@ -550,12 +601,12 @@ class TestRunJob:
         mock_jj.describe.assert_called_once_with("[bot] Change foo\n\nRepoactive-Job: foo")
 
     @patch("repoactive.runner.JJ")
-    @patch("repoactive.runner.subprocess.run")
+    @patch("repoactive.runner.subprocess.Popen")
     def test_no_output_no_existing_bookmark(
         self, mock_sub: MagicMock, mock_jj_cls: MagicMock
     ) -> None:
         mock_jj = mock_jj_cls.return_value
-        mock_sub.return_value.stdout = ""
+        _mock_popen(mock_sub)
         mock_jj.bookmark_exists.return_value = False
         mock_jj.is_empty.return_value = True
 
@@ -569,12 +620,12 @@ class TestRunJob:
         assert result.effective_revsets == ["trunk()"]
 
     @patch("repoactive.runner.JJ")
-    @patch("repoactive.runner.subprocess.run")
+    @patch("repoactive.runner.subprocess.Popen")
     def test_no_output_existing_bookmark_deleted(
         self, mock_sub: MagicMock, mock_jj_cls: MagicMock
     ) -> None:
         mock_jj = mock_jj_cls.return_value
-        mock_sub.return_value.stdout = ""
+        _mock_popen(mock_sub)
         mock_jj.bookmark_exists.return_value = True
         mock_jj.is_empty.return_value = True
 
@@ -588,12 +639,12 @@ class TestRunJob:
         assert result.effective_revsets == ["trunk()"]
 
     @patch("repoactive.runner.JJ")
-    @patch("repoactive.runner.subprocess.run")
+    @patch("repoactive.runner.subprocess.Popen")
     def test_no_output_existing_bookmark_local_skips_push(
         self, mock_sub: MagicMock, mock_jj_cls: MagicMock
     ) -> None:
         mock_jj = mock_jj_cls.return_value
-        mock_sub.return_value.stdout = ""
+        _mock_popen(mock_sub)
         mock_jj.bookmark_exists.return_value = True
         mock_jj.is_empty.return_value = True
 
@@ -603,12 +654,12 @@ class TestRunJob:
         mock_jj.git_push_bookmarks.assert_not_called()
 
     @patch("repoactive.runner.JJ")
-    @patch("repoactive.runner.subprocess.run")
+    @patch("repoactive.runner.subprocess.Popen")
     def test_no_output_effective_revsets_are_parents(
         self, mock_sub: MagicMock, mock_jj_cls: MagicMock
     ) -> None:
         mock_jj = mock_jj_cls.return_value
-        mock_sub.return_value.stdout = ""
+        _mock_popen(mock_sub)
         mock_jj.bookmark_exists.return_value = False
         mock_jj.is_empty.return_value = True
 
@@ -622,11 +673,12 @@ class TestRunJob:
         assert result.effective_revsets == ["repoactive/a", "repoactive/b"]
 
     @patch("repoactive.runner.JJ")
-    @patch("repoactive.runner.subprocess.run", side_effect=subprocess.CalledProcessError(1, "cmd"))
+    @patch("repoactive.runner.subprocess.Popen")
     def test_command_failure_abandons_and_raises(
         self, mock_sub: MagicMock, mock_jj_cls: MagicMock
     ) -> None:
         mock_jj = mock_jj_cls.return_value
+        _mock_popen(mock_sub, output="boom\n", returncode=1)
         mock_jj.bookmark_exists.return_value = False
         with pytest.raises(RuntimeError, match="command failed"):
             run_job(
@@ -640,12 +692,12 @@ class TestRunJob:
         mock_jj.bookmark_set.assert_not_called()
 
     @patch("repoactive.runner.JJ")
-    @patch("repoactive.runner.subprocess.run")
+    @patch("repoactive.runner.subprocess.Popen")
     def test_passes_timeout_to_subprocess(
         self, mock_sub: MagicMock, mock_jj_cls: MagicMock
     ) -> None:
         mock_jj = mock_jj_cls.return_value
-        mock_sub.return_value.stdout = ""
+        proc = _mock_popen(mock_sub)
         mock_jj.bookmark_exists.return_value = False
         mock_jj.is_empty.return_value = False
         job = Job(
@@ -659,17 +711,27 @@ class TestRunJob:
 
         run_job(job=job, parents=["trunk()"], repo_path=REPO, platform=None)
 
-        assert mock_sub.call_args.kwargs["timeout"] == 30 * 60
+        assert mock_sub.call_args.kwargs["start_new_session"] is True
+        assert proc.communicate.call_args.kwargs["timeout"] == 30 * 60
 
+    @patch("repoactive.runner.os.getpgid", return_value=4242)
+    @patch("repoactive.runner.os.killpg")
     @patch("repoactive.runner.JJ")
-    @patch(
-        "repoactive.runner.subprocess.run",
-        side_effect=subprocess.TimeoutExpired("cmd", 1800, output="partial\n"),
-    )
-    def test_command_timeout_abandons_and_raises(
-        self, mock_sub: MagicMock, mock_jj_cls: MagicMock
+    @patch("repoactive.runner.subprocess.Popen")
+    def test_command_timeout_kills_group_abandons_and_raises(
+        self,
+        mock_sub: MagicMock,
+        mock_jj_cls: MagicMock,
+        mock_killpg: MagicMock,
+        mock_getpgid: MagicMock,
     ) -> None:
         mock_jj = mock_jj_cls.return_value
+        proc = _mock_popen(mock_sub)
+        # First communicate (with timeout) raises; the post-kill one drains output.
+        proc.communicate.side_effect = [
+            subprocess.TimeoutExpired("cmd", 1800),
+            ("partial\n", None),
+        ]
         mock_jj.bookmark_exists.return_value = False
         job = Job(
             name="foo",
@@ -682,28 +744,29 @@ class TestRunJob:
         with pytest.raises(RuntimeError, match="timed out after 30m"):
             run_job(job=job, parents=["trunk()"], repo_path=REPO, platform=None)
 
+        mock_killpg.assert_called_once_with(4242, signal.SIGKILL)
         mock_jj.abandon.assert_called_once_with()
         mock_jj.bookmark_set.assert_not_called()
 
     @patch("repoactive.runner.JJ")
-    @patch("repoactive.runner.subprocess.run")
+    @patch("repoactive.runner.subprocess.Popen")
     def test_no_timeout_passes_none(self, mock_sub: MagicMock, mock_jj_cls: MagicMock) -> None:
         mock_jj = mock_jj_cls.return_value
-        mock_sub.return_value.stdout = ""
+        proc = _mock_popen(mock_sub)
         mock_jj.bookmark_exists.return_value = False
         mock_jj.is_empty.return_value = False
 
         run_job(job=_job("foo"), parents=["trunk()"], repo_path=REPO, platform=None)
 
-        assert mock_sub.call_args.kwargs["timeout"] is None
+        assert proc.communicate.call_args.kwargs["timeout"] is None
 
     @patch("repoactive.runner.JJ")
-    @patch("repoactive.runner.subprocess.run")
+    @patch("repoactive.runner.subprocess.Popen")
     def test_command_output_in_mr_description(
         self, mock_sub: MagicMock, mock_jj_cls: MagicMock
     ) -> None:
         mock_jj = mock_jj_cls.return_value
-        mock_sub.return_value.stdout = "Copied file foo -> bar\n"
+        _mock_popen(mock_sub, output="Copied file foo -> bar\n")
         mock_jj.bookmark_exists.return_value = False
         mock_jj.is_empty.return_value = False
         platform = MagicMock()
@@ -721,10 +784,10 @@ class TestRunJob:
         assert "```\n$ cmd-foo\nCopied file foo -> bar\n```" in params.description
 
     @patch("repoactive.runner.JJ")
-    @patch("repoactive.runner.subprocess.run")
+    @patch("repoactive.runner.subprocess.Popen")
     def test_calls_platform_ensure_mr(self, mock_sub: MagicMock, mock_jj_cls: MagicMock) -> None:
         mock_jj = mock_jj_cls.return_value
-        mock_sub.return_value.stdout = ""
+        _mock_popen(mock_sub)
         mock_jj.bookmark_exists.return_value = False
         mock_jj.is_empty.return_value = False
         platform = MagicMock()
@@ -742,12 +805,12 @@ class TestRunJob:
         assert result.mr_url == "https://gitlab.example.com/mr/1"
 
     @patch("repoactive.runner.JJ")
-    @patch("repoactive.runner.subprocess.run")
+    @patch("repoactive.runner.subprocess.Popen")
     def test_create_mr_false_skips_ensure_mr(
         self, mock_sub: MagicMock, mock_jj_cls: MagicMock
     ) -> None:
         mock_jj = mock_jj_cls.return_value
-        mock_sub.return_value.stdout = ""
+        _mock_popen(mock_sub)
         mock_jj.bookmark_exists.return_value = False
         mock_jj.is_empty.return_value = False
         platform = MagicMock()
@@ -772,10 +835,10 @@ class TestRunJob:
         assert result.produced_output is True
 
     @patch("repoactive.runner.JJ")
-    @patch("repoactive.runner.subprocess.run")
+    @patch("repoactive.runner.subprocess.Popen")
     def test_local_skips_push_and_mr(self, mock_sub: MagicMock, mock_jj_cls: MagicMock) -> None:
         mock_jj = mock_jj_cls.return_value
-        mock_sub.return_value.stdout = ""
+        _mock_popen(mock_sub)
         mock_jj.bookmark_exists.return_value = False
         mock_jj.is_empty.return_value = False
         platform = MagicMock()
@@ -794,10 +857,10 @@ class TestRunJob:
         assert result.effective_revsets == ["repoactive/foo"]
 
     @patch("repoactive.runner.JJ")
-    @patch("repoactive.runner.subprocess.run")
+    @patch("repoactive.runner.subprocess.Popen")
     def test_local_no_output_skips_push(self, mock_sub: MagicMock, mock_jj_cls: MagicMock) -> None:
         mock_jj = mock_jj_cls.return_value
-        mock_sub.return_value.stdout = ""
+        _mock_popen(mock_sub)
         mock_jj.bookmark_exists.return_value = False
         mock_jj.is_empty.return_value = True
 
@@ -815,12 +878,12 @@ class TestRunJob:
         assert result.produced_output is False
 
     @patch("repoactive.runner.JJ")
-    @patch("repoactive.runner.subprocess.run")
+    @patch("repoactive.runner.subprocess.Popen")
     def test_existing_bookmark_uses_edit_restore_rebase(
         self, mock_sub: MagicMock, mock_jj_cls: MagicMock
     ) -> None:
         mock_jj = mock_jj_cls.return_value
-        mock_sub.return_value.stdout = ""
+        _mock_popen(mock_sub)
         mock_jj.bookmark_exists.return_value = True
         mock_jj.is_empty.return_value = False
 
@@ -832,12 +895,12 @@ class TestRunJob:
         mock_jj.rebase.assert_called_once_with("trunk()")
 
     @patch("repoactive.runner.JJ")
-    @patch("repoactive.runner.subprocess.run")
+    @patch("repoactive.runner.subprocess.Popen")
     def test_existing_bookmark_multiple_parents_rebase(
         self, mock_sub: MagicMock, mock_jj_cls: MagicMock
     ) -> None:
         mock_jj = mock_jj_cls.return_value
-        mock_sub.return_value.stdout = ""
+        _mock_popen(mock_sub)
         mock_jj.bookmark_exists.return_value = True
         mock_jj.is_empty.return_value = False
 
@@ -852,12 +915,12 @@ class TestRunJob:
         mock_jj.rebase.assert_called_once_with("repoactive/a", "repoactive/b")
 
     @patch("repoactive.runner.JJ")
-    @patch("repoactive.runner.subprocess.run")
+    @patch("repoactive.runner.subprocess.Popen")
     def test_no_existing_bookmark_uses_new(
         self, mock_sub: MagicMock, mock_jj_cls: MagicMock
     ) -> None:
         mock_jj = mock_jj_cls.return_value
-        mock_sub.return_value.stdout = ""
+        _mock_popen(mock_sub)
         mock_jj.bookmark_exists.return_value = False
         mock_jj.is_empty.return_value = False
 

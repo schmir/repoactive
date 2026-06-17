@@ -115,7 +115,8 @@ mr_title_prefix = "[api] "
 # skipped. Format: <number><unit>, unit one of s, m, h, d, w (e.g. "7d").
 cooldown_period = "7d"
 # Optional: maximum runtime for this job's command. When it expires the
-# command process is killed and the job fails. Same format as cooldown_period.
+# command's process group is killed and the job fails. Same format as
+# cooldown_period.
 timeout = "30m"
 
 [[job]]
@@ -296,12 +297,14 @@ message** and with it the trailer, so the cooldown would never trigger.
 ## Limiting job runtime with `timeout`
 
 A job's `command` can hang or run away. Setting `timeout` caps how long the
-command may run; when the limit is reached `repoactive` kills the command
-process and the job fails (its workspace is abandoned, no branch or MR is
-created). The value uses the same `<number><unit>` format as
-`cooldown_period` (e.g. `"30m"`, `"2h"`). `timeout` may be set per job or in
-`job-defaults`; a per-job value overrides the default. With no timeout
-configured the command runs without a time limit.
+command may run; when the limit is reached `repoactive` kills the command's
+whole process group - the shell and any child processes it spawned - and the
+job fails (its workspace is abandoned, no branch or MR is created). The
+command runs in its own session/process group to make this possible. The
+value uses the same `<number><unit>` format as `cooldown_period` (e.g.
+`"30m"`, `"2h"`). `timeout` may be set per job or in `job-defaults`; a
+per-job value overrides the default. With no timeout configured the command
+runs without a time limit.
 
 ## Usage
 

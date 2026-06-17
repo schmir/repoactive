@@ -1,6 +1,8 @@
 import contextlib
 import logging
+import os
 import shutil
+import signal
 import subprocess
 import tempfile
 import time
@@ -129,36 +131,50 @@ def _mr_params(
     )
 
 
+def _kill_process_group(proc: subprocess.Popen[str]) -> None:
+    """SIGKILL the whole process group led by ``proc``.
+
+    The command is started with ``start_new_session=True`` so it leads its own
+    process group; killing the group reaps any children the command spawned, not
+    just the top-level shell."""
+    with contextlib.suppress(ProcessLookupError):
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+
+
 def _run_command(job: Job, ws: JJ) -> CommandResult:
     start = time.monotonic()
+    # start_new_session puts the command in its own process group so a timeout
+    # can kill the whole tree (see _kill_process_group).
+    proc = subprocess.Popen(
+        job.command,
+        shell=True,
+        cwd=ws.cwd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        start_new_session=True,
+    )
     try:
-        proc = subprocess.run(
-            job.command,
-            shell=True,
-            cwd=ws.cwd,
-            check=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            timeout=job.timeout_seconds(),
-        )
-    except subprocess.TimeoutExpired as e:
-        # subprocess.run kills the command process before raising; ``e.output``
-        # holds whatever it printed before the timeout.
+        output, _ = proc.communicate(timeout=job.timeout_seconds())
+    except subprocess.TimeoutExpired:
+        _kill_process_group(proc)
+        # communicate again to reap the killed process and drain its output.
+        output, _ = proc.communicate()
         ws.abandon()
-        output = e.output or ""
+        output = output or ""
         raise CommandError(
             f"command timed out after {job.timeout}" + (f":\n{output}" if output else ""),
             elapsed=time.monotonic() - start,
-        ) from e
-    except subprocess.CalledProcessError as e:
+        ) from None
+    if proc.returncode != 0:
         ws.abandon()
-        output = e.stdout or ""
+        output = output or ""
         raise CommandError(
-            f"command failed with exit code {e.returncode}" + (f":\n{output}" if output else ""),
+            f"command failed with exit code {proc.returncode}"
+            + (f":\n{output}" if output else ""),
             elapsed=time.monotonic() - start,
-        ) from e
-    return CommandResult(output=proc.stdout.strip(), elapsed=time.monotonic() - start)
+        )
+    return CommandResult(output=output.strip(), elapsed=time.monotonic() - start)
 
 
 def _handle_empty(  # noqa: PLR0913
