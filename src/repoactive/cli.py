@@ -212,9 +212,12 @@ def recent_commits(
 
     id_w = max(len(c.commit_id) for c in shown)
     name_w = max(len(c.job_name) for c in shown)
-    ago_w = max(len(c.ago) for c in shown)
+    age_w = max(len(c.relative_age) for c in shown)
     for c in shown:
-        typer.echo(f"{c.commit_id:<{id_w}}  {c.job_name:<{name_w}}  {c.ago:<{ago_w}}  {c.subject}")
+        typer.echo(
+            f"{c.commit_id:<{id_w}}  {c.job_name:<{name_w}}  "
+            f"{c.relative_age:<{age_w}}  {c.subject}"
+        )
 
 
 def main() -> None:

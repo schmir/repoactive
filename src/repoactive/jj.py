@@ -66,7 +66,7 @@ class JobCommit:
     commit_id: str
     job_name: str
     subject: str
-    ago: str
+    relative_age: str
 
 
 class JJ:
@@ -160,7 +160,7 @@ class JJ:
         # so it's safe as a field delimiter. jj templates use the escape form; Python splits on the
         # actual byte.
         sep = "\\x1f"
-        # Field order: commit_id, job_name, ago, subject
+        # Field order: commit_id, job_name, relative_age, subject
         template = f"""
         if(trailers.contains_key("{JOB_TRAILER_KEY}"),
            join("{sep}",
@@ -183,7 +183,7 @@ class JJ:
                     JobCommit(
                         commit_id=parts[0],
                         job_name=parts[1],
-                        ago=parts[2],
+                        relative_age=parts[2],
                         subject=parts[3],
                     )
                 )
