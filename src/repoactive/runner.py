@@ -283,8 +283,8 @@ def run_job(  # noqa: PLR0913
     repo = JJ(repo_path)
     bookmark_existed = repo.bookmark_exists(bookmark)
 
-    tmp_parent = Path(tempfile.mkdtemp(prefix="repoactive_"))
-    workspace_path = tmp_parent / "workspace"
+    tmp_root = Path(tempfile.mkdtemp(prefix="repoactive_"))
+    workspace_path = tmp_root / "workspace"
     ws_name = workspace_name(job.name)
     repo.workspace_add(ws_name, workspace_path)
     ws = JJ(workspace_path)
@@ -319,7 +319,7 @@ def run_job(  # noqa: PLR0913
     finally:
         with contextlib.suppress(JJError):
             repo.workspace_forget(ws_name)
-        shutil.rmtree(tmp_parent, ignore_errors=True)
+        shutil.rmtree(tmp_root, ignore_errors=True)
         with contextlib.suppress(JJError):
             repo.git_worktree_prune()
 
