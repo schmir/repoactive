@@ -138,7 +138,7 @@ class Job(BaseModel):
         return value
 
     @model_validator(mode="after")
-    def _check_disabled_tags(self) -> Job:
+    def _check_disabled_xor_tags(self) -> Job:
         if self.disabled and self.tags:
             raise ValueError(
                 f"job {self.name!r} sets both 'disabled' and 'tags'; "
