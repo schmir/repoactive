@@ -1213,5 +1213,6 @@ class TestRunAll:
 
         run_all(config=_config(a), repo_path=REPO, local=False)
 
-        mock_jj.return_value.op_id.assert_not_called()
+        # op_id is still computed for the debug log, but no restore hint is printed.
+        mock_jj.return_value.op_id.assert_called_once_with()
         assert "jj op restore" not in capsys.readouterr().out

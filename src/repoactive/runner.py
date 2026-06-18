@@ -285,22 +285,33 @@ def run_job(  # noqa: PLR0913
     bookmark = job.branch_name()
     repo = JJ(repo_path)
     bookmark_existed = repo.bookmark_exists(bookmark)
+    logger.debug("[%s] bookmark %s exists=%s", job.name, bookmark, bookmark_existed)
 
     tmp_root = Path(tempfile.mkdtemp(prefix="repoactive_"))
     workspace_path = tmp_root / "workspace"
     ws_name = workspace_name(job.name)
+    logger.debug("[%s] adding workspace %s at %s", job.name, ws_name, workspace_path)
     repo.workspace_add(ws_name, workspace_path)
     ws = JJ(workspace_path)
     try:
         if bookmark_existed:
+            logger.debug("[%s] reusing existing bookmark, rebasing on parents", job.name)
             ws.edit(bookmark)
             ws.rebase(*parents)
             ws.restore(bookmark)
         else:
             ws.new(*parents)
         ws.git_sync_head()
+        logger.debug("[%s] running command: %s", job.name, job.command)
         command_result = _run_command(job, ws)
+        logger.debug(
+            "[%s] command finished in %.3fs, %d bytes output",
+            job.name,
+            command_result.elapsed,
+            len(command_result.output),
+        )
         if ws.is_empty():
+            logger.debug("[%s] working copy is empty, no diff produced", job.name)
             return _handle_empty(
                 job=job,
                 bookmark=bookmark,
@@ -320,6 +331,7 @@ def run_job(  # noqa: PLR0913
             local=local,
         )
     finally:
+        logger.debug("[%s] cleaning up workspace %s", job.name, ws_name)
         with contextlib.suppress(JJError):
             repo.workspace_forget(ws_name)
         shutil.rmtree(tmp_root, ignore_errors=True)
@@ -334,7 +346,15 @@ def _on_cooldown(job: Job, repo_path: Path) -> bool:
         return False
     base = job.base_branch or "trunk()"
     since = datetime.now(UTC) - delta
-    return JJ(repo_path).has_recent_job_commit(job.name, base, since)
+    on_cooldown = JJ(repo_path).has_recent_job_commit(job.name, base, since)
+    logger.debug(
+        "[%s] cooldown check: base=%s since=%s -> on_cooldown=%s",
+        job.name,
+        base,
+        since.isoformat(),
+        on_cooldown,
+    )
+    return on_cooldown
 
 
 def _include_dependencies(jobs: list[Job], selected: set[str]) -> None:
@@ -390,7 +410,15 @@ def _select_jobs(
         selected.update(refresh_jobs & {j.name for j in jobs})
         _include_dependencies(jobs, selected)
 
-    return [j for j in jobs if j.name in selected]
+    result = [j for j in jobs if j.name in selected]
+    logger.debug(
+        "selected jobs: %s (requested=%s, tags=%s, refresh=%s)",
+        [j.name for j in result],
+        sorted(requested_jobs),
+        sorted(requested_tags),
+        sorted(refresh_jobs),
+    )
+    return result
 
 
 def run_all(  # noqa: PLR0913
@@ -403,17 +431,26 @@ def run_all(  # noqa: PLR0913
     local: bool = False,
 ) -> RunSummary:
     repo = JJ(repo_path)
+    op_id = repo.op_id()
+    logger.debug(
+        "run_all: repo=%s local=%s requested_jobs=%s requested_tags=%s op_id=%s",
+        repo_path,
+        local,
+        requested_jobs,
+        requested_tags,
+        op_id,
+    )
     # Drop any temporary workspaces a previous, killed run left behind before we
     # start adding fresh ones.
     repo.forget_stale_workspaces()
 
-    # For a local run, capture the operation id up front and tell the user how to
-    # roll it back. Only local state can be undone this way - a pushed branch or a
-    # created MR is not - so the hint is suppressed for --push/--create-prs runs.
-    # Printed again at the end since a run can produce a lot of output.
+    # For a local run, tell the user how to roll it back. Only local state can be
+    # undone this way - a pushed branch or a created MR is not - so the hint is
+    # suppressed for --push/--create-prs runs. Printed again at the end since a
+    # run can produce a lot of output.
     restore_hint: str | None = None
     if local:
-        restore_hint = f"To undo this run, run:\n    jj op restore {repo.op_id()}"
+        restore_hint = f"To undo this run, run:\n    jj op restore {op_id}"
         print(restore_hint + "\n")
 
     # On the bare default run, also refresh jobs with an unmerged branch so a
@@ -446,6 +483,7 @@ def run_all(  # noqa: PLR0913
 
         resolved_job = job.resolve(config.job_defaults)
         parents = _compute_parents(resolved_job, summary.results)
+        logger.debug("[%s] computed parents: %s", job.name, parents)
         if _on_cooldown(resolved_job, repo_path):
             print(f"==> [{job.name}] on cooldown ({resolved_job.cooldown_period}), skipped")
             summary.cooldown.add(job.name)
