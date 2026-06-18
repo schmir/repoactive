@@ -18,6 +18,10 @@ ci:
     uv run nox -s validate_config
     uv run nox -s check_schema
 
+# Run pyright (bundled node.js) over src and tests
+pyright:
+    uvx 'pyright[nodejs]'
+
 # Write the config JSON schema to config-schema.json
 dump-schema:
     uv run repoactive dump-schema -o config-schema.json
