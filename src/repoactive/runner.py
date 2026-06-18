@@ -227,9 +227,12 @@ def _publish_job(  # noqa: PLR0913
     # it lets later runs detect when this job last landed (see cooldown handling).
     commit_message += f"\n\n{JOB_TRAILER_KEY}: {job.name}"
     ws.describe(commit_message)
+    change_id = ws.current_change_id()
 
     if local:
-        print(f"==> [{job.name}] bookmark set (local) ({command_result.elapsed:.1f}s)")
+        print(
+            f"==> [{job.name}] bookmark set (local) [{change_id}] ({command_result.elapsed:.1f}s)"
+        )
         if stat:
             print("\n".join(f"    {line}" for line in stat.splitlines()))
             print()
@@ -252,9 +255,9 @@ def _publish_job(  # noqa: PLR0913
             dep_mr_urls=dep_mr_urls,
         )
         mr_url = platform.ensure_mr(params)
-        print(f"==> [{job.name}] {mr_url} ({command_result.elapsed:.1f}s)")
+        print(f"==> [{job.name}] {mr_url} [{change_id}] ({command_result.elapsed:.1f}s)")
     else:
-        print(f"==> [{job.name}] pushed ({command_result.elapsed:.1f}s)")
+        print(f"==> [{job.name}] pushed [{change_id}] ({command_result.elapsed:.1f}s)")
     if stat:
         print("\n".join(f"    {line}" for line in stat.splitlines()))
         print()

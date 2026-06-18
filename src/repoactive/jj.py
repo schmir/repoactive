@@ -64,6 +64,7 @@ class Bookmark:
 @dataclass
 class JobCommit:
     commit_id: str
+    change_id: str
     job_name: str
     subject: str
     relative_age: str
@@ -147,6 +148,10 @@ class JJ:
     def describe(self, message: str) -> None:
         self._run("describe", "--message", message)
 
+    def current_change_id(self, revision: str = "@") -> str:
+        """Return the short change id of ``revision`` (the working copy by default)."""
+        return self._run("log", "--no-graph", "-r", revision, "-T", "change_id.short()").strip()
+
     def recent_job_commits(self, since: datetime, revset: str = "all()") -> list[JobCommit]:
         """Return commits matching ``revset`` within ``since`` that carry a repoactive job trailer.
 
@@ -160,11 +165,12 @@ class JJ:
         # so it's safe as a field delimiter. jj templates use the escape form; Python splits on the
         # actual byte.
         sep = "\\x1f"
-        # Field order: commit_id, job_name, relative_age, subject
+        # Field order: commit_id, change_id, job_name, relative_age, subject
         template = f"""
         if(trailers.contains_key("{JOB_TRAILER_KEY}"),
            join("{sep}",
              commit_id.short(),
+             change_id.short(),
              trailers.filter(|t| t.key() == "{JOB_TRAILER_KEY}").map(|t| t.value()).join(","),
              committer.timestamp().local().ago(),
              description.first_line()
@@ -177,14 +183,15 @@ class JJ:
         for line in output.splitlines():
             if not line:
                 continue
-            parts = line.split("\x1f", 3)
-            if len(parts) == 4:  # noqa: PLR2004
+            parts = line.split("\x1f", 4)
+            if len(parts) == 5:  # noqa: PLR2004
                 result.append(
                     JobCommit(
                         commit_id=parts[0],
-                        job_name=parts[1],
-                        relative_age=parts[2],
-                        subject=parts[3],
+                        change_id=parts[1],
+                        job_name=parts[2],
+                        relative_age=parts[3],
+                        subject=parts[4],
                     )
                 )
         return result
