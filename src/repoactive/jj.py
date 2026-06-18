@@ -88,6 +88,14 @@ class JJ:
         except subprocess.CalledProcessError as e:
             raise JJError(f"jj {' '.join(args)} failed:\n{e.stderr.strip()}") from e
 
+    def op_id(self) -> str:
+        """The current operation id.
+
+        Captured at the start of a run so the user can be told the exact
+        ``jj op restore`` command that rolls the repository back to this state.
+        """
+        return self._run("op", "log", "--no-graph", "--limit", "1", "-T", "id.short()").strip()
+
     def new(self, *parents: str) -> None:
         self._run("new", *parents)
 

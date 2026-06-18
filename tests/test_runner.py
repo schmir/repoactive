@@ -939,6 +939,7 @@ class TestRunAll:
         with patch("repoactive.runner.JJ") as cls:
             cls.return_value.unmerged_job_names.return_value = set()
             cls.return_value.has_recent_job_commit.return_value = False
+            cls.return_value.op_id.return_value = "OP-START"
             yield cls
 
     @patch("repoactive.runner.run_job")
@@ -1188,3 +1189,29 @@ class TestRunAll:
         mock_jj.return_value.unmerged_job_names.assert_not_called()
         called_names = {c.kwargs["job"].name for c in mock_run_job.call_args_list}
         assert called_names == {"a"}
+
+    @patch("repoactive.runner.run_job")
+    def test_local_run_prints_restore_hint_before_and_after(
+        self, mock_run_job: MagicMock, mock_jj: MagicMock, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        a = _job("a")
+        mock_run_job.return_value = _result(a, revsets=["repoactive/a"])
+
+        run_all(config=_config(a), repo_path=REPO, local=True)
+
+        mock_jj.return_value.op_id.assert_called_once_with()
+        out = capsys.readouterr().out
+        assert out.count("jj op restore OP-START") == 2  # noqa: PLR2004
+
+    @patch("repoactive.runner.run_job")
+    def test_non_local_run_omits_restore_hint(
+        self, mock_run_job: MagicMock, mock_jj: MagicMock, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # A pushing run can't be undone with jj op restore, so don't suggest it.
+        a = _job("a")
+        mock_run_job.return_value = _result(a, revsets=["repoactive/a"])
+
+        run_all(config=_config(a), repo_path=REPO, local=False)
+
+        mock_jj.return_value.op_id.assert_not_called()
+        assert "jj op restore" not in capsys.readouterr().out

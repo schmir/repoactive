@@ -349,6 +349,14 @@ repoactive run --debug
 | `--tag TAG`     | `-t`  | Run jobs carrying any of these tags (repeatable). With no tags/jobs the default run targets the `enabled` tag                |
 | `--debug`       | `-d`  | Enable debug logging                                                                                                         |
 
+A local `run` (without `--push`/`--create-prs`) captures the jj operation id
+beforehand and prints a `jj op restore <id>` command (both before and after
+the run, since a run can produce a lot of output). Run it to roll the
+repository - commits, bookmarks and colocated git refs - back to the state
+it was in before the run. The hint is omitted for `--push`/`--create-prs`
+runs, since restoring local state would not undo a branch already pushed or
+an MR already created.
+
 ## Inspecting repoactive commits
 
 ```

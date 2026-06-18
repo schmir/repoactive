@@ -399,15 +399,25 @@ def run_all(  # noqa: PLR0913
     requested_tags: list[str] | None = None,
     local: bool = False,
 ) -> RunSummary:
+    repo = JJ(repo_path)
     # Drop any temporary workspaces a previous, killed run left behind before we
     # start adding fresh ones.
-    JJ(repo_path).forget_stale_workspaces()
+    repo.forget_stale_workspaces()
+
+    # For a local run, capture the operation id up front and tell the user how to
+    # roll it back. Only local state can be undone this way - a pushed branch or a
+    # created MR is not - so the hint is suppressed for --push/--create-prs runs.
+    # Printed again at the end since a run can produce a lot of output.
+    restore_hint: str | None = None
+    if local:
+        restore_hint = f"To undo this run, run:\n    jj op restore {repo.op_id()}"
+        print(restore_hint + "\n")
 
     # On the bare default run, also refresh jobs with an unmerged branch so a
     # stale branch is rebased on trunk now rather than at the job's next run.
     refresh_jobs: set[str] = set()
     if not requested_jobs and not requested_tags:
-        refresh_jobs = JJ(repo_path).unmerged_job_names() & {j.name for j in config.jobs}
+        refresh_jobs = repo.unmerged_job_names() & {j.name for j in config.jobs}
         if refresh_jobs:
             print(f"==> refreshing unmerged branches: {', '.join(sorted(refresh_jobs))}")
         else:
@@ -468,4 +478,6 @@ def run_all(  # noqa: PLR0913
             blocked.add(job.name)
 
     summary.print_report()
+    if restore_hint is not None:
+        print("\n" + restore_hint)
     return summary

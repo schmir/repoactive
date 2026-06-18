@@ -59,6 +59,16 @@ class TestNew:
         assert mock_run.call_args == _call("new", "repoactive/a", "repoactive/b")
 
 
+class TestOp:
+    @patch("repoactive.jj.subprocess.run")
+    def test_op_id_returns_stripped_id(self, mock_run: MagicMock) -> None:
+        mock_run.return_value.stdout = "abc123\n"
+        assert _jj().op_id() == "abc123"
+        assert mock_run.call_args == _call(
+            "op", "log", "--no-graph", "--limit", "1", "-T", "id.short()"
+        )
+
+
 class TestBookmarkSet:
     @patch("repoactive.jj.subprocess.run")
     def test_sets_bookmark_at_working_copy(self, mock_run: MagicMock) -> None:
