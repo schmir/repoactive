@@ -2,6 +2,7 @@ import logging
 import shutil
 import subprocess
 import tempfile
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -77,6 +78,8 @@ class JJ:
         self.cwd = cwd
 
     def _run(self, *args: str) -> str:
+        logger.debug("jj %s (cwd=%s)", " ".join(args), self.cwd)
+        start = time.monotonic()
         try:
             result = subprocess.run(
                 ["jj", "--no-pager", "--color=never", *args],
@@ -85,9 +88,18 @@ class JJ:
                 text=True,
                 check=True,
             )
-            return result.stdout
         except subprocess.CalledProcessError as e:
+            logger.debug(
+                "jj %s failed (rc=%s):\n%s", " ".join(args), e.returncode, e.stderr.strip()
+            )
             raise JJError(f"jj {' '.join(args)} failed:\n{e.stderr.strip()}") from e
+        logger.debug(
+            "jj %s -> %d bytes in %.3fs",
+            " ".join(args),
+            len(result.stdout),
+            time.monotonic() - start,
+        )
+        return result.stdout
 
     def op_id(self) -> str:
         """The current operation id.
@@ -259,17 +271,22 @@ class JJ:
         raise JJError(f"Remote '{remote}' not found")
 
     def _git(self, *args: str, cwd: Path | None = None) -> str:
+        run_cwd = cwd or self.cwd
+        logger.debug("git %s (cwd=%s)", " ".join(args), run_cwd)
         try:
             result = subprocess.run(
                 ["git", *args],
-                cwd=cwd or self.cwd,
+                cwd=run_cwd,
                 capture_output=True,
                 text=True,
                 check=True,
             )
-            return result.stdout
         except subprocess.CalledProcessError as e:
+            logger.debug(
+                "git %s failed (rc=%s):\n%s", " ".join(args), e.returncode, e.stderr.strip()
+            )
             raise JJError(f"git {' '.join(args)} failed:\n{e.stderr.strip()}") from e
+        return result.stdout
 
     def is_colocated(self) -> bool:
         return (self.cwd / ".git").exists()
