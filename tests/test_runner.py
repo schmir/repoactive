@@ -508,6 +508,25 @@ class TestRunCommand:
             time.sleep(0.05)
         assert not _alive(child_pid), "backgrounded child survived the timeout kill"
 
+    def test_non_utf8_output_does_not_crash(self, tmp_path: Path) -> None:
+        # A command may emit arbitrary bytes; an undecodable byte must be
+        # replaced rather than raising UnicodeDecodeError and crashing the run.
+        job = Job(
+            # \377 is octal for 0xff: POSIX printf supports octal escapes
+            # everywhere, but \xHH hex escapes are not portable (dash omits them).
+            name="foo",
+            command=r"printf '\377'",
+            title="t",
+            branch_prefix="repoactive/",
+            commit_title_prefix="",
+        )
+        ws = MagicMock()
+        ws.cwd = tmp_path
+
+        result = _run_command(job, ws)
+
+        assert result.output == "�"  # U+FFFD REPLACEMENT CHARACTER
+
 
 class TestRunJob:
     @patch("repoactive.runner.JJ")

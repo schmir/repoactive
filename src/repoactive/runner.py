@@ -152,6 +152,10 @@ def _run_command(job: Job, ws: JJ) -> CommandResult:
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
+        # Decode as UTF-8 and never raise on undecodable bytes: a job command may
+        # emit arbitrary output, and a decode error must not crash the run.
+        encoding="utf-8",
+        errors="replace",
         start_new_session=True,
     )
     try:
