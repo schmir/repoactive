@@ -13,13 +13,14 @@ from repoactive.runner import (
     CommandError,
     JobResult,
     _compute_parents,
-    _mr_params,
     _run_command,
     _select_jobs,
     _topological_sort,
+    apply_plan,
     run_all,
     run_job,
 )
+from repoactive.updates import BookmarkPush, JobUpdate, MRUpdate, UpdatePlan
 
 
 def _job(  # noqa: PLR0913
@@ -358,119 +359,6 @@ class TestJobResolve:
         assert resolved.base_branch is None
 
 
-_BM = "repoactive/x"
-_BASE_BRANCH = "main"
-
-
-class TestMrParams:
-    def test_labels_used(self) -> None:
-        job = _job("x", labels=["auto", "feat"])
-        params = _mr_params(job=job, bookmark=_BM, base_branch=_BASE_BRANCH)
-        assert params.labels == ["auto", "feat"]
-
-    def test_description_falls_back_to_empty(self) -> None:
-        params = _mr_params(job=_job("x"), bookmark=_BM, base_branch=_BASE_BRANCH)
-        assert params.description == ""
-
-    def test_description_used_when_set(self) -> None:
-        job = _job("x", description="Details.")
-        params = _mr_params(job=job, bookmark=_BM, base_branch=_BASE_BRANCH)
-        assert params.description == "Details."
-
-    def test_command_output_appended(self) -> None:
-        params = _mr_params(
-            job=_job("x"),
-            bookmark=_BM,
-            base_branch=_BASE_BRANCH,
-            command_output="some output",
-        )
-        assert params.description == "```\n$ cmd-x\nsome output\n```"
-
-    def test_command_output_appended_after_description(self) -> None:
-        params = _mr_params(
-            job=_job("x", description="Details."),
-            bookmark=_BM,
-            base_branch=_BASE_BRANCH,
-            command_output="some output",
-        )
-        assert params.description == "Details.\n\n```\n$ cmd-x\nsome output\n```"
-
-    def test_empty_command_output_not_appended(self) -> None:
-        job = _job("x", description="Details.")
-        params = _mr_params(
-            job=job,
-            bookmark=_BM,
-            base_branch=_BASE_BRANCH,
-            command_output="",
-        )
-        assert params.description == "Details."
-
-    def test_title_prefix_applied(self) -> None:
-        params = _mr_params(
-            job=_job("x", mr_title_prefix="[bot] "),
-            bookmark=_BM,
-            base_branch=_BASE_BRANCH,
-        )
-        assert params.title == "[bot] Change x"
-
-    def test_empty_title_prefix(self) -> None:
-        params = _mr_params(
-            job=_job("x", mr_title_prefix=""), bookmark=_BM, base_branch=_BASE_BRANCH
-        )
-        assert params.title == "Change x"
-
-    def test_draft_forwarded(self) -> None:
-        job = Job(name="x", command="cmd", title="X", draft=True, mr_title_prefix="")
-        params = _mr_params(job=job, bookmark=_BM, base_branch=_BASE_BRANCH)
-        assert params.draft is True
-
-    def test_dep_mr_urls_included(self) -> None:
-        params = _mr_params(
-            job=_job("x"),
-            bookmark=_BM,
-            base_branch=_BASE_BRANCH,
-            dep_mr_urls=[("Dep A", "https://example.com/mr/1")],
-        )
-        assert params.description == "Depends on:\n- [Dep A](https://example.com/mr/1)"
-
-    def test_dep_mr_urls_multiple(self) -> None:
-        params = _mr_params(
-            job=_job("x"),
-            bookmark=_BM,
-            base_branch=_BASE_BRANCH,
-            dep_mr_urls=[
-                ("Dep A", "https://example.com/mr/1"),
-                ("Dep B", "https://example.com/mr/2"),
-            ],
-        )
-        assert params.description == (
-            "Depends on:\n- [Dep A](https://example.com/mr/1)\n- [Dep B](https://example.com/mr/2)"
-        )
-
-    def test_dep_mr_urls_after_description(self) -> None:
-        params = _mr_params(
-            job=_job("x", description="Details."),
-            bookmark=_BM,
-            base_branch=_BASE_BRANCH,
-            dep_mr_urls=[("Dep A", "https://example.com/mr/1")],
-        )
-        assert params.description == (
-            "Details.\n\nDepends on:\n- [Dep A](https://example.com/mr/1)"
-        )
-
-    def test_dep_mr_urls_before_command_output(self) -> None:
-        params = _mr_params(
-            job=_job("x"),
-            bookmark=_BM,
-            base_branch=_BASE_BRANCH,
-            command_output="some output",
-            dep_mr_urls=[("Dep A", "https://example.com/mr/1")],
-        )
-        assert params.description == (
-            "Depends on:\n- [Dep A](https://example.com/mr/1)\n\n```\n$ cmd-x\nsome output\n```"
-        )
-
-
 def _alive(pid: int) -> bool:
     """Whether ``pid`` still names a live (non-reaped) process."""
     try:
@@ -543,10 +431,13 @@ class TestRunJob:
         mock_jj.new.assert_called_once_with("trunk()")
         mock_jj.bookmark_set.assert_called_once_with("repoactive/foo")
         mock_jj.describe.assert_called_once_with("Change foo\n\nRepoactive-Job: foo")
-        mock_jj.git_push_bookmarks.assert_called_once_with("repoactive/foo")
+        # The push is recorded for the apply phase, not performed during the run.
+        mock_jj.git_push_bookmarks.assert_not_called()
         mock_jj.abandon.assert_not_called()
         assert result.produced_output is True
         assert result.effective_revsets == ["repoactive/foo"]
+        assert result.update is not None
+        assert result.update.push == BookmarkPush(bookmark="repoactive/foo")
 
     @patch("repoactive.runner.JJ")
     @patch("repoactive.runner.subprocess.Popen")
@@ -652,10 +543,14 @@ class TestRunJob:
 
         mock_jj.abandon.assert_called_once_with()
         mock_jj.bookmark_delete.assert_called_once_with("repoactive/foo")
-        mock_jj.git_push_bookmarks.assert_called_once_with("repoactive/foo")
+        # The remote deletion is deferred: recorded as a delete push, not pushed now.
+        mock_jj.git_push_bookmarks.assert_not_called()
         mock_jj.bookmark_set.assert_not_called()
         assert result.produced_output is False
         assert result.effective_revsets == ["trunk()"]
+        assert result.update is not None
+        assert result.update.push == BookmarkPush(bookmark="repoactive/foo", delete=True)
+        assert result.update.mr is None
 
     @patch("repoactive.runner.JJ")
     @patch("repoactive.runner.subprocess.Popen")
@@ -667,10 +562,14 @@ class TestRunJob:
         mock_jj.bookmark_exists.return_value = True
         mock_jj.is_empty.return_value = True
 
-        run_job(job=_job("foo"), parents=["trunk()"], repo_path=REPO, platform=None, local=True)
+        result = run_job(
+            job=_job("foo"), parents=["trunk()"], repo_path=REPO, platform=None, local=True
+        )
 
         mock_jj.bookmark_delete.assert_called_once_with("repoactive/foo")
         mock_jj.git_push_bookmarks.assert_not_called()
+        # A local run collects nothing to apply.
+        assert result.update is None
 
     @patch("repoactive.runner.JJ")
     @patch("repoactive.runner.subprocess.Popen")
@@ -781,7 +680,7 @@ class TestRunJob:
 
     @patch("repoactive.runner.JJ")
     @patch("repoactive.runner.subprocess.Popen")
-    def test_command_output_in_mr_description(
+    def test_command_output_in_mr_update(
         self, mock_sub: MagicMock, mock_jj_cls: MagicMock
     ) -> None:
         mock_jj = mock_jj_cls.return_value
@@ -790,28 +689,6 @@ class TestRunJob:
         mock_jj.is_empty.return_value = False
         platform = MagicMock()
         platform.default_branch.return_value = "main"
-        platform.ensure_mr.return_value = "https://gitlab.example.com/mr/1"
-
-        run_job(
-            job=_job("foo"),
-            parents=["trunk()"],
-            repo_path=REPO,
-            platform=platform,
-        )
-
-        params = platform.ensure_mr.call_args[0][0]
-        assert "```\n$ cmd-foo\nCopied file foo -> bar\n```" in params.description
-
-    @patch("repoactive.runner.JJ")
-    @patch("repoactive.runner.subprocess.Popen")
-    def test_calls_platform_ensure_mr(self, mock_sub: MagicMock, mock_jj_cls: MagicMock) -> None:
-        mock_jj = mock_jj_cls.return_value
-        _mock_popen(mock_sub)
-        mock_jj.bookmark_exists.return_value = False
-        mock_jj.is_empty.return_value = False
-        platform = MagicMock()
-        platform.default_branch.return_value = "main"
-        platform.ensure_mr.return_value = "https://gitlab.example.com/mr/1"
 
         result = run_job(
             job=_job("foo"),
@@ -820,12 +697,42 @@ class TestRunJob:
             platform=platform,
         )
 
-        platform.ensure_mr.assert_called_once()
-        assert result.mr_url == "https://gitlab.example.com/mr/1"
+        # The MR is not created during the run; the command output is recorded
+        # for the apply phase to render.
+        platform.ensure_mr.assert_not_called()
+        assert result.update is not None
+        assert result.update.mr is not None
+        assert result.update.mr.command == "cmd-foo"
+        assert result.update.mr.command_output == "Copied file foo -> bar"
 
     @patch("repoactive.runner.JJ")
     @patch("repoactive.runner.subprocess.Popen")
-    def test_create_mr_false_skips_ensure_mr(
+    def test_records_mr_update(self, mock_sub: MagicMock, mock_jj_cls: MagicMock) -> None:
+        mock_jj = mock_jj_cls.return_value
+        _mock_popen(mock_sub)
+        mock_jj.bookmark_exists.return_value = False
+        mock_jj.is_empty.return_value = False
+        platform = MagicMock()
+        platform.default_branch.return_value = "main"
+
+        result = run_job(
+            job=_job("foo"),
+            parents=["trunk()"],
+            repo_path=REPO,
+            platform=platform,
+        )
+
+        # No MR is created during the run; it is recorded for the apply phase.
+        platform.ensure_mr.assert_not_called()
+        assert result.mr_url is None
+        assert result.update is not None
+        assert result.update.mr is not None
+        assert result.update.mr.source_branch == "repoactive/foo"
+        assert result.update.mr.target_branch == "main"
+
+    @patch("repoactive.runner.JJ")
+    @patch("repoactive.runner.subprocess.Popen")
+    def test_create_mr_false_records_no_mr(
         self, mock_sub: MagicMock, mock_jj_cls: MagicMock
     ) -> None:
         mock_jj = mock_jj_cls.return_value
@@ -852,6 +759,10 @@ class TestRunJob:
         platform.ensure_mr.assert_not_called()
         assert result.mr_url is None
         assert result.produced_output is True
+        # A push is still recorded, but with no MR.
+        assert result.update is not None
+        assert result.update.push == BookmarkPush(bookmark="repoactive/foo")
+        assert result.update.mr is None
 
     @patch("repoactive.runner.JJ")
     @patch("repoactive.runner.subprocess.Popen")
@@ -874,6 +785,8 @@ class TestRunJob:
         platform.ensure_mr.assert_not_called()
         assert result.produced_output is True
         assert result.effective_revsets == ["repoactive/foo"]
+        # A local run collects nothing to apply.
+        assert result.update is None
 
     @patch("repoactive.runner.JJ")
     @patch("repoactive.runner.subprocess.Popen")
@@ -951,6 +864,110 @@ class TestRunJob:
         mock_jj.rebase.assert_not_called()
 
 
+def _push_update(name: str) -> JobUpdate:
+    return JobUpdate(
+        job_name=name,
+        title=f"Change {name}",
+        push=BookmarkPush(bookmark=f"repoactive/{name}"),
+    )
+
+
+def _mr_update(name: str, *, depends_on: list[str] | None = None) -> JobUpdate:
+    return JobUpdate(
+        job_name=name,
+        title=f"Change {name}",
+        push=BookmarkPush(bookmark=f"repoactive/{name}"),
+        mr=MRUpdate(
+            source_branch=f"repoactive/{name}",
+            target_branch="main",
+            title=f"[bot] Change {name}",
+            description="",
+            command=f"cmd-{name}",
+            command_output="",
+            labels=["auto"],
+            draft=False,
+            depends_on=depends_on or [],
+        ),
+    )
+
+
+class TestApplyPlan:
+    @patch("repoactive.runner.JJ")
+    def test_empty_plan_is_noop(self, mock_jj_cls: MagicMock) -> None:
+        platform = MagicMock()
+
+        urls = apply_plan(UpdatePlan(), repo_path=REPO, platform=platform)
+
+        assert urls == {}
+        mock_jj_cls.return_value.git_push_bookmarks.assert_not_called()
+        platform.ensure_mr.assert_not_called()
+
+    @patch("repoactive.runner.JJ")
+    def test_pushes_bookmark_without_mr(self, mock_jj_cls: MagicMock) -> None:
+        plan = UpdatePlan(updates=[_push_update("a")])
+
+        urls = apply_plan(plan, repo_path=REPO, platform=None)
+
+        mock_jj_cls.return_value.git_push_bookmarks.assert_called_once_with("repoactive/a")
+        assert urls == {}
+
+    @patch("repoactive.runner.JJ")
+    def test_delete_push_propagated(self, mock_jj_cls: MagicMock) -> None:
+        plan = UpdatePlan(
+            updates=[
+                JobUpdate(
+                    job_name="a",
+                    title="Change a",
+                    push=BookmarkPush(bookmark="repoactive/a", delete=True),
+                )
+            ]
+        )
+
+        apply_plan(plan, repo_path=REPO, platform=MagicMock())
+
+        mock_jj_cls.return_value.git_push_bookmarks.assert_called_once_with("repoactive/a")
+
+    @patch("repoactive.runner.JJ")
+    def test_creates_mr_with_params(self, mock_jj_cls: MagicMock) -> None:
+        platform = MagicMock()
+        platform.ensure_mr.return_value = "https://example.com/mr/1"
+        plan = UpdatePlan(updates=[_mr_update("a")])
+
+        urls = apply_plan(plan, repo_path=REPO, platform=platform)
+
+        mock_jj_cls.return_value.git_push_bookmarks.assert_called_once_with("repoactive/a")
+        params = platform.ensure_mr.call_args[0][0]
+        assert params.source_branch == "repoactive/a"
+        assert params.target_branch == "main"
+        assert params.title == "[bot] Change a"
+        assert params.labels == ["auto"]
+        assert params.draft is False
+        assert urls == {"a": "https://example.com/mr/1"}
+
+    @patch("repoactive.runner.JJ")
+    def test_dependency_url_resolved_in_order(self, mock_jj_cls: MagicMock) -> None:
+        platform = MagicMock()
+        platform.ensure_mr.side_effect = [
+            "https://example.com/mr/a",
+            "https://example.com/mr/b",
+        ]
+        plan = UpdatePlan(updates=[_mr_update("a"), _mr_update("b", depends_on=["a"])])
+
+        apply_plan(plan, repo_path=REPO, platform=platform)
+
+        b_params = platform.ensure_mr.call_args_list[1][0][0]
+        assert b_params.description == "Depends on:\n- [Change a](https://example.com/mr/a)"
+
+    @patch("repoactive.runner.JJ")
+    def test_mr_skipped_without_platform(self, mock_jj_cls: MagicMock) -> None:
+        plan = UpdatePlan(updates=[_mr_update("a")])
+
+        urls = apply_plan(plan, repo_path=REPO, platform=None)
+
+        mock_jj_cls.return_value.git_push_bookmarks.assert_called_once_with("repoactive/a")
+        assert urls == {}
+
+
 class TestRunAll:
     @pytest.fixture(autouse=True)
     def mock_jj(self) -> Iterator[MagicMock]:
@@ -972,6 +989,22 @@ class TestRunAll:
         assert called_names == {"a", "b"}
         assert not summary.failed
         assert not summary.skipped
+
+    @patch("repoactive.runner.run_job")
+    def test_collected_plan_is_applied(self, mock_run_job: MagicMock, mock_jj: MagicMock) -> None:
+        a = _job("a")
+        result = _result(a, revsets=["repoactive/a"])
+        result.update = _mr_update("a")
+        mock_run_job.return_value = result
+        platform = MagicMock()
+        platform.ensure_mr.return_value = "https://example.com/mr/a"
+
+        summary = run_all(config=_config(a), repo_path=REPO, platform=platform)
+
+        mock_jj.return_value.git_push_bookmarks.assert_called_once_with("repoactive/a")
+        platform.ensure_mr.assert_called_once()
+        # The MR URL is written back into the summary by the apply phase.
+        assert summary.results["a"].mr_url == "https://example.com/mr/a"
 
     @patch("repoactive.runner.run_job")
     def test_failed_job_skips_dependents(self, mock_run_job: MagicMock) -> None:

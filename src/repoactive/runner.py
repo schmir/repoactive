@@ -13,6 +13,13 @@ from pathlib import Path
 from repoactive.config import DEFAULT_TAG, Config, Job
 from repoactive.jj import JJ, JOB_TRAILER_KEY, JJError, workspace_name
 from repoactive.platforms.base import MRParams, Platform
+from repoactive.updates import (
+    BookmarkPush,
+    JobUpdate,
+    MRUpdate,
+    UpdatePlan,
+    build_mr_description,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +47,10 @@ class JobResult:
     # on (if the command produced nothing and the change was abandoned).
     effective_revsets: list[str]
     produced_output: bool
+    # Pending remote operations for this job, collected during the run and
+    # carried out later by apply_plan. None for cooldown/local runs.
+    update: JobUpdate | None = None
+    # Filled in by the apply phase once the MR has been created.
     mr_url: str | None = None
     command_output: str = ""
 
@@ -103,34 +114,6 @@ def _compute_parents(job: Job, results: dict[str, JobResult]) -> list[str]:
     return parents
 
 
-def _mr_params(
-    *,
-    job: Job,
-    bookmark: str,
-    base_branch: str,
-    command_output: str = "",
-    dep_mr_urls: list[tuple[str, str]] | None = None,
-) -> MRParams:
-    description = job.description or ""
-    if dep_mr_urls:
-        if description:
-            description += "\n\n"
-        links = "\n".join(f"- [{title}]({url})" for title, url in dep_mr_urls)
-        description += f"Depends on:\n{links}"
-    if command_output:
-        if description:
-            description += "\n\n"
-        description += f"```\n$ {job.command}\n{command_output}\n```"
-    return MRParams(
-        source_branch=bookmark,
-        target_branch=base_branch,
-        title=f"{job.mr_title_prefix}{job.title}",
-        description=description,
-        labels=job.labels,
-        draft=job.draft,
-    )
-
-
 def _kill_process_group(proc: subprocess.Popen[str]) -> None:
     """SIGKILL the whole process group led by ``proc``.
 
@@ -192,10 +175,17 @@ def _handle_empty(  # noqa: PLR0913
     local: bool = False,
 ) -> JobResult:
     ws.abandon()
+    update: JobUpdate | None = None
     if bookmark_existed:
         ws.bookmark_delete(bookmark)
+        # The remote deletion is deferred to the apply phase (skipped for a
+        # local run, where there is nothing to push).
         if not local:
-            ws.git_push_bookmarks(bookmark)
+            update = JobUpdate(
+                job_name=job.name,
+                title=job.title,
+                push=BookmarkPush(bookmark=bookmark, delete=True),
+            )
         print(f"==> [{job.name}] no changes, bookmark deleted ({command_result.elapsed:.1f}s)")
     else:
         print(f"==> [{job.name}] no changes ({command_result.elapsed:.1f}s)")
@@ -203,6 +193,7 @@ def _handle_empty(  # noqa: PLR0913
         job=job,
         effective_revsets=parents,
         produced_output=False,
+        update=update,
         command_output=command_result.output,
     )
 
@@ -214,7 +205,6 @@ def _publish_job(  # noqa: PLR0913
     ws: JJ,
     platform: Platform | None,
     command_result: CommandResult,
-    dep_mr_urls: list[tuple[str, str]] | None,
     local: bool = False,
 ) -> JobResult:
     stat = ws.diff_stat()
@@ -237,51 +227,52 @@ def _publish_job(  # noqa: PLR0913
         print(
             f"==> [{job.name}] bookmark set (local) [{change_id}] ({command_result.elapsed:.1f}s)"
         )
-        if stat:
-            print("\n".join(f"    {line}" for line in stat.splitlines()))
-            print()
-        return JobResult(
-            job=job,
-            effective_revsets=[bookmark],
-            produced_output=True,
-            command_output=command_result.output,
-        )
-
-    ws.git_push_bookmarks(bookmark)
-    mr_url: str | None = None
-    if platform is not None and job.create_mr:
-        base_branch = job.base_branch or platform.default_branch()
-        params = _mr_params(
-            job=job,
-            bookmark=bookmark,
-            base_branch=base_branch,
-            command_output=command_result.output,
-            dep_mr_urls=dep_mr_urls,
-        )
-        mr_url = platform.ensure_mr(params)
-        print(f"==> [{job.name}] {mr_url} [{change_id}] ({command_result.elapsed:.1f}s)")
     else:
-        print(f"==> [{job.name}] pushed [{change_id}] ({command_result.elapsed:.1f}s)")
+        print(f"==> [{job.name}] committed [{change_id}] ({command_result.elapsed:.1f}s)")
     if stat:
         print("\n".join(f"    {line}" for line in stat.splitlines()))
         print()
+
+    update: JobUpdate | None = None
+    if not local:
+        # Record the push and (when an MR is wanted) the MR; both are carried
+        # out later by apply_plan. The target branch is resolved now so the
+        # plan is self-contained.
+        mr: MRUpdate | None = None
+        if platform is not None and job.create_mr:
+            mr = MRUpdate(
+                source_branch=bookmark,
+                target_branch=job.base_branch or platform.default_branch(),
+                title=f"{job.mr_title_prefix}{job.title}",
+                description=job.description or "",
+                command=job.command,
+                command_output=command_result.output,
+                labels=job.labels,
+                draft=job.draft,
+                depends_on=list(job.depends_on),
+            )
+        update = JobUpdate(
+            job_name=job.name,
+            title=job.title,
+            push=BookmarkPush(bookmark=bookmark),
+            mr=mr,
+        )
 
     return JobResult(
         job=job,
         effective_revsets=[bookmark],
         produced_output=True,
-        mr_url=mr_url,
+        update=update,
         command_output=command_result.output,
     )
 
 
-def run_job(  # noqa: PLR0913
+def run_job(
     *,
     job: Job,
     parents: list[str],
     repo_path: Path,
     platform: Platform | None,
-    dep_mr_urls: list[tuple[str, str]] | None = None,
     local: bool = False,
 ) -> JobResult:
     logger.debug("starting job: %s", job.model_dump_json(indent=2))
@@ -331,7 +322,6 @@ def run_job(  # noqa: PLR0913
             ws=ws,
             platform=platform,
             command_result=command_result,
-            dep_mr_urls=dep_mr_urls,
             local=local,
         )
     finally:
@@ -425,7 +415,7 @@ def _select_jobs(
     return result
 
 
-def run_all(  # noqa: PLR0913
+def run_all(  # noqa: PLR0913, C901
     *,
     config: Config,
     repo_path: Path,
@@ -475,6 +465,9 @@ def run_all(  # noqa: PLR0913
     summary = RunSummary()
     # Names of jobs that failed or were skipped - their dependents are blocked.
     blocked: set[str] = set()
+    # Remote operations collected during the run, applied (in topological order)
+    # once every job has run. A local run collects nothing.
+    plan = UpdatePlan()
 
     print(f"Running {len(ordered_jobs)} job(s)...")
     for job in ordered_jobs:
@@ -497,11 +490,6 @@ def run_all(  # noqa: PLR0913
             )
             continue
 
-        dep_mr_urls = [
-            (summary.results[dep].job.title, url)
-            for dep in job.depends_on
-            if (url := summary.results[dep].mr_url) is not None
-        ]
         start = time.monotonic()
         try:
             result = run_job(
@@ -509,10 +497,11 @@ def run_all(  # noqa: PLR0913
                 parents=parents,
                 repo_path=repo_path,
                 platform=platform,
-                dep_mr_urls=dep_mr_urls,
                 local=local,
             )
             summary.results[job.name] = result
+            if result.update is not None:
+                plan.updates.append(result.update)
         except Exception as e:
             # A command failure reports the command's own time (matching the
             # success prints); other failures have no command time, so fall back
@@ -522,7 +511,53 @@ def run_all(  # noqa: PLR0913
             summary.failed[job.name] = e
             blocked.add(job.name)
 
+    mr_urls = apply_plan(plan, repo_path=repo_path, platform=platform)
+    for name, url in mr_urls.items():
+        summary.results[name].mr_url = url
+
     summary.print_report()
     if restore_hint is not None:
         print("\n" + restore_hint)
     return summary
+
+
+def apply_plan(plan: UpdatePlan, *, repo_path: Path, platform: Platform | None) -> dict[str, str]:
+    """Carry out the remote operations collected during a run.
+
+    Pushes each bookmark and creates/updates each MR. MRs are processed in plan
+    order (topological), so a dependency's MR URL is known by the time a
+    dependent that links to it is reached. Returns a ``{job_name: mr_url}`` map
+    of the MRs that were created or updated.
+    """
+    if not plan.updates:
+        return {}
+
+    repo = JJ(repo_path)
+    titles = {u.job_name: u.title for u in plan.updates}
+    mr_urls: dict[str, str] = {}
+
+    print(f"Applying {len(plan.updates)} update(s)...")
+    for update in plan.updates:
+        if update.push is not None:
+            repo.git_push_bookmarks(update.push.bookmark)
+            if update.push.delete:
+                # The "bookmark deleted" line was already printed during the run.
+                continue
+        if update.mr is not None and platform is not None:
+            dep_urls = [
+                (titles[dep], mr_urls[dep]) for dep in update.mr.depends_on if dep in mr_urls
+            ]
+            params = MRParams(
+                source_branch=update.mr.source_branch,
+                target_branch=update.mr.target_branch,
+                title=update.mr.title,
+                description=build_mr_description(update.mr, dep_urls),
+                labels=update.mr.labels,
+                draft=update.mr.draft,
+            )
+            url = platform.ensure_mr(params)
+            mr_urls[update.job_name] = url
+            print(f"==> [{update.job_name}] {url}")
+        else:
+            print(f"==> [{update.job_name}] pushed")
+    return mr_urls
