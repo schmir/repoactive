@@ -15,7 +15,7 @@ from repoactive.config import (
     load_config,
     parse_duration,
 )
-from repoactive.jj import JJ, NotAColocatedRepoError, ensure_colocated_repo
+from repoactive.jj import JJ, NotAColocatedRepoError, require_colocated_repo
 from repoactive.platforms import get_platform
 from repoactive.runner import run_all
 
@@ -32,7 +32,7 @@ def _resolve_config(config: list[Path] | None, repo: Path) -> list[Path]:
 def _check_repo(repo: Path) -> None:
     """Exit with a clear error unless ``repo`` is a colocated jj repository root."""
     try:
-        ensure_colocated_repo(repo)
+        require_colocated_repo(repo)
     except NotAColocatedRepoError as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(code=1) from e

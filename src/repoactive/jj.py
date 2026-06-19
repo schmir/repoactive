@@ -32,7 +32,7 @@ class NotAColocatedRepoError(Exception):
     """Raised when --repo does not point at the root of a colocated jj repository."""
 
 
-def ensure_colocated_repo(repo: Path) -> None:
+def require_colocated_repo(repo: Path) -> None:
     """Verify ``repo`` is the root of a colocated jj repository.
 
     A colocated repository has a ``.jj`` directory next to a ``.git`` directory.

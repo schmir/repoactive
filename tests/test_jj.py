@@ -10,7 +10,7 @@ from repoactive.jj import (
     Bookmark,
     JJError,
     NotAColocatedRepoError,
-    ensure_colocated_repo,
+    require_colocated_repo,
     workspace_name,
 )
 
@@ -318,27 +318,27 @@ class TestEnsureColocatedRepo:
     def test_accepts_colocated_repo(self, tmp_path: Path) -> None:
         (tmp_path / ".jj").mkdir()
         (tmp_path / ".git").mkdir()
-        ensure_colocated_repo(tmp_path)  # does not raise
+        require_colocated_repo(tmp_path)  # does not raise
 
     def test_rejects_git_only_with_colocate_hint(self, tmp_path: Path) -> None:
         (tmp_path / ".git").mkdir()
         with pytest.raises(NotAColocatedRepoError, match=r"jj git init --colocate"):
-            ensure_colocated_repo(tmp_path)
+            require_colocated_repo(tmp_path)
 
     def test_rejects_missing_both(self, tmp_path: Path) -> None:
         with pytest.raises(NotAColocatedRepoError, match=r"no \.jj directory"):
-            ensure_colocated_repo(tmp_path)
+            require_colocated_repo(tmp_path)
 
     def test_rejects_missing_git(self, tmp_path: Path) -> None:
         (tmp_path / ".jj").mkdir()
         with pytest.raises(NotAColocatedRepoError, match=r"no \.git directory"):
-            ensure_colocated_repo(tmp_path)
+            require_colocated_repo(tmp_path)
 
     def test_rejects_jj_that_is_a_file(self, tmp_path: Path) -> None:
         (tmp_path / ".jj").write_text("")
         (tmp_path / ".git").mkdir()
         with pytest.raises(NotAColocatedRepoError, match=r"no \.jj directory"):
-            ensure_colocated_repo(tmp_path)
+            require_colocated_repo(tmp_path)
 
     def test_rejects_non_root_directory(self, tmp_path: Path) -> None:
         (tmp_path / ".jj").mkdir()
@@ -346,7 +346,7 @@ class TestEnsureColocatedRepo:
         subdir = tmp_path / "subdir"
         subdir.mkdir()
         with pytest.raises(NotAColocatedRepoError):
-            ensure_colocated_repo(subdir)
+            require_colocated_repo(subdir)
 
 
 class TestUnmergedJobNames:
