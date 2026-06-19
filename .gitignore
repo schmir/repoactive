@@ -1,7 +1,9 @@
 *.py[cod]
 .claude/
+.coverage
 .envrc
 .nox/
+htmlcov/
 .pytest_cache/
 .ruff_cache/
 .venv/

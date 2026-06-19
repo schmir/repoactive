@@ -9,6 +9,12 @@ help:
 test *args:
     uv run pytest "$@"
 
+# Run the test suite and collect coverage data (pass extra args to pytest)
+[positional-arguments]
+coverage *args:
+    uv run pytest --cov=repoactive --cov-report=term-missing --cov-report=html "$@"
+    @if command -v xdg-open >/dev/null 2>&1; then xdg-open htmlcov/index.html; else open htmlcov/index.html; fi
+
 # Run quick CI checks: treefmt, type check, tests, config + schema validation
 ci:
     treefmt

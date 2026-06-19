@@ -43,6 +43,7 @@ repoactive = "repoactive.cli:main"
 dev = [
     "nox-uv>=0.8.0",
     "pytest>=9.0.3",
+    "pytest-cov>=6.0.0",
     "ruff>=0.15.17",
     "ty>=0.0.44",
 ]
