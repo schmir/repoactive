@@ -25,7 +25,7 @@ _DEFAULT_REPO = Path()
 
 
 def _resolve_config(config: list[Path] | None, repo: Path) -> list[Path]:
-    """Resolve config paths relative to ``repo``, or discover defaults inside it."""
+    """Use the given config paths, or discover defaults inside ``repo``."""
     return config or default_config_paths(repo)
 
 
