@@ -231,7 +231,7 @@ def _publish_job(  # noqa: PLR0913
     # it lets later runs detect when this job last landed (see cooldown handling).
     commit_message += f"\n\n{JOB_TRAILER_KEY}: {job.name}"
     ws.describe(commit_message)
-    change_id = ws.current_change_id()
+    change_id = ws.change_id()
 
     if local:
         print(

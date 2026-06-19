@@ -161,7 +161,7 @@ class JJ:
     def describe(self, message: str) -> None:
         self._run("describe", "--message", message)
 
-    def current_change_id(self, revision: str = "@") -> str:
+    def change_id(self, revision: str = "@") -> str:
         """Return the short change id of ``revision`` (the working copy by default)."""
         return self._run("log", "--no-graph", "-r", revision, "-T", "change_id.short()").strip()
 
