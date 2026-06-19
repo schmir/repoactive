@@ -383,13 +383,9 @@ class TestRunCommand:
             branch_prefix="repoactive/",
             commit_title_prefix="",
         )
-        ws = MagicMock()
-        ws.cwd = tmp_path
-
         with pytest.raises(CommandError, match="timed out after 1s"):
-            _run_command(job, ws)
+            _run_command(job, tmp_path)
 
-        ws.abandon.assert_called_once_with()
         child_pid = int(pidfile.read_text())
         deadline = time.monotonic() + 5
         while _alive(child_pid) and time.monotonic() < deadline:
@@ -408,10 +404,7 @@ class TestRunCommand:
             branch_prefix="repoactive/",
             commit_title_prefix="",
         )
-        ws = MagicMock()
-        ws.cwd = tmp_path
-
-        result = _run_command(job, ws)
+        result = _run_command(job, tmp_path)
 
         assert result.output == "�"  # U+FFFD REPLACEMENT CHARACTER
 

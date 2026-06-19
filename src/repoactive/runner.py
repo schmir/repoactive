@@ -124,14 +124,14 @@ def _kill_process_group(proc: subprocess.Popen[str]) -> None:
         os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
 
 
-def _run_command(job: Job, ws: JJ) -> CommandResult:
+def _run_command(job: Job, cwd: Path) -> CommandResult:
     start = time.monotonic()
     # start_new_session puts the command in its own process group so a timeout
     # can kill the whole tree (see _kill_process_group).
     proc = subprocess.Popen(
         job.command,
         shell=True,
-        cwd=ws.cwd,
+        cwd=cwd,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
@@ -147,14 +147,12 @@ def _run_command(job: Job, ws: JJ) -> CommandResult:
         _kill_process_group(proc)
         # communicate again to reap the killed process and drain its output.
         output, _ = proc.communicate()
-        ws.abandon()
         output = output or ""
         raise CommandError(
             f"command timed out after {job.timeout}" + (f":\n{output}" if output else ""),
             elapsed=time.monotonic() - start,
         ) from None
     if proc.returncode != 0:
-        ws.abandon()
         output = output or ""
         raise CommandError(
             f"command failed with exit code {proc.returncode}"
@@ -288,7 +286,12 @@ def run_job(
             ws.new(*parents)
         ws.git_sync_head()
         logger.debug("[%s] running command: %s", job.name, job.command)
-        command_result = _run_command(job, ws)
+        try:
+            command_result = _run_command(job, ws.cwd)
+        except CommandError:
+            # The command timed out or failed; discard its partial change.
+            ws.abandon()
+            raise
         logger.debug(
             "[%s] command finished in %.3fs, %d bytes output",
             job.name,
