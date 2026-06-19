@@ -1,17 +1,15 @@
 import contextlib
 import logging
 import os
-import shutil
 import signal
 import subprocess
-import tempfile
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
 from repoactive.config import DEFAULT_TAG, Config, Job
-from repoactive.jj import JJ, JOB_TRAILER_KEY, JJError, workspace_name
+from repoactive.jj import JJ, JOB_TRAILER_KEY, workspace_name
 from repoactive.platforms.base import MRParams, Platform
 from repoactive.updates import (
     BookmarkPush,
@@ -270,13 +268,7 @@ def run_job(
     bookmark_existed = repo.bookmark_exists(bookmark)
     logger.debug("[%s] bookmark %s exists=%s", job.name, bookmark, bookmark_existed)
 
-    tmp_root = Path(tempfile.mkdtemp(prefix="repoactive_"))
-    workspace_path = tmp_root / "workspace"
-    ws_name = workspace_name(job.name)
-    logger.debug("[%s] adding workspace %s at %s", job.name, ws_name, workspace_path)
-    repo.workspace_add(ws_name, workspace_path)
-    ws = JJ(workspace_path)
-    try:
+    with repo.temp_workspace(workspace_name(job.name)) as ws:
         if bookmark_existed:
             logger.debug("[%s] reusing existing bookmark, rebasing on parents", job.name)
             ws.edit(bookmark)
@@ -314,13 +306,6 @@ def run_job(
             ws=ws,
             command_result=command_result,
         )
-    finally:
-        logger.debug("[%s] cleaning up workspace %s", job.name, ws_name)
-        with contextlib.suppress(JJError):
-            repo.workspace_forget(ws_name)
-        shutil.rmtree(tmp_root, ignore_errors=True)
-        with contextlib.suppress(JJError):
-            repo.git_worktree_prune()
 
 
 def _on_cooldown(job: Job, repo_path: Path) -> bool:

@@ -1,8 +1,10 @@
+import contextlib
 import logging
 import shutil
 import subprocess
 import tempfile
 import time
+from collections.abc import Generator
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -381,3 +383,26 @@ class JJ:
 
     def workspace_forget(self, name: str) -> None:
         self._run("workspace", "forget", name)
+
+    @contextlib.contextmanager
+    def temp_workspace(self, name: str) -> Generator["JJ"]:
+        """Create a workspace named ``name`` in a temp directory, cleaning up on exit.
+
+        Adds a jj workspace inside a fresh temp directory and yields a JJ bound
+        to it. On exit the workspace is forgotten, the temp directory removed,
+        and the now-dead git worktree pruned. Teardown is best-effort: jj errors
+        during cleanup are suppressed so they cannot mask the body's outcome.
+        """
+        tmp_root = Path(tempfile.mkdtemp(prefix="repoactive_"))
+        workspace_path = tmp_root / "workspace"
+        logger.debug("adding workspace %s at %s", name, workspace_path)
+        self.workspace_add(name, workspace_path)
+        try:
+            yield JJ(workspace_path)
+        finally:
+            logger.debug("cleaning up workspace %s", name)
+            with contextlib.suppress(JJError):
+                self.workspace_forget(name)
+            shutil.rmtree(tmp_root, ignore_errors=True)
+            with contextlib.suppress(JJError):
+                self.git_worktree_prune()

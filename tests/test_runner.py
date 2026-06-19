@@ -60,6 +60,18 @@ def _mock_popen(mock_popen: MagicMock, *, output: str = "", returncode: int = 0)
     return proc
 
 
+def _mock_jj(mock_jj_cls: MagicMock) -> MagicMock:
+    """Return the JJ mock, with temp_workspace yielding that same mock.
+
+    run_job runs its jj operations on the workspace yielded by
+    repo.temp_workspace(); making the context manager yield the repo mock lets a
+    single mock stand in for both, so assertions can target one object.
+    """
+    mock_jj = mock_jj_cls.return_value
+    mock_jj.temp_workspace.return_value.__enter__.return_value = mock_jj
+    return mock_jj
+
+
 def _config(*jobs: Job) -> Config:
     return Config.model_validate(
         {
@@ -413,7 +425,7 @@ class TestRunJob:
     @patch("repoactive.runner.JJ")
     @patch("repoactive.runner.subprocess.Popen")
     def test_produces_output(self, mock_sub: MagicMock, mock_jj_cls: MagicMock) -> None:
-        mock_jj = mock_jj_cls.return_value
+        mock_jj = _mock_jj(mock_jj_cls)
         _mock_popen(mock_sub)
         mock_jj.bookmark_exists.return_value = False
         mock_jj.is_empty.return_value = False
@@ -435,7 +447,7 @@ class TestRunJob:
     @patch("repoactive.runner.JJ")
     @patch("repoactive.runner.subprocess.Popen")
     def test_describe_includes_body(self, mock_sub: MagicMock, mock_jj_cls: MagicMock) -> None:
-        mock_jj = mock_jj_cls.return_value
+        mock_jj = _mock_jj(mock_jj_cls)
         _mock_popen(mock_sub)
         mock_jj.bookmark_exists.return_value = False
         mock_jj.is_empty.return_value = False
@@ -450,7 +462,7 @@ class TestRunJob:
     def test_output_appended_to_commit_message(
         self, mock_sub: MagicMock, mock_jj_cls: MagicMock
     ) -> None:
-        mock_jj = mock_jj_cls.return_value
+        mock_jj = _mock_jj(mock_jj_cls)
         _mock_popen(mock_sub, output="did stuff\n")
         mock_jj.bookmark_exists.return_value = False
         mock_jj.is_empty.return_value = False
@@ -467,7 +479,7 @@ class TestRunJob:
     def test_output_in_commit_false_suppresses_output(
         self, mock_sub: MagicMock, mock_jj_cls: MagicMock
     ) -> None:
-        mock_jj = mock_jj_cls.return_value
+        mock_jj = _mock_jj(mock_jj_cls)
         _mock_popen(mock_sub, output="did stuff\n")
         mock_jj.bookmark_exists.return_value = False
         mock_jj.is_empty.return_value = False
@@ -489,7 +501,7 @@ class TestRunJob:
     def test_commit_title_prefix_applied(
         self, mock_sub: MagicMock, mock_jj_cls: MagicMock
     ) -> None:
-        mock_jj = mock_jj_cls.return_value
+        mock_jj = _mock_jj(mock_jj_cls)
         _mock_popen(mock_sub)
         mock_jj.bookmark_exists.return_value = False
         mock_jj.is_empty.return_value = False
@@ -507,7 +519,7 @@ class TestRunJob:
     def test_no_output_no_existing_bookmark(
         self, mock_sub: MagicMock, mock_jj_cls: MagicMock
     ) -> None:
-        mock_jj = mock_jj_cls.return_value
+        mock_jj = _mock_jj(mock_jj_cls)
         _mock_popen(mock_sub)
         mock_jj.bookmark_exists.return_value = False
         mock_jj.is_empty.return_value = True
@@ -526,7 +538,7 @@ class TestRunJob:
     def test_no_output_existing_bookmark_deleted(
         self, mock_sub: MagicMock, mock_jj_cls: MagicMock
     ) -> None:
-        mock_jj = mock_jj_cls.return_value
+        mock_jj = _mock_jj(mock_jj_cls)
         _mock_popen(mock_sub)
         mock_jj.bookmark_exists.return_value = True
         mock_jj.is_empty.return_value = True
@@ -549,7 +561,7 @@ class TestRunJob:
     def test_no_output_effective_revsets_are_parents(
         self, mock_sub: MagicMock, mock_jj_cls: MagicMock
     ) -> None:
-        mock_jj = mock_jj_cls.return_value
+        mock_jj = _mock_jj(mock_jj_cls)
         _mock_popen(mock_sub)
         mock_jj.bookmark_exists.return_value = False
         mock_jj.is_empty.return_value = True
@@ -567,7 +579,7 @@ class TestRunJob:
     def test_command_failure_abandons_and_raises(
         self, mock_sub: MagicMock, mock_jj_cls: MagicMock
     ) -> None:
-        mock_jj = mock_jj_cls.return_value
+        mock_jj = _mock_jj(mock_jj_cls)
         _mock_popen(mock_sub, output="boom\n", returncode=1)
         mock_jj.bookmark_exists.return_value = False
         with pytest.raises(RuntimeError, match="command failed"):
@@ -585,7 +597,7 @@ class TestRunJob:
     def test_passes_timeout_to_subprocess(
         self, mock_sub: MagicMock, mock_jj_cls: MagicMock
     ) -> None:
-        mock_jj = mock_jj_cls.return_value
+        mock_jj = _mock_jj(mock_jj_cls)
         proc = _mock_popen(mock_sub)
         mock_jj.bookmark_exists.return_value = False
         mock_jj.is_empty.return_value = False
@@ -614,7 +626,7 @@ class TestRunJob:
         mock_killpg: MagicMock,
         mock_getpgid: MagicMock,
     ) -> None:
-        mock_jj = mock_jj_cls.return_value
+        mock_jj = _mock_jj(mock_jj_cls)
         proc = _mock_popen(mock_sub)
         # First communicate (with timeout) raises; the post-kill one drains output.
         proc.communicate.side_effect = [
@@ -640,7 +652,7 @@ class TestRunJob:
     @patch("repoactive.runner.JJ")
     @patch("repoactive.runner.subprocess.Popen")
     def test_no_timeout_passes_none(self, mock_sub: MagicMock, mock_jj_cls: MagicMock) -> None:
-        mock_jj = mock_jj_cls.return_value
+        mock_jj = _mock_jj(mock_jj_cls)
         proc = _mock_popen(mock_sub)
         mock_jj.bookmark_exists.return_value = False
         mock_jj.is_empty.return_value = False
@@ -654,7 +666,7 @@ class TestRunJob:
     def test_command_output_in_mr_update(
         self, mock_sub: MagicMock, mock_jj_cls: MagicMock
     ) -> None:
-        mock_jj = mock_jj_cls.return_value
+        mock_jj = _mock_jj(mock_jj_cls)
         _mock_popen(mock_sub, output="Copied file foo -> bar\n")
         mock_jj.bookmark_exists.return_value = False
         mock_jj.is_empty.return_value = False
@@ -671,7 +683,7 @@ class TestRunJob:
     @patch("repoactive.runner.JJ")
     @patch("repoactive.runner.subprocess.Popen")
     def test_records_mr_update(self, mock_sub: MagicMock, mock_jj_cls: MagicMock) -> None:
-        mock_jj = mock_jj_cls.return_value
+        mock_jj = _mock_jj(mock_jj_cls)
         _mock_popen(mock_sub)
         mock_jj.bookmark_exists.return_value = False
         mock_jj.is_empty.return_value = False
@@ -691,7 +703,7 @@ class TestRunJob:
     def test_create_mr_false_records_no_mr(
         self, mock_sub: MagicMock, mock_jj_cls: MagicMock
     ) -> None:
-        mock_jj = mock_jj_cls.return_value
+        mock_jj = _mock_jj(mock_jj_cls)
         _mock_popen(mock_sub)
         mock_jj.bookmark_exists.return_value = False
         mock_jj.is_empty.return_value = False
@@ -718,7 +730,7 @@ class TestRunJob:
     def test_existing_bookmark_uses_edit_restore_rebase(
         self, mock_sub: MagicMock, mock_jj_cls: MagicMock
     ) -> None:
-        mock_jj = mock_jj_cls.return_value
+        mock_jj = _mock_jj(mock_jj_cls)
         _mock_popen(mock_sub)
         mock_jj.bookmark_exists.return_value = True
         mock_jj.is_empty.return_value = False
@@ -735,7 +747,7 @@ class TestRunJob:
     def test_existing_bookmark_multiple_parents_rebase(
         self, mock_sub: MagicMock, mock_jj_cls: MagicMock
     ) -> None:
-        mock_jj = mock_jj_cls.return_value
+        mock_jj = _mock_jj(mock_jj_cls)
         _mock_popen(mock_sub)
         mock_jj.bookmark_exists.return_value = True
         mock_jj.is_empty.return_value = False
@@ -754,7 +766,7 @@ class TestRunJob:
     def test_no_existing_bookmark_uses_new(
         self, mock_sub: MagicMock, mock_jj_cls: MagicMock
     ) -> None:
-        mock_jj = mock_jj_cls.return_value
+        mock_jj = _mock_jj(mock_jj_cls)
         _mock_popen(mock_sub)
         mock_jj.bookmark_exists.return_value = False
         mock_jj.is_empty.return_value = False

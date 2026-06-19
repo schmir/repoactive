@@ -525,6 +525,52 @@ class TestGit:
             repo._git("no-such-subcommand")
 
 
+class TestTempWorkspace:
+    @staticmethod
+    def _commit(repo: JJ, filename: str, message: str) -> None:
+        (repo.cwd / filename).write_text(filename)
+        repo.describe(message)
+        repo.new("@")
+
+    def test_yields_usable_workspace(self, repo: JJ) -> None:
+        self._commit(repo, "a.txt", "initial")
+        with repo.temp_workspace("ws") as ws:
+            assert ws.cwd.is_dir()
+            assert "ws" in repo.workspace_names()
+            ws.new("@")
+            ws.git_sync_head()
+            assert _git(ws.cwd, "status", "--porcelain") == ""
+
+    def test_cleans_up_on_exit(self, repo: JJ) -> None:
+        self._commit(repo, "a.txt", "initial")
+        with repo.temp_workspace("ws") as ws:
+            ws_path = ws.cwd
+        assert not ws_path.exists()
+        assert "ws" not in repo.workspace_names()
+        worktrees = _git(repo.cwd, "worktree", "list", "--porcelain")
+        assert str(ws_path) not in worktrees
+
+    def test_cleans_up_on_exception(self, repo: JJ) -> None:
+        self._commit(repo, "a.txt", "initial")
+        ws_path: Path | None = None
+        raised = False
+        try:
+            with repo.temp_workspace("ws") as ws:
+                ws_path = ws.cwd
+                raise RuntimeError("boom")
+        except RuntimeError:
+            raised = True
+        assert raised
+        assert ws_path is not None
+        assert not ws_path.exists()
+        assert "ws" not in repo.workspace_names()
+
+    def test_uses_given_workspace_name(self, repo: JJ) -> None:
+        self._commit(repo, "a.txt", "initial")
+        with repo.temp_workspace(f"{WORKSPACE_PREFIX}myjob"):
+            assert f"{WORKSPACE_PREFIX}myjob" in repo.workspace_names()
+
+
 class TestWorkspaceColocation:
     @staticmethod
     def _commit(repo: JJ, filename: str, message: str) -> None:
