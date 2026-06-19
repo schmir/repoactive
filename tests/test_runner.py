@@ -553,23 +553,6 @@ class TestRunJob:
 
     @patch("repoactive.runner.JJ")
     @patch("repoactive.runner.subprocess.Popen")
-    def test_no_output_existing_bookmark_local_skips_push(
-        self, mock_sub: MagicMock, mock_jj_cls: MagicMock
-    ) -> None:
-        mock_jj = mock_jj_cls.return_value
-        _mock_popen(mock_sub)
-        mock_jj.bookmark_exists.return_value = True
-        mock_jj.is_empty.return_value = True
-
-        result = run_job(job=_job("foo"), parents=["trunk()"], repo_path=REPO, local=True)
-
-        mock_jj.bookmark_delete.assert_called_once_with("repoactive/foo")
-        mock_jj.git_push_bookmarks.assert_not_called()
-        # A local run collects nothing to apply.
-        assert result.update is None
-
-    @patch("repoactive.runner.JJ")
-    @patch("repoactive.runner.subprocess.Popen")
     def test_no_output_effective_revsets_are_parents(
         self, mock_sub: MagicMock, mock_jj_cls: MagicMock
     ) -> None:
@@ -736,47 +719,6 @@ class TestRunJob:
         assert result.update is not None
         assert result.update.push == BookmarkPush(bookmark="repoactive/foo")
         assert result.update.mr is None
-
-    @patch("repoactive.runner.JJ")
-    @patch("repoactive.runner.subprocess.Popen")
-    def test_local_skips_push_and_mr(self, mock_sub: MagicMock, mock_jj_cls: MagicMock) -> None:
-        mock_jj = mock_jj_cls.return_value
-        _mock_popen(mock_sub)
-        mock_jj.bookmark_exists.return_value = False
-        mock_jj.is_empty.return_value = False
-
-        result = run_job(
-            job=_job("foo"),
-            parents=["trunk()"],
-            repo_path=REPO,
-            local=True,
-        )
-
-        mock_jj.git_push_bookmarks.assert_not_called()
-        assert result.produced_output is True
-        assert result.effective_revsets == ["repoactive/foo"]
-        # A local run collects nothing to apply.
-        assert result.update is None
-
-    @patch("repoactive.runner.JJ")
-    @patch("repoactive.runner.subprocess.Popen")
-    def test_local_no_output_skips_push(self, mock_sub: MagicMock, mock_jj_cls: MagicMock) -> None:
-        mock_jj = mock_jj_cls.return_value
-        _mock_popen(mock_sub)
-        mock_jj.bookmark_exists.return_value = False
-        mock_jj.is_empty.return_value = True
-
-        result = run_job(
-            job=_job("foo"),
-            parents=["trunk()"],
-            repo_path=REPO,
-            local=True,
-        )
-
-        mock_jj.abandon.assert_called_once_with()
-        mock_jj.bookmark_set.assert_not_called()
-        mock_jj.git_push_bookmarks.assert_not_called()
-        assert result.produced_output is False
 
     @patch("repoactive.runner.JJ")
     @patch("repoactive.runner.subprocess.Popen")
@@ -1074,14 +1016,31 @@ class TestRunAll:
 
         assert mock_run_job.call_count == 0
 
+    @patch("repoactive.runner.apply_plan", return_value={})
     @patch("repoactive.runner.run_job")
-    def test_local_forwarded_to_run_job(self, mock_run_job: MagicMock) -> None:
+    def test_local_run_does_not_apply_plan(
+        self, mock_run_job: MagicMock, mock_apply_plan: MagicMock
+    ) -> None:
         a = _job("a")
         mock_run_job.return_value = _result(a, revsets=["repoactive/a"])
 
         run_all(config=_config(a), repo_path=REPO, local=True)
 
-        assert mock_run_job.call_args.kwargs["local"] is True
+        # The collect phase still runs, but a local run never applies the plan.
+        mock_run_job.assert_called_once()
+        mock_apply_plan.assert_not_called()
+
+    @patch("repoactive.runner.apply_plan", return_value={})
+    @patch("repoactive.runner.run_job")
+    def test_non_local_run_applies_plan(
+        self, mock_run_job: MagicMock, mock_apply_plan: MagicMock
+    ) -> None:
+        a = _job("a")
+        mock_run_job.return_value = _result(a, revsets=["repoactive/a"])
+
+        run_all(config=_config(a), repo_path=REPO, local=False)
+
+        mock_apply_plan.assert_called_once()
 
     @patch("repoactive.runner.run_job")
     def test_requesting_disabled_job_runs_it(self, mock_run_job: MagicMock) -> None:

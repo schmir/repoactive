@@ -172,20 +172,18 @@ def _handle_empty(  # noqa: PLR0913
     ws: JJ,
     command_result: CommandResult,
     bookmark_existed: bool,
-    local: bool = False,
 ) -> JobResult:
     ws.abandon()
     update: JobUpdate | None = None
     if bookmark_existed:
         ws.bookmark_delete(bookmark)
-        # The remote deletion is deferred to the apply phase (skipped for a
-        # local run, where there is nothing to push).
-        if not local:
-            update = JobUpdate(
-                job_name=job.name,
-                title=job.title,
-                push=BookmarkPush(bookmark=bookmark, delete=True),
-            )
+        # The remote deletion is recorded for the apply phase; whether it is
+        # actually pushed is decided there (a local run skips applying).
+        update = JobUpdate(
+            job_name=job.name,
+            title=job.title,
+            push=BookmarkPush(bookmark=bookmark, delete=True),
+        )
         print(f"==> [{job.name}] no changes, bookmark deleted ({command_result.elapsed:.1f}s)")
     else:
         print(f"==> [{job.name}] no changes ({command_result.elapsed:.1f}s)")
@@ -204,7 +202,6 @@ def _publish_job(
     bookmark: str,
     ws: JJ,
     command_result: CommandResult,
-    local: bool = False,
 ) -> JobResult:
     stat = ws.diff_stat()
     ws.bookmark_set(bookmark)
@@ -222,43 +219,36 @@ def _publish_job(
     ws.describe(commit_message)
     change_id = ws.change_id()
 
-    if local:
-        print(
-            f"==> [{job.name}] bookmark set (local) [{change_id}] ({command_result.elapsed:.1f}s)"
-        )
-    else:
-        print(f"==> [{job.name}] committed [{change_id}] ({command_result.elapsed:.1f}s)")
+    print(f"==> [{job.name}] committed [{change_id}] ({command_result.elapsed:.1f}s)")
     if stat:
         print("\n".join(f"    {line}" for line in stat.splitlines()))
         print()
 
-    update: JobUpdate | None = None
-    if not local:
-        # Record the push and (when the job wants one) the MR; both are carried
-        # out later by apply_plan. The plan is built with no platform access:
-        # the target branch is left unresolved when the job has no base_branch,
-        # and whether MRs are actually created is decided at apply time (an MR
-        # is recorded here, but apply_plan only acts on it when a platform is
-        # configured). apply_plan fills in the platform default branch.
-        mr: MRUpdate | None = None
-        if job.create_mr:
-            mr = MRUpdate(
-                source_branch=bookmark,
-                target_branch=job.base_branch,
-                title=f"{job.mr_title_prefix}{job.title}",
-                description=job.description or "",
-                command=job.command,
-                command_output=command_result.output,
-                labels=job.labels,
-                draft=job.draft,
-                depends_on=list(job.depends_on),
-            )
-        update = JobUpdate(
-            job_name=job.name,
-            title=job.title,
-            push=BookmarkPush(bookmark=bookmark),
-            mr=mr,
+    # Record the push and (when the job wants one) the MR; both are carried out
+    # later by apply_plan. The plan is built with no platform access: the target
+    # branch is left unresolved when the job has no base_branch, and whether MRs
+    # are actually created is decided at apply time (an MR is recorded here, but
+    # apply_plan only acts on it when a platform is configured). apply_plan fills
+    # in the platform default branch.
+    mr: MRUpdate | None = None
+    if job.create_mr:
+        mr = MRUpdate(
+            source_branch=bookmark,
+            target_branch=job.base_branch,
+            title=f"{job.mr_title_prefix}{job.title}",
+            description=job.description or "",
+            command=job.command,
+            command_output=command_result.output,
+            labels=job.labels,
+            draft=job.draft,
+            depends_on=list(job.depends_on),
         )
+    update = JobUpdate(
+        job_name=job.name,
+        title=job.title,
+        push=BookmarkPush(bookmark=bookmark),
+        mr=mr,
+    )
 
     return JobResult(
         job=job,
@@ -274,7 +264,6 @@ def run_job(
     job: Job,
     parents: list[str],
     repo_path: Path,
-    local: bool = False,
 ) -> JobResult:
     logger.debug("starting job: %s", job.model_dump_json(indent=2))
     logger.debug("parents: %s", parents)
@@ -315,14 +304,12 @@ def run_job(
                 ws=ws,
                 command_result=command_result,
                 bookmark_existed=bookmark_existed,
-                local=local,
             )
         return _publish_job(
             job=job,
             bookmark=bookmark,
             ws=ws,
             command_result=command_result,
-            local=local,
         )
     finally:
         logger.debug("[%s] cleaning up workspace %s", job.name, ws_name)
@@ -415,7 +402,7 @@ def _select_jobs(
     return result
 
 
-def run_all(  # noqa: PLR0913, C901
+def run_all(  # noqa: PLR0913, PLR0915, C901
     *,
     config: Config,
     repo_path: Path,
@@ -465,8 +452,9 @@ def run_all(  # noqa: PLR0913, C901
     summary = RunSummary()
     # Names of jobs that failed or were skipped - their dependents are blocked.
     blocked: set[str] = set()
-    # Remote operations collected during the run, applied (in topological order)
-    # once every job has run. A local run collects nothing.
+    # Remote operations collected during the run. They are applied (in
+    # topological order) once every job has run, unless this is a local run -
+    # then the plan is built but never applied.
     plan = UpdatePlan()
 
     print(f"Running {len(ordered_jobs)} job(s)...")
@@ -496,7 +484,6 @@ def run_all(  # noqa: PLR0913, C901
                 job=resolved_job,
                 parents=parents,
                 repo_path=repo_path,
-                local=local,
             )
             summary.results[job.name] = result
             if result.update is not None:
@@ -510,9 +497,12 @@ def run_all(  # noqa: PLR0913, C901
             summary.failed[job.name] = e
             blocked.add(job.name)
 
-    mr_urls = apply_plan(plan, repo_path=repo_path, platform=platform)
-    for name, url in mr_urls.items():
-        summary.results[name].mr_url = url
+    # A local run stops here: the plan is built but deliberately not applied, so
+    # nothing is pushed and no MR is created.
+    if not local:
+        mr_urls = apply_plan(plan, repo_path=repo_path, platform=platform)
+        for name, url in mr_urls.items():
+            summary.results[name].mr_url = url
 
     summary.print_report()
     if restore_hint is not None:
