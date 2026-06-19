@@ -18,6 +18,10 @@ JOB_TRAILER_KEY = "Repoactive-Job"
 # be recognised and reclaimed by name (see JJ.forget_stale_workspaces).
 WORKSPACE_PREFIX = "repoactive-tmp-"
 
+# The all-zeros commit_id jj reports for the virtual root commit, which has no
+# git counterpart.
+GIT_ROOT_COMMIT_ID = "0" * 40
+
 
 def workspace_name(job_name: str) -> str:
     """Workspace name repoactive uses for a job's temporary workspace."""
@@ -300,7 +304,7 @@ class JJ:
         """
         output = self._run("log", "-r", "@-", "--no-graph", "-T", 'commit_id ++ "\\n"')
         commit_id = output.splitlines()[0] if output.strip() else ""
-        if not commit_id or set(commit_id) == {"0"}:
+        if not commit_id or commit_id == GIT_ROOT_COMMIT_ID:
             return None
         return commit_id
 
