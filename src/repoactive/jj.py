@@ -292,7 +292,7 @@ class JJ:
     def is_colocated(self) -> bool:
         return (self.cwd / ".git").exists()
 
-    def _git_head_commit(self) -> str | None:
+    def _target_git_head(self) -> str | None:
         """Commit the colocated git HEAD should point at: the first parent of @.
 
         Returns None if that parent is the root commit, which has no git
@@ -313,7 +313,7 @@ class JJ:
         """
         if not self.is_colocated():
             return
-        head = self._git_head_commit()
+        head = self._target_git_head()
         if head is None:
             return
         # Mixed reset: moves the detached HEAD and index, leaves the
@@ -359,7 +359,7 @@ class JJ:
         worktree is created next to the workspace and its .git file moved into
         place.
         """
-        head = JJ(path)._git_head_commit()
+        head = JJ(path)._target_git_head()
         if head is None:
             logger.debug("not colocating workspace %r: parent is the root commit", name)
             return
