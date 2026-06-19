@@ -158,6 +158,38 @@ class TestDiffStat:
         assert "a.txt" not in repo.diff_stat()
 
 
+class TestChangeId:
+    def test_returns_short_prefix_of_full_change_id(self, repo: JJ) -> None:
+        short = repo.change_id()
+        full = _change_id(repo)
+        assert short
+        assert full.startswith(short)
+        assert len(short) < len(full)
+
+    def test_stable_across_describe(self, repo: JJ) -> None:
+        before = repo.change_id()
+        repo.describe("a message")
+        assert repo.change_id() == before
+
+    def test_changes_after_new(self, repo: JJ) -> None:
+        before = repo.change_id()
+        repo.new("@")
+        assert repo.change_id() != before
+
+    def test_defaults_to_working_copy(self, repo: JJ) -> None:
+        assert repo.change_id() == repo.change_id("@")
+
+    def test_returns_change_id_of_named_revision(self, repo: JJ) -> None:
+        repo.describe("parent")
+        parent = repo.change_id()
+        repo.new("@")
+        assert repo.change_id("@-") == parent
+
+    def test_raises_for_invalid_revision(self, repo: JJ) -> None:
+        with pytest.raises(JJError):
+            repo.change_id("does-not-exist")
+
+
 class TestEdit:
     def test_switches_working_copy_to_revision(self, repo: JJ) -> None:
         repo.describe("first")
@@ -329,6 +361,71 @@ class TestHasRecentJobCommit:
         repo.describe("later unrelated work")
         # base "@" is the tip; the trailer lives one commit below it
         assert repo.has_recent_job_commit("my-job", "@", self._day_ago()) is True
+
+
+class TestRecentJobCommits:
+    @staticmethod
+    def _day_ago() -> datetime:
+        return datetime.now(UTC) - timedelta(days=1)
+
+    @staticmethod
+    def _day_ahead() -> datetime:
+        return datetime.now(UTC) + timedelta(days=1)
+
+    def test_returns_commit_with_populated_fields(self, repo: JJ) -> None:
+        repo.describe("upgrade deps\n\nRepoactive-Job: my-job")
+        commits = repo.recent_job_commits(self._day_ago())
+        assert len(commits) == 1
+        commit = commits[0]
+        assert commit.job_name == "my-job"
+        assert commit.subject == "upgrade deps"
+        assert commit.commit_id == _commit_id(repo)[: len(commit.commit_id)]
+        assert commit.change_id == _change_id(repo)[: len(commit.change_id)]
+        assert commit.relative_age  # non-empty human-readable age
+
+    def test_excludes_commit_without_trailer(self, repo: JJ) -> None:
+        repo.describe("upgrade deps")
+        assert repo.recent_job_commits(self._day_ago()) == []
+
+    def test_excludes_commit_outside_window(self, repo: JJ) -> None:
+        repo.describe("upgrade deps\n\nRepoactive-Job: my-job")
+        # since is in the future, so the just-made commit predates it
+        assert repo.recent_job_commits(self._day_ahead()) == []
+
+    def test_returns_multiple_commits_newest_first(self, repo: JJ) -> None:
+        repo.describe("older\n\nRepoactive-Job: job-a")
+        repo.new("@")
+        repo.describe("newer\n\nRepoactive-Job: job-b")
+        commits = repo.recent_job_commits(self._day_ago())
+        assert [c.job_name for c in commits] == ["job-b", "job-a"]
+
+    def test_joins_multiple_trailer_values(self, repo: JJ) -> None:
+        repo.describe("shared work\n\nRepoactive-Job: job-a\nRepoactive-Job: job-b")
+        commits = repo.recent_job_commits(self._day_ago())
+        assert len(commits) == 1
+        assert commits[0].job_name == "job-a,job-b"
+
+    def test_revset_restricts_to_matching_commits(self, repo: JJ) -> None:
+        repo.describe("on main\n\nRepoactive-Job: my-job")
+        repo.bookmark_set("main")
+        # a sibling branch off the root, not descending from the job commit
+        repo.new("root()")
+        repo.describe("unrelated\n\nRepoactive-Job: other-job")
+        repo.bookmark_set("other")
+        names = {c.job_name for c in repo.recent_job_commits(self._day_ago(), revset="::main")}
+        assert names == {"my-job"}
+
+    def test_empty_when_no_job_commits(self, repo: JJ) -> None:
+        assert repo.recent_job_commits(self._day_ago()) == []
+
+
+class TestGit:
+    def test_runs_git_subcommand(self, repo: JJ) -> None:
+        assert repo._git("rev-parse", "--git-dir").strip()
+
+    def test_unknown_subcommand_raises_jj_error(self, repo: JJ) -> None:
+        with pytest.raises(JJError, match="git no-such-subcommand failed"):
+            repo._git("no-such-subcommand")
 
 
 class TestWorkspaceColocation:
