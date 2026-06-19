@@ -9,7 +9,7 @@ help:
 test *args:
     uv run pytest "$@"
 
-# Run quick CI checks: treefmt, type check, tests
+# Run quick CI checks: treefmt, type check, tests, config + schema validation
 ci:
     treefmt
     # scripts/prek.sh run --all-files
