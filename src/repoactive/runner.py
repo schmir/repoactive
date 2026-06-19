@@ -36,8 +36,8 @@ class CommandError(RuntimeError):
 class JobResult:
     job: Job
     # Revsets dependents should use as parents. Either the bookmark name (if
-    # the command produced a diff) or the parent revsets that were passed to
-    # jj new (if the command produced nothing and the change was abandoned).
+    # the command produced a diff) or the parent revsets the change was based
+    # on (if the command produced nothing and the change was abandoned).
     effective_revsets: list[str]
     produced_output: bool
     mr_url: str | None = None
