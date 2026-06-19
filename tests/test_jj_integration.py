@@ -7,7 +7,13 @@ from pathlib import Path
 
 import pytest
 
-from repoactive.jj import JJ, WORKSPACE_PREFIX, JJError
+from repoactive.jj import (
+    JJ,
+    WORKSPACE_PREFIX,
+    JJError,
+    NotAColocatedRepoError,
+    require_colocated_repo,
+)
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
 
@@ -188,6 +194,26 @@ class TestChangeId:
     def test_raises_for_invalid_revision(self, repo: JJ) -> None:
         with pytest.raises(JJError):
             repo.change_id("does-not-exist")
+
+
+class TestOpId:
+    def test_returns_non_empty_id(self, repo: JJ) -> None:
+        assert repo.op_id()
+
+    def test_matches_op_log_head(self, repo: JJ) -> None:
+        head = subprocess.run(
+            ["jj", "--no-pager", "op", "log", "--no-graph", "--limit", "1", "-T", "id.short()"],
+            cwd=repo.cwd,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        assert repo.op_id() == head
+
+    def test_changes_after_operation(self, repo: JJ) -> None:
+        before = repo.op_id()
+        repo.describe("a message")
+        assert repo.op_id() != before
 
 
 class TestEdit:
@@ -417,6 +443,77 @@ class TestRecentJobCommits:
 
     def test_empty_when_no_job_commits(self, repo: JJ) -> None:
         assert repo.recent_job_commits(self._day_ago()) == []
+
+
+class TestUnmergedJobNames:
+    @staticmethod
+    def _establish_trunk(local: JJ) -> None:
+        # Push a "main" bookmark so trunk() resolves to it instead of root().
+        local.describe("base")
+        local.bookmark_set("main")
+        local.git_push_bookmarks("main")
+        local.new("main")
+
+    def test_returns_trailer_of_unmerged_commit(self, repo_with_remote: tuple[JJ, Path]) -> None:
+        local, _ = repo_with_remote
+        self._establish_trunk(local)
+        local.describe("work\n\nRepoactive-Job: job-x")
+        assert local.unmerged_job_names() == {"job-x"}
+
+    def test_excludes_commit_merged_into_trunk(self, repo_with_remote: tuple[JJ, Path]) -> None:
+        local, _ = repo_with_remote
+        self._establish_trunk(local)
+        local.describe("work\n\nRepoactive-Job: job-x")
+        # land the job commit on trunk: it becomes an ancestor of trunk()
+        local.bookmark_set("main")
+        local.git_push_bookmarks("main")
+        assert local.unmerged_job_names() == set()
+
+    def test_excludes_unmerged_commit_without_trailer(
+        self, repo_with_remote: tuple[JJ, Path]
+    ) -> None:
+        local, _ = repo_with_remote
+        self._establish_trunk(local)
+        local.describe("plain work, no trailer")
+        assert local.unmerged_job_names() == set()
+
+    def test_returns_multiple_job_names(self, repo_with_remote: tuple[JJ, Path]) -> None:
+        local, _ = repo_with_remote
+        self._establish_trunk(local)
+        local.describe("a\n\nRepoactive-Job: job-a")
+        local.new("main")
+        local.describe("b\n\nRepoactive-Job: job-b")
+        assert local.unmerged_job_names() == {"job-a", "job-b"}
+
+    def test_empty_when_nothing_unmerged(self, repo_with_remote: tuple[JJ, Path]) -> None:
+        local, _ = repo_with_remote
+        self._establish_trunk(local)
+        # only the empty working copy sits above trunk; it has no trailer
+        assert local.unmerged_job_names() == set()
+
+
+class TestRequireColocatedRepo:
+    def test_accepts_colocated_repo(self, repo: JJ) -> None:
+        require_colocated_repo(repo.cwd)  # must not raise
+
+    def test_rejects_non_colocated_jj_repo(self, tmp_path: Path) -> None:
+        plain = _init_repo(tmp_path / "plain", colocate=False)
+        assert not (plain.cwd / ".git").exists()
+        with pytest.raises(NotAColocatedRepoError, match=r"no \.git directory"):
+            require_colocated_repo(plain.cwd)
+
+    def test_rejects_git_only_repo(self, tmp_path: Path) -> None:
+        path = tmp_path / "gitonly"
+        path.mkdir()
+        subprocess.run(["git", "init", str(path)], check=True, capture_output=True)
+        with pytest.raises(NotAColocatedRepoError, match="not colocated with jj"):
+            require_colocated_repo(path)
+
+    def test_rejects_plain_directory(self, tmp_path: Path) -> None:
+        path = tmp_path / "empty"
+        path.mkdir()
+        with pytest.raises(NotAColocatedRepoError, match="not a jj repository"):
+            require_colocated_repo(path)
 
 
 class TestGit:
