@@ -426,7 +426,7 @@ class TestRunJob:
         mock_jj.is_empty.return_value = False
         job = _job("foo")
 
-        result = run_job(job=job, parents=["trunk()"], repo_path=REPO, platform=None)
+        result = run_job(job=job, parents=["trunk()"], repo_path=REPO)
 
         mock_jj.new.assert_called_once_with("trunk()")
         mock_jj.bookmark_set.assert_called_once_with("repoactive/foo")
@@ -448,7 +448,7 @@ class TestRunJob:
         mock_jj.is_empty.return_value = False
         job = _job("foo", description="Body text.")
 
-        run_job(job=job, parents=["trunk()"], repo_path=REPO, platform=None)
+        run_job(job=job, parents=["trunk()"], repo_path=REPO)
 
         mock_jj.describe.assert_called_once_with("Change foo\n\nBody text.\n\nRepoactive-Job: foo")
 
@@ -463,7 +463,7 @@ class TestRunJob:
         mock_jj.is_empty.return_value = False
         job = _job("foo")
 
-        run_job(job=job, parents=["trunk()"], repo_path=REPO, platform=None)
+        run_job(job=job, parents=["trunk()"], repo_path=REPO)
 
         mock_jj.describe.assert_called_once_with(
             "Change foo\n\n  $ cmd-foo\n  did stuff\n\nRepoactive-Job: foo"
@@ -487,7 +487,7 @@ class TestRunJob:
             commit_title_prefix="",
         )
 
-        run_job(job=job, parents=["trunk()"], repo_path=REPO, platform=None)
+        run_job(job=job, parents=["trunk()"], repo_path=REPO)
 
         mock_jj.describe.assert_called_once_with("Change foo\n\nRepoactive-Job: foo")
 
@@ -505,7 +505,6 @@ class TestRunJob:
             job=_job("foo", commit_title_prefix="[bot] "),
             parents=["trunk()"],
             repo_path=REPO,
-            platform=None,
         )
 
         mock_jj.describe.assert_called_once_with("[bot] Change foo\n\nRepoactive-Job: foo")
@@ -520,7 +519,7 @@ class TestRunJob:
         mock_jj.bookmark_exists.return_value = False
         mock_jj.is_empty.return_value = True
 
-        result = run_job(job=_job("foo"), parents=["trunk()"], repo_path=REPO, platform=None)
+        result = run_job(job=_job("foo"), parents=["trunk()"], repo_path=REPO)
 
         mock_jj.abandon.assert_called_once_with()
         mock_jj.bookmark_set.assert_not_called()
@@ -539,7 +538,7 @@ class TestRunJob:
         mock_jj.bookmark_exists.return_value = True
         mock_jj.is_empty.return_value = True
 
-        result = run_job(job=_job("foo"), parents=["trunk()"], repo_path=REPO, platform=None)
+        result = run_job(job=_job("foo"), parents=["trunk()"], repo_path=REPO)
 
         mock_jj.abandon.assert_called_once_with()
         mock_jj.bookmark_delete.assert_called_once_with("repoactive/foo")
@@ -562,9 +561,7 @@ class TestRunJob:
         mock_jj.bookmark_exists.return_value = True
         mock_jj.is_empty.return_value = True
 
-        result = run_job(
-            job=_job("foo"), parents=["trunk()"], repo_path=REPO, platform=None, local=True
-        )
+        result = run_job(job=_job("foo"), parents=["trunk()"], repo_path=REPO, local=True)
 
         mock_jj.bookmark_delete.assert_called_once_with("repoactive/foo")
         mock_jj.git_push_bookmarks.assert_not_called()
@@ -585,7 +582,6 @@ class TestRunJob:
             job=_job("foo"),
             parents=["repoactive/a", "repoactive/b"],
             repo_path=REPO,
-            platform=None,
         )
 
         assert result.effective_revsets == ["repoactive/a", "repoactive/b"]
@@ -603,7 +599,6 @@ class TestRunJob:
                 job=_job("foo"),
                 parents=["trunk()"],
                 repo_path=REPO,
-                platform=None,
             )
 
         mock_jj.abandon.assert_called_once_with()
@@ -627,7 +622,7 @@ class TestRunJob:
             commit_title_prefix="",
         )
 
-        run_job(job=job, parents=["trunk()"], repo_path=REPO, platform=None)
+        run_job(job=job, parents=["trunk()"], repo_path=REPO)
 
         assert mock_sub.call_args.kwargs["start_new_session"] is True
         assert proc.communicate.call_args.kwargs["timeout"] == 30 * 60
@@ -660,7 +655,7 @@ class TestRunJob:
             commit_title_prefix="",
         )
         with pytest.raises(RuntimeError, match="timed out after 30m"):
-            run_job(job=job, parents=["trunk()"], repo_path=REPO, platform=None)
+            run_job(job=job, parents=["trunk()"], repo_path=REPO)
 
         mock_killpg.assert_called_once_with(4242, signal.SIGKILL)
         mock_jj.abandon.assert_called_once_with()
@@ -674,7 +669,7 @@ class TestRunJob:
         mock_jj.bookmark_exists.return_value = False
         mock_jj.is_empty.return_value = False
 
-        run_job(job=_job("foo"), parents=["trunk()"], repo_path=REPO, platform=None)
+        run_job(job=_job("foo"), parents=["trunk()"], repo_path=REPO)
 
         assert proc.communicate.call_args.kwargs["timeout"] is None
 
@@ -687,19 +682,11 @@ class TestRunJob:
         _mock_popen(mock_sub, output="Copied file foo -> bar\n")
         mock_jj.bookmark_exists.return_value = False
         mock_jj.is_empty.return_value = False
-        platform = MagicMock()
-        platform.default_branch.return_value = "main"
 
-        result = run_job(
-            job=_job("foo"),
-            parents=["trunk()"],
-            repo_path=REPO,
-            platform=platform,
-        )
+        result = run_job(job=_job("foo"), parents=["trunk()"], repo_path=REPO)
 
         # The MR is not created during the run; the command output is recorded
         # for the apply phase to render.
-        platform.ensure_mr.assert_not_called()
         assert result.update is not None
         assert result.update.mr is not None
         assert result.update.mr.command == "cmd-foo"
@@ -712,20 +699,11 @@ class TestRunJob:
         _mock_popen(mock_sub)
         mock_jj.bookmark_exists.return_value = False
         mock_jj.is_empty.return_value = False
-        platform = MagicMock()
-        platform.default_branch.return_value = "main"
 
-        result = run_job(
-            job=_job("foo"),
-            parents=["trunk()"],
-            repo_path=REPO,
-            platform=platform,
-        )
+        result = run_job(job=_job("foo"), parents=["trunk()"], repo_path=REPO)
 
-        # No MR is created during the run; it is recorded for the apply phase.
-        # The target branch is left unresolved (no platform access at collect).
-        platform.ensure_mr.assert_not_called()
-        platform.default_branch.assert_not_called()
+        # The collect phase has no platform; it always records the MR for the
+        # apply phase to act on, with the target branch left unresolved.
         assert result.mr_url is None
         assert result.update is not None
         assert result.update.mr is not None
@@ -741,7 +719,6 @@ class TestRunJob:
         _mock_popen(mock_sub)
         mock_jj.bookmark_exists.return_value = False
         mock_jj.is_empty.return_value = False
-        platform = MagicMock()
         job = Job(
             name="foo",
             command="cmd",
@@ -751,14 +728,8 @@ class TestRunJob:
             commit_title_prefix="",
         )
 
-        result = run_job(
-            job=job,
-            parents=["trunk()"],
-            repo_path=REPO,
-            platform=platform,
-        )
+        result = run_job(job=job, parents=["trunk()"], repo_path=REPO)
 
-        platform.ensure_mr.assert_not_called()
         assert result.mr_url is None
         assert result.produced_output is True
         # A push is still recorded, but with no MR.
@@ -773,18 +744,15 @@ class TestRunJob:
         _mock_popen(mock_sub)
         mock_jj.bookmark_exists.return_value = False
         mock_jj.is_empty.return_value = False
-        platform = MagicMock()
 
         result = run_job(
             job=_job("foo"),
             parents=["trunk()"],
             repo_path=REPO,
-            platform=platform,
             local=True,
         )
 
         mock_jj.git_push_bookmarks.assert_not_called()
-        platform.ensure_mr.assert_not_called()
         assert result.produced_output is True
         assert result.effective_revsets == ["repoactive/foo"]
         # A local run collects nothing to apply.
@@ -802,7 +770,6 @@ class TestRunJob:
             job=_job("foo"),
             parents=["trunk()"],
             repo_path=REPO,
-            platform=None,
             local=True,
         )
 
@@ -821,7 +788,7 @@ class TestRunJob:
         mock_jj.bookmark_exists.return_value = True
         mock_jj.is_empty.return_value = False
 
-        run_job(job=_job("foo"), parents=["trunk()"], repo_path=REPO, platform=None)
+        run_job(job=_job("foo"), parents=["trunk()"], repo_path=REPO)
 
         mock_jj.new.assert_not_called()
         mock_jj.edit.assert_called_once_with("repoactive/foo")
@@ -842,7 +809,6 @@ class TestRunJob:
             job=_job("foo"),
             parents=["repoactive/a", "repoactive/b"],
             repo_path=REPO,
-            platform=None,
         )
 
         mock_jj.new.assert_not_called()
@@ -858,7 +824,7 @@ class TestRunJob:
         mock_jj.bookmark_exists.return_value = False
         mock_jj.is_empty.return_value = False
 
-        run_job(job=_job("foo"), parents=["trunk()"], repo_path=REPO, platform=None)
+        run_job(job=_job("foo"), parents=["trunk()"], repo_path=REPO)
 
         mock_jj.new.assert_called_once_with("trunk()")
         mock_jj.edit.assert_not_called()

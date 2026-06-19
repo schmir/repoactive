@@ -198,12 +198,11 @@ def _handle_empty(  # noqa: PLR0913
     )
 
 
-def _publish_job(  # noqa: PLR0913
+def _publish_job(
     *,
     job: Job,
     bookmark: str,
     ws: JJ,
-    platform: Platform | None,
     command_result: CommandResult,
     local: bool = False,
 ) -> JobResult:
@@ -235,12 +234,14 @@ def _publish_job(  # noqa: PLR0913
 
     update: JobUpdate | None = None
     if not local:
-        # Record the push and (when an MR is wanted) the MR; both are carried
-        # out later by apply_plan. The target branch is left unresolved when the
-        # job has no base_branch so the plan can be built without platform
-        # access; apply_plan fills in the platform default branch.
+        # Record the push and (when the job wants one) the MR; both are carried
+        # out later by apply_plan. The plan is built with no platform access:
+        # the target branch is left unresolved when the job has no base_branch,
+        # and whether MRs are actually created is decided at apply time (an MR
+        # is recorded here, but apply_plan only acts on it when a platform is
+        # configured). apply_plan fills in the platform default branch.
         mr: MRUpdate | None = None
-        if platform is not None and job.create_mr:
+        if job.create_mr:
             mr = MRUpdate(
                 source_branch=bookmark,
                 target_branch=job.base_branch,
@@ -273,7 +274,6 @@ def run_job(
     job: Job,
     parents: list[str],
     repo_path: Path,
-    platform: Platform | None,
     local: bool = False,
 ) -> JobResult:
     logger.debug("starting job: %s", job.model_dump_json(indent=2))
@@ -321,7 +321,6 @@ def run_job(
             job=job,
             bookmark=bookmark,
             ws=ws,
-            platform=platform,
             command_result=command_result,
             local=local,
         )
@@ -497,7 +496,6 @@ def run_all(  # noqa: PLR0913, C901
                 job=resolved_job,
                 parents=parents,
                 repo_path=repo_path,
-                platform=platform,
                 local=local,
             )
             summary.results[job.name] = result
