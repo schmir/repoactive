@@ -723,12 +723,14 @@ class TestRunJob:
         )
 
         # No MR is created during the run; it is recorded for the apply phase.
+        # The target branch is left unresolved (no platform access at collect).
         platform.ensure_mr.assert_not_called()
+        platform.default_branch.assert_not_called()
         assert result.mr_url is None
         assert result.update is not None
         assert result.update.mr is not None
         assert result.update.mr.source_branch == "repoactive/foo"
-        assert result.update.mr.target_branch == "main"
+        assert result.update.mr.target_branch is None
 
     @patch("repoactive.runner.JJ")
     @patch("repoactive.runner.subprocess.Popen")
@@ -943,6 +945,21 @@ class TestApplyPlan:
         assert params.labels == ["auto"]
         assert params.draft is False
         assert urls == {"a": "https://example.com/mr/1"}
+
+    @patch("repoactive.runner.JJ")
+    def test_unresolved_target_branch_uses_platform_default(self, mock_jj_cls: MagicMock) -> None:
+        platform = MagicMock()
+        platform.default_branch.return_value = "develop"
+        platform.ensure_mr.return_value = "https://example.com/mr/1"
+        update = _mr_update("a")
+        assert update.mr is not None
+        update.mr.target_branch = None
+        plan = UpdatePlan(updates=[update])
+
+        apply_plan(plan, repo_path=REPO, platform=platform)
+
+        params = platform.ensure_mr.call_args[0][0]
+        assert params.target_branch == "develop"
 
     @patch("repoactive.runner.JJ")
     def test_dependency_url_resolved_in_order(self, mock_jj_cls: MagicMock) -> None:

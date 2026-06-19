@@ -236,13 +236,14 @@ def _publish_job(  # noqa: PLR0913
     update: JobUpdate | None = None
     if not local:
         # Record the push and (when an MR is wanted) the MR; both are carried
-        # out later by apply_plan. The target branch is resolved now so the
-        # plan is self-contained.
+        # out later by apply_plan. The target branch is left unresolved when the
+        # job has no base_branch so the plan can be built without platform
+        # access; apply_plan fills in the platform default branch.
         mr: MRUpdate | None = None
         if platform is not None and job.create_mr:
             mr = MRUpdate(
                 source_branch=bookmark,
-                target_branch=job.base_branch or platform.default_branch(),
+                target_branch=job.base_branch,
                 title=f"{job.mr_title_prefix}{job.title}",
                 description=job.description or "",
                 command=job.command,
@@ -549,7 +550,7 @@ def apply_plan(plan: UpdatePlan, *, repo_path: Path, platform: Platform | None) 
             ]
             params = MRParams(
                 source_branch=update.mr.source_branch,
-                target_branch=update.mr.target_branch,
+                target_branch=update.mr.target_branch or platform.default_branch(),
                 title=update.mr.title,
                 description=build_mr_description(update.mr, dep_urls),
                 labels=update.mr.labels,

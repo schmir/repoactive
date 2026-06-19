@@ -26,14 +26,15 @@ class BookmarkPush(BaseModel):
 class MRUpdate(BaseModel):
     """Everything needed to (re)create an MR/PR at apply time.
 
-    ``target_branch`` is already resolved (the platform default branch is looked
-    up during collect), so applying needs no further resolution. The description
-    is assembled at apply time by ``build_mr_description`` because the
-    ``depends_on`` MR URLs are not known until those MRs have been created.
+    ``target_branch`` is ``None`` when the job did not set ``base_branch``; the
+    platform default branch is then resolved during apply, so building the plan
+    needs no platform access. The description is assembled at apply time by
+    ``build_mr_description`` because the ``depends_on`` MR URLs are not known
+    until those MRs have been created.
     """
 
     source_branch: str
-    target_branch: str
+    target_branch: str | None = None
     title: str
     description: str
     command: str
