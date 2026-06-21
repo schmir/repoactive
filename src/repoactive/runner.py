@@ -417,8 +417,13 @@ def run_all(  # noqa: PLR0913, PLR0915, C901
     platform: Platform | None = None,
     requested_jobs: list[str] | None = None,
     requested_tags: list[str] | None = None,
-    mode: RunMode = RunMode.publish,
+    mode: RunMode = RunMode.local,
 ) -> RunSummary:
+    # A publish run needs a platform to create MRs; local/push runs must not be
+    # given one. The CLI keeps these in sync - this guards direct callers.
+    assert (mode is RunMode.publish) == (platform is not None), (
+        f"mode={mode} is inconsistent with platform={platform!r}"
+    )
     repo = JJ(repo_path)
     op_id = repo.op_id()
     logger.debug(
@@ -508,7 +513,7 @@ def run_all(  # noqa: PLR0913, PLR0915, C901
     # A local run stops here: the plan is built but deliberately not applied, so
     # nothing is pushed and no MR is created.
     if mode is not RunMode.local:
-        mr_urls = apply_plan(plan, repo_path=repo_path, platform=platform)
+        mr_urls = apply_plan(plan, repo_path=repo_path, platform=platform, mode=mode)
         for name, url in mr_urls.items():
             summary.results[name].mr_url = url
 
@@ -518,13 +523,15 @@ def run_all(  # noqa: PLR0913, PLR0915, C901
     return summary
 
 
-def apply_plan(plan: UpdatePlan, *, repo_path: Path, platform: Platform | None) -> dict[str, str]:
+def apply_plan(
+    plan: UpdatePlan, *, repo_path: Path, platform: Platform | None, mode: RunMode
+) -> dict[str, str]:
     """Carry out the remote operations collected during a run.
 
-    Pushes each bookmark and creates/updates each MR. MRs are processed in plan
-    order (topological), so a dependency's MR URL is known by the time a
-    dependent that links to it is reached. Returns a ``{job_name: mr_url}`` map
-    of the MRs that were created or updated.
+    Pushes each bookmark and, in ``publish`` mode, creates/updates each MR. MRs
+    are processed in plan order (topological), so a dependency's MR URL is known
+    by the time a dependent that links to it is reached. Returns a
+    ``{job_name: mr_url}`` map of the MRs that were created or updated.
     """
     if not plan.updates:
         return {}
@@ -540,7 +547,9 @@ def apply_plan(plan: UpdatePlan, *, repo_path: Path, platform: Platform | None) 
             if update.push.delete:
                 # The "bookmark deleted" line was already printed during the run.
                 continue
-        if update.mr is not None and platform is not None:
+        if mode is RunMode.publish and update.mr is not None:
+            # run_all guarantees a platform whenever mode is publish.
+            assert platform is not None
             dep_urls = [
                 (titles[dep], mr_urls[dep]) for dep in update.mr.depends_on if dep in mr_urls
             ]

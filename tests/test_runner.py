@@ -813,7 +813,7 @@ class TestApplyPlan:
     def test_empty_plan_is_noop(self, mock_jj_cls: MagicMock) -> None:
         platform = MagicMock()
 
-        urls = apply_plan(UpdatePlan(), repo_path=REPO, platform=platform)
+        urls = apply_plan(UpdatePlan(), repo_path=REPO, platform=platform, mode=RunMode.publish)
 
         assert urls == {}
         mock_jj_cls.return_value.git_push_bookmarks.assert_not_called()
@@ -823,7 +823,7 @@ class TestApplyPlan:
     def test_pushes_bookmark_without_mr(self, mock_jj_cls: MagicMock) -> None:
         plan = UpdatePlan(updates=[_push_update("a")])
 
-        urls = apply_plan(plan, repo_path=REPO, platform=None)
+        urls = apply_plan(plan, repo_path=REPO, platform=None, mode=RunMode.push)
 
         mock_jj_cls.return_value.git_push_bookmarks.assert_called_once_with("repoactive/a")
         assert urls == {}
@@ -840,7 +840,7 @@ class TestApplyPlan:
             ]
         )
 
-        apply_plan(plan, repo_path=REPO, platform=MagicMock())
+        apply_plan(plan, repo_path=REPO, platform=MagicMock(), mode=RunMode.publish)
 
         mock_jj_cls.return_value.git_push_bookmarks.assert_called_once_with("repoactive/a")
 
@@ -850,7 +850,7 @@ class TestApplyPlan:
         platform.ensure_mr.return_value = "https://example.com/mr/1"
         plan = UpdatePlan(updates=[_mr_update("a")])
 
-        urls = apply_plan(plan, repo_path=REPO, platform=platform)
+        urls = apply_plan(plan, repo_path=REPO, platform=platform, mode=RunMode.publish)
 
         mock_jj_cls.return_value.git_push_bookmarks.assert_called_once_with("repoactive/a")
         params = platform.ensure_mr.call_args[0][0]
@@ -871,7 +871,7 @@ class TestApplyPlan:
         update.mr.target_branch = None
         plan = UpdatePlan(updates=[update])
 
-        apply_plan(plan, repo_path=REPO, platform=platform)
+        apply_plan(plan, repo_path=REPO, platform=platform, mode=RunMode.publish)
 
         params = platform.ensure_mr.call_args[0][0]
         assert params.target_branch == "develop"
@@ -885,16 +885,17 @@ class TestApplyPlan:
         ]
         plan = UpdatePlan(updates=[_mr_update("a"), _mr_update("b", depends_on=["a"])])
 
-        apply_plan(plan, repo_path=REPO, platform=platform)
+        apply_plan(plan, repo_path=REPO, platform=platform, mode=RunMode.publish)
 
         b_params = platform.ensure_mr.call_args_list[1][0][0]
         assert b_params.description == "Depends on:\n- [Change a](https://example.com/mr/a)"
 
     @patch("repoactive.runner.JJ")
-    def test_mr_skipped_without_platform(self, mock_jj_cls: MagicMock) -> None:
+    def test_push_mode_skips_mr(self, mock_jj_cls: MagicMock) -> None:
+        # In push mode the bookmark is pushed but the MR is left alone.
         plan = UpdatePlan(updates=[_mr_update("a")])
 
-        urls = apply_plan(plan, repo_path=REPO, platform=None)
+        urls = apply_plan(plan, repo_path=REPO, platform=None, mode=RunMode.push)
 
         mock_jj_cls.return_value.git_push_bookmarks.assert_called_once_with("repoactive/a")
         assert urls == {}
@@ -931,7 +932,9 @@ class TestRunAll:
         platform = MagicMock()
         platform.ensure_mr.return_value = "https://example.com/mr/a"
 
-        summary = run_all(config=_config(a), repo_path=REPO, platform=platform)
+        summary = run_all(
+            config=_config(a), repo_path=REPO, platform=platform, mode=RunMode.publish
+        )
 
         mock_jj.return_value.git_push_bookmarks.assert_called_once_with("repoactive/a")
         platform.ensure_mr.assert_called_once()
@@ -1048,6 +1051,16 @@ class TestRunAll:
         run_all(config=_config(a), repo_path=REPO, mode=RunMode.push)
 
         mock_apply_plan.assert_called_once()
+
+    def test_publish_without_platform_is_rejected(self) -> None:
+        a = _job("a")
+        with pytest.raises(AssertionError):
+            run_all(config=_config(a), repo_path=REPO, mode=RunMode.publish)
+
+    def test_push_with_platform_is_rejected(self) -> None:
+        a = _job("a")
+        with pytest.raises(AssertionError):
+            run_all(config=_config(a), repo_path=REPO, platform=MagicMock(), mode=RunMode.push)
 
     @patch("repoactive.runner.run_job")
     def test_requesting_disabled_job_runs_it(self, mock_run_job: MagicMock) -> None:
