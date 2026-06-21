@@ -377,18 +377,17 @@ repoactive recent-commits --within 30d --repo /path/to/repo
 repoactive recent-commits --within 7d uv-lock-upgrade prek-autoupdate
 
 # Only commits that have landed in trunk
-repoactive recent-commits --merged
+repoactive recent-commits --status merged
 
 # Only commits still on open branches
-repoactive recent-commits --unmerged
+repoactive recent-commits --status unmerged
 ```
 
-| Option        | Short | Description                                            |
-| ------------- | ----- | ------------------------------------------------------ |
-| `--within`    |       | How far back to look (default: `2w`; e.g. `7d`, `24h`) |
-| `--repo PATH` | `-r`  | jj repository path (default: `.`)                      |
-| `--merged`    |       | Only commits that are ancestors of trunk               |
-| `--unmerged`  |       | Only commits not yet in trunk                          |
+| Option                             | Short | Description                                            |
+| ---------------------------------- | ----- | ------------------------------------------------------ |
+| `--within`                         |       | How far back to look (default: `2w`; e.g. `7d`, `24h`) |
+| `--repo PATH`                      | `-r`  | jj repository path (default: `.`)                      |
+| `--status [all\|merged\|unmerged]` | `-s`  | Filter by merge status into trunk (default: `all`)     |
 
 ### jj revset aliases
 

@@ -1,6 +1,7 @@
 import json
 import logging
 from datetime import UTC, datetime
+from enum import StrEnum
 from importlib.metadata import version
 from pathlib import Path
 from typing import Annotated
@@ -22,6 +23,14 @@ from repoactive.runner import run_all
 app = typer.Typer(no_args_is_help=True)
 
 _DEFAULT_REPO = Path()
+
+
+class MergeStatus(StrEnum):
+    """Filter for ``recent-commits`` by whether a commit has landed in trunk."""
+
+    all = "all"
+    merged = "merged"
+    unmerged = "unmerged"
 
 
 def _resolve_config(config: list[Path] | None, repo: Path) -> list[Path]:
@@ -171,9 +180,10 @@ def recent_commits(
     repo: Annotated[
         Path, typer.Option("--repo", "-r", help="Path to the jj repository.")
     ] = _DEFAULT_REPO,
-    merged: Annotated[
-        bool | None, typer.Option("--merged/--unmerged", help="Filter by merge status into trunk.")
-    ] = None,
+    merge_status: Annotated[
+        MergeStatus,
+        typer.Option("--status", "-s", help="Filter by merge status into trunk."),
+    ] = MergeStatus.all,
     jobs: Annotated[
         list[str] | None,
         typer.Argument(help="Job names to filter on (default: all)."),
@@ -183,8 +193,8 @@ def recent_commits(
 
     Each commit carries a Repoactive-Job trailer written by repoactive. Pass
     one or more job names to narrow the output; omit them to show all jobs.
-    By default shows all commits; use --merged or --unmerged to filter by
-    whether the commit has landed in trunk.
+    By default shows all commits; pass --status merged or --status unmerged to
+    filter by whether the commit has landed in trunk.
     """
     _check_repo(repo)
     try:
@@ -193,12 +203,13 @@ def recent_commits(
         typer.echo(str(e), err=True)
         raise typer.Exit(code=1) from e
 
-    if merged is True:
-        revset = "::trunk()"
-    elif merged is False:
-        revset = "~(::trunk())"
-    else:
-        revset = "all()"
+    match merge_status:
+        case MergeStatus.merged:
+            revset = "::trunk()"
+        case MergeStatus.unmerged:
+            revset = "~(::trunk())"
+        case MergeStatus.all:
+            revset = "all()"
 
     cutoff = datetime.now(UTC) - delta
     commits = JJ(repo).recent_job_commits(cutoff, revset=revset)
