@@ -30,6 +30,7 @@ lint.select = [
     "Q",      # flake8-quotes
     "RET",    # flake8-return
     "RUF",    # Ruff-specific rules
+    "S108",   # flake8-bandit: hardcoded temp file/directory paths
     "SIM",    # flake8-simplify
     "TID",    # flake8-tidy-imports
     "TRY003", # raise-vanilla-args

@@ -253,8 +253,8 @@ class TestWorkspaceAdd:
     def test_not_colocated_only_adds_workspace(self, mock_run: MagicMock) -> None:
         # REPO has no .git directory, so no git worktree setup happens
         mock_run.return_value.stdout = ""
-        _jj().workspace_add("ws", Path("/tmp/ws"))
-        assert mock_run.call_args_list == [_call("workspace", "add", "--name", "ws", "/tmp/ws")]
+        _jj().workspace_add("ws", Path("/work/ws"))
+        assert mock_run.call_args_list == [_call("workspace", "add", "--name", "ws", "/work/ws")]
 
 
 class TestWorkspaceName:
