@@ -437,6 +437,58 @@ def _select_run_jobs(
     )
 
 
+def _run_one_job(  # noqa: PLR0913
+    *,
+    job: Job,
+    config: Config,
+    repo_path: Path,
+    summary: RunSummary,
+    blocked: set[str],
+    plan: UpdatePlan,
+) -> None:
+    """Run a single job, recording its outcome in ``summary``/``blocked``/``plan``.
+
+    A failed or skipped job adds its name to ``blocked`` so its dependents are
+    skipped in turn."""
+    blocking_deps = [d for d in job.depends_on if d in blocked]
+    if blocking_deps:
+        print(f"==> [{job.name}] skipped (dependency failed: {', '.join(blocking_deps)})")
+        summary.skipped.add(job.name)
+        blocked.add(job.name)
+        return
+
+    resolved_job = job.resolve(config.job_defaults)
+    parents = _compute_parents(resolved_job, summary.results)
+    logger.debug("[%s] computed parents: %s", job.name, parents)
+    if _on_cooldown(resolved_job, repo_path):
+        print(f"==> [{job.name}] on cooldown ({resolved_job.cooldown_period}), skipped")
+        summary.cooldown.add(job.name)
+        # Treat like a no-op run so dependents proceed on the base branch.
+        summary.results[job.name] = JobResult(
+            job=resolved_job, effective_revsets=parents, produced_output=False
+        )
+        return
+
+    start = time.monotonic()
+    try:
+        result = run_job(
+            job=resolved_job,
+            parents=parents,
+            repo_path=repo_path,
+        )
+        summary.results[job.name] = result
+        if result.update is not None:
+            plan.updates.append(result.update)
+    except Exception as e:
+        # A command failure reports the command's own time (matching the
+        # success prints); other failures have no command time, so fall back
+        # to the wall time spent in run_job.
+        elapsed = e.elapsed if isinstance(e, CommandError) else time.monotonic() - start
+        print(f"==> [{job.name}] failed: {e} ({elapsed:.1f}s)")
+        summary.failed[job.name] = e
+        blocked.add(job.name)
+
+
 @contextlib.contextmanager
 def _prepare_repo(repo_path: Path, mode: RunMode) -> Generator[JJ]:
     repo = JJ(repo_path)
@@ -500,43 +552,14 @@ def run_all(  # noqa: PLR0913
 
         print(f"Running {len(ordered_jobs)} job(s)...")
         for job in ordered_jobs:
-            blocking_deps = [d for d in job.depends_on if d in blocked]
-            if blocking_deps:
-                print(f"==> [{job.name}] skipped (dependency failed: {', '.join(blocking_deps)})")
-                summary.skipped.add(job.name)
-                blocked.add(job.name)
-                continue
-
-            resolved_job = job.resolve(config.job_defaults)
-            parents = _compute_parents(resolved_job, summary.results)
-            logger.debug("[%s] computed parents: %s", job.name, parents)
-            if _on_cooldown(resolved_job, repo_path):
-                print(f"==> [{job.name}] on cooldown ({resolved_job.cooldown_period}), skipped")
-                summary.cooldown.add(job.name)
-                # Treat like a no-op run so dependents proceed on the base branch.
-                summary.results[job.name] = JobResult(
-                    job=resolved_job, effective_revsets=parents, produced_output=False
-                )
-                continue
-
-            start = time.monotonic()
-            try:
-                result = run_job(
-                    job=resolved_job,
-                    parents=parents,
-                    repo_path=repo_path,
-                )
-                summary.results[job.name] = result
-                if result.update is not None:
-                    plan.updates.append(result.update)
-            except Exception as e:
-                # A command failure reports the command's own time (matching the
-                # success prints); other failures have no command time, so fall back
-                # to the wall time spent in run_job.
-                elapsed = e.elapsed if isinstance(e, CommandError) else time.monotonic() - start
-                print(f"==> [{job.name}] failed: {e} ({elapsed:.1f}s)")
-                summary.failed[job.name] = e
-                blocked.add(job.name)
+            _run_one_job(
+                job=job,
+                config=config,
+                repo_path=repo_path,
+                summary=summary,
+                blocked=blocked,
+                plan=plan,
+            )
 
         # A local run stops here: the plan is built but deliberately not applied, so
         # nothing is pushed and no MR is created.

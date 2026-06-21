@@ -13,10 +13,12 @@ from repoactive.runner import (
     CommandError,
     JobResult,
     RunMode,
+    RunSummary,
     UnknownJobsError,
     _compute_parents,
     _prepare_repo,
     _run_command,
+    _run_one_job,
     _select_jobs,
     _select_run_jobs,
     _topological_sort,
@@ -363,6 +365,146 @@ class TestSelectRunJobs:
             _select_run_jobs(
                 config=config, repo=repo, requested_jobs=["nope"], requested_tags=None
             )
+
+
+class TestRunOneJob:
+    def test_blocked_dependency_skips(self) -> None:
+        # b depends on a, which already failed; b is skipped and itself blocks.
+        config = _config(_job("a"), _job("b", depends_on=["a"]))
+        job_b = config.jobs[1]
+        summary = RunSummary()
+        blocked = {"a"}
+        plan = UpdatePlan()
+        with patch("repoactive.runner.run_job") as mock_run_job:
+            _run_one_job(
+                job=job_b,
+                config=config,
+                repo_path=REPO,
+                summary=summary,
+                blocked=blocked,
+                plan=plan,
+            )
+        assert summary.skipped == {"b"}
+        assert "b" in blocked
+        assert summary.results == {}
+        mock_run_job.assert_not_called()
+
+    def test_cooldown_skips_but_records_noop_result(self) -> None:
+        config = _config(_job("a"))
+        job_a = config.jobs[0]
+        summary = RunSummary()
+        plan = UpdatePlan()
+        with (
+            patch("repoactive.runner._on_cooldown", return_value=True),
+            patch("repoactive.runner.run_job") as mock_run_job,
+        ):
+            _run_one_job(
+                job=job_a,
+                config=config,
+                repo_path=REPO,
+                summary=summary,
+                blocked=set(),
+                plan=plan,
+            )
+        assert summary.cooldown == {"a"}
+        # A no-op result is recorded so dependents proceed on the base branch.
+        assert summary.results["a"].produced_output is False
+        assert summary.results["a"].effective_revsets == ["trunk()"]
+        assert plan.updates == []
+        mock_run_job.assert_not_called()
+
+    def test_success_records_result(self) -> None:
+        config = _config(_job("a"))
+        job_a = config.jobs[0]
+        result = JobResult(job=job_a, effective_revsets=["repoactive/a"], produced_output=True)
+        summary = RunSummary()
+        plan = UpdatePlan()
+        with (
+            patch("repoactive.runner._on_cooldown", return_value=False),
+            patch("repoactive.runner.run_job", return_value=result) as mock_run_job,
+        ):
+            _run_one_job(
+                job=job_a,
+                config=config,
+                repo_path=REPO,
+                summary=summary,
+                blocked=set(),
+                plan=plan,
+            )
+        assert summary.results["a"] is result
+        assert plan.updates == []
+        # The resolved job (with defaults applied) is run with computed parents.
+        _, kwargs = mock_run_job.call_args
+        assert kwargs["parents"] == ["trunk()"]
+
+    def test_success_with_update_appends_to_plan(self) -> None:
+        config = _config(_job("a"))
+        job_a = config.jobs[0]
+        update = _push_update("a")
+        result = JobResult(
+            job=job_a,
+            effective_revsets=["repoactive/a"],
+            produced_output=True,
+            update=update,
+        )
+        summary = RunSummary()
+        plan = UpdatePlan()
+        with (
+            patch("repoactive.runner._on_cooldown", return_value=False),
+            patch("repoactive.runner.run_job", return_value=result),
+        ):
+            _run_one_job(
+                job=job_a,
+                config=config,
+                repo_path=REPO,
+                summary=summary,
+                blocked=set(),
+                plan=plan,
+            )
+        assert plan.updates == [update]
+
+    def test_command_failure_records_and_blocks(self) -> None:
+        config = _config(_job("a"))
+        job_a = config.jobs[0]
+        err = CommandError("boom", elapsed=1.5)
+        summary = RunSummary()
+        blocked: set[str] = set()
+        with (
+            patch("repoactive.runner._on_cooldown", return_value=False),
+            patch("repoactive.runner.run_job", side_effect=err),
+        ):
+            _run_one_job(
+                job=job_a,
+                config=config,
+                repo_path=REPO,
+                summary=summary,
+                blocked=blocked,
+                plan=UpdatePlan(),
+            )
+        assert summary.failed == {"a": err}
+        assert blocked == {"a"}
+        assert summary.results == {}
+
+    def test_generic_failure_records_and_blocks(self) -> None:
+        config = _config(_job("a"))
+        job_a = config.jobs[0]
+        err = RuntimeError("kaboom")
+        summary = RunSummary()
+        blocked: set[str] = set()
+        with (
+            patch("repoactive.runner._on_cooldown", return_value=False),
+            patch("repoactive.runner.run_job", side_effect=err),
+        ):
+            _run_one_job(
+                job=job_a,
+                config=config,
+                repo_path=REPO,
+                summary=summary,
+                blocked=blocked,
+                plan=UpdatePlan(),
+            )
+        assert summary.failed == {"a": err}
+        assert blocked == {"a"}
 
 
 class TestComputeParents:
