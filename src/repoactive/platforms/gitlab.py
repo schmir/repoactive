@@ -10,7 +10,7 @@ def _mr_title(title: str, *, draft: bool) -> str:
 
 
 class GitLabPlatform(Platform):
-    def __init__(self, url: str | None, token: str, repo: str) -> None:
+    def __init__(self, *, url: str | None, token: str, repo: str) -> None:
         self._gl = gitlab.Gitlab(url or "https://gitlab.com", private_token=token)
         self._project = self._gl.projects.get(repo)
 

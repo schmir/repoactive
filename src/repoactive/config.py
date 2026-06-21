@@ -277,17 +277,17 @@ class Config(BaseModel):
         return self
 
 
-def _deep_merge(base: dict, override: dict) -> dict:
+def _deep_merge(*, base: dict, override: dict) -> dict:
     result = dict(base)
     for key, value in override.items():
         if key in result and isinstance(result[key], dict) and isinstance(value, dict):
-            result[key] = _deep_merge(result[key], value)
+            result[key] = _deep_merge(base=result[key], override=value)
         else:
             result[key] = value
     return result
 
 
-def _merge_jobs(base: list[dict], override: list[dict]) -> list[dict]:
+def _merge_jobs(*, base: list[dict], override: list[dict]) -> list[dict]:
     """Merge two job lists by name: order is preserved, override fields win, new names appended."""
     job_by_name: dict[str, dict] = {}
     result: list[dict] = []
@@ -304,7 +304,7 @@ def _merge_jobs(base: list[dict], override: list[dict]) -> list[dict]:
     return result
 
 
-def _merge_platforms(base: list[dict], override: list[dict]) -> list[dict]:
+def _merge_platforms(*, base: list[dict], override: list[dict]) -> list[dict]:
     """Merge two platform lists by url: override fields win, new entries appended."""
     platform_by_url: dict[str, dict] = {}
     result: list[dict] = []
@@ -381,9 +381,11 @@ def load_config(paths: list[Path]) -> Config:
 
     merged = {}
     for data in configs:
-        jobs = _merge_jobs(merged.get("job", []), data.get("job", []))
-        platforms = _merge_platforms(merged.get("platform", []), data.get("platform", []))
-        merged = _deep_merge(merged, data)
+        jobs = _merge_jobs(base=merged.get("job", []), override=data.get("job", []))
+        platforms = _merge_platforms(
+            base=merged.get("platform", []), override=data.get("platform", [])
+        )
+        merged = _deep_merge(base=merged, override=data)
         merged["job"] = jobs
         merged["platform"] = platforms
         merged.pop("$schema", None)

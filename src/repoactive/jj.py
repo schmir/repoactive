@@ -268,7 +268,7 @@ class JJ:
         output = self._run("log", "--no-graph", "-r", "~(::trunk())", "-T", template)
         return {line.strip() for line in output.splitlines() if line.strip()}
 
-    def has_recent_job_commit(self, job_name: str, base: str, since: datetime) -> bool:
+    def has_recent_job_commit(self, *, job_name: str, base: str, since: datetime) -> bool:
         """Whether ``base`` already carries a recent commit from the given job.
 
         Matches commits that have a ``Repoactive-Job: <job_name>`` trailer and a

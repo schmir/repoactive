@@ -7,7 +7,7 @@ _PUBLIC_GITHUB_URL = "https://github.com"
 
 
 class GitHubPlatform(Platform):
-    def __init__(self, url: str | None, token: str, repo: str) -> None:
+    def __init__(self, *, url: str | None, token: str, repo: str) -> None:
         normalized = (url or "").rstrip("/")
         base_url = (
             normalized + "/api/v3"

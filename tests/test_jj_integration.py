@@ -352,25 +352,36 @@ class TestHasRecentJobCommit:
 
     def test_finds_commit_with_trailer_in_window(self, repo: JJ) -> None:
         repo.describe("upgrade deps\n\nRepoactive-Job: my-job")
-        assert repo.has_recent_job_commit("my-job", "@", self._day_ago()) is True
+        assert (
+            repo.has_recent_job_commit(job_name="my-job", base="@", since=self._day_ago()) is True
+        )
 
     def test_commit_outside_window_not_found(self, repo: JJ) -> None:
         repo.describe("upgrade deps\n\nRepoactive-Job: my-job")
         # since is in the future, so the just-made commit predates it
-        assert repo.has_recent_job_commit("my-job", "@", self._day_ahead()) is False
+        assert (
+            repo.has_recent_job_commit(job_name="my-job", base="@", since=self._day_ahead())
+            is False
+        )
 
     def test_commit_without_trailer_not_found(self, repo: JJ) -> None:
         repo.describe("upgrade deps")
-        assert repo.has_recent_job_commit("my-job", "@", self._day_ago()) is False
+        assert (
+            repo.has_recent_job_commit(job_name="my-job", base="@", since=self._day_ago()) is False
+        )
 
     def test_different_job_name_not_found(self, repo: JJ) -> None:
         repo.describe("upgrade deps\n\nRepoactive-Job: other-job")
-        assert repo.has_recent_job_commit("my-job", "@", self._day_ago()) is False
+        assert (
+            repo.has_recent_job_commit(job_name="my-job", base="@", since=self._day_ago()) is False
+        )
 
     def test_trailer_like_body_line_not_matched(self, repo: JJ) -> None:
         # The matching line is in the body, not the final (trailer) paragraph.
         repo.describe("Repoactive-Job: my-job\n\nthe real body comes after")
-        assert repo.has_recent_job_commit("my-job", "@", self._day_ago()) is False
+        assert (
+            repo.has_recent_job_commit(job_name="my-job", base="@", since=self._day_ago()) is False
+        )
 
     def test_matches_only_on_given_base(self, repo: JJ) -> None:
         repo.describe("on main\n\nRepoactive-Job: my-job")
@@ -380,8 +391,14 @@ class TestHasRecentJobCommit:
         repo.describe("unrelated work")
         repo.bookmark_set("other")
         # the trailer is reachable from "main" but not from the sibling "other"
-        assert repo.has_recent_job_commit("my-job", "main", self._day_ago()) is True
-        assert repo.has_recent_job_commit("my-job", "other", self._day_ago()) is False
+        assert (
+            repo.has_recent_job_commit(job_name="my-job", base="main", since=self._day_ago())
+            is True
+        )
+        assert (
+            repo.has_recent_job_commit(job_name="my-job", base="other", since=self._day_ago())
+            is False
+        )
 
     def test_finds_commit_in_ancestor_not_just_tip(self, repo: JJ) -> None:
         # The job commit is an ancestor of base, not base itself.
@@ -389,7 +406,9 @@ class TestHasRecentJobCommit:
         repo.new("@")
         repo.describe("later unrelated work")
         # base "@" is the tip; the trailer lives one commit below it
-        assert repo.has_recent_job_commit("my-job", "@", self._day_ago()) is True
+        assert (
+            repo.has_recent_job_commit(job_name="my-job", base="@", since=self._day_ago()) is True
+        )
 
 
 class TestRecentJobCommits:

@@ -335,7 +335,7 @@ def _on_cooldown(job: Job, repo_path: Path) -> bool:
         return False
     base = job.base_branch or "trunk()"
     since = datetime.now(UTC) - delta
-    on_cooldown = JJ(repo_path).has_recent_job_commit(job.name, base, since)
+    on_cooldown = JJ(repo_path).has_recent_job_commit(job_name=job.name, base=base, since=since)
     logger.debug(
         "[%s] cooldown check: base=%s since=%s -> on_cooldown=%s",
         job.name,
@@ -357,6 +357,7 @@ def _include_dependencies(jobs: list[Job], selected: set[str]) -> None:
 
 
 def _select_jobs(
+    *,
     jobs: list[Job],
     requested_jobs: set[str],
     requested_tags: set[str] | None = None,
@@ -457,10 +458,10 @@ def run_all(  # noqa: PLR0913, PLR0915, C901
         else:
             print("==> no unmerged branches to refresh")
     ordered_jobs = _select_jobs(
-        config.jobs,
-        set(requested_jobs or []),
-        set(requested_tags or []),
-        refresh_jobs,
+        jobs=config.jobs,
+        requested_jobs=set(requested_jobs or []),
+        requested_tags=set(requested_tags or []),
+        refresh_jobs=refresh_jobs,
     )
     summary = RunSummary()
     # Names of jobs that failed or were skipped - their dependents are blocked.
