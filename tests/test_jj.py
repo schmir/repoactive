@@ -210,6 +210,11 @@ class TestGitPushBookmarks:
             "git", "push", "--bookmark", "repoactive/a", "--bookmark", "repoactive/b"
         )
 
+    @patch("repoactive.jj.subprocess.run")
+    def test_does_not_call_jj_when_no_bookmarks(self, mock_run: MagicMock) -> None:
+        _jj().git_push_bookmarks()
+        mock_run.assert_not_called()
+
 
 class TestEdit:
     @patch("repoactive.jj.subprocess.run")

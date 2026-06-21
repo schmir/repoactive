@@ -297,6 +297,8 @@ class JJ:
         Pushing a locally-deleted bookmark propagates the deletion; a no-op if
         the bookmark was never pushed.
         """
+        if not bookmarks:
+            return
         bookmark_args = []
         for bookmark in bookmarks:
             bookmark_args += ["--bookmark", bookmark]
