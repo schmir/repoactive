@@ -412,6 +412,31 @@ def _select_jobs(
     return result
 
 
+def _select_run_jobs(
+    *,
+    config: Config,
+    repo: JJ,
+    requested_jobs: list[str] | None,
+    requested_tags: list[str] | None,
+) -> list[Job]:
+    """Pick and order the jobs to run, accounting for unmerged-branch refresh."""
+    # On the bare default run, also refresh jobs with an unmerged branch so a
+    # stale branch is rebased on trunk now rather than at the job's next run.
+    refresh_jobs: set[str] = set()
+    if not requested_jobs and not requested_tags:
+        refresh_jobs = repo.unmerged_job_names() & {j.name for j in config.jobs}
+        if refresh_jobs:
+            print(f"==> refreshing unmerged branches: {', '.join(sorted(refresh_jobs))}")
+        else:
+            print("==> no unmerged branches to refresh")
+    return _select_jobs(
+        jobs=config.jobs,
+        requested_jobs=set(requested_jobs or []),
+        requested_tags=set(requested_tags or []),
+        refresh_jobs=refresh_jobs,
+    )
+
+
 @contextlib.contextmanager
 def _prepare_repo(repo_path: Path, mode: RunMode) -> Generator[JJ]:
     repo = JJ(repo_path)
@@ -459,20 +484,11 @@ def run_all(  # noqa: PLR0913
             requested_tags,
         )
 
-        # On the bare default run, also refresh jobs with an unmerged branch so a
-        # stale branch is rebased on trunk now rather than at the job's next run.
-        refresh_jobs: set[str] = set()
-        if not requested_jobs and not requested_tags:
-            refresh_jobs = repo.unmerged_job_names() & {j.name for j in config.jobs}
-            if refresh_jobs:
-                print(f"==> refreshing unmerged branches: {', '.join(sorted(refresh_jobs))}")
-            else:
-                print("==> no unmerged branches to refresh")
-        ordered_jobs = _select_jobs(
-            jobs=config.jobs,
-            requested_jobs=set(requested_jobs or []),
-            requested_tags=set(requested_tags or []),
-            refresh_jobs=refresh_jobs,
+        ordered_jobs = _select_run_jobs(
+            config=config,
+            repo=repo,
+            requested_jobs=requested_jobs,
+            requested_tags=requested_tags,
         )
         summary = RunSummary()
         # Names of jobs that failed or were skipped - their dependents are blocked.

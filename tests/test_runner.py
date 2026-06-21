@@ -18,6 +18,7 @@ from repoactive.runner import (
     _prepare_repo,
     _run_command,
     _select_jobs,
+    _select_run_jobs,
     _topological_sort,
     apply_plan,
     run_all,
@@ -300,6 +301,68 @@ class TestSelectJobs:
         assert _names(
             _select_jobs(jobs=config.jobs, requested_jobs=set(), refresh_jobs={"gone"})
         ) == ["a"]
+
+
+def _mock_repo(unmerged: set[str] | None = None) -> MagicMock:
+    """A JJ stub whose unmerged_job_names returns the given set."""
+    repo = MagicMock()
+    repo.unmerged_job_names.return_value = unmerged or set()
+    return repo
+
+
+class TestSelectRunJobs:
+    def test_bare_run_returns_default_jobs(self) -> None:
+        config = _config(_djob("a"), _djob("b", tags=["weekly"]))
+        repo = _mock_repo()
+        result = _select_run_jobs(
+            config=config, repo=repo, requested_jobs=None, requested_tags=None
+        )
+        assert _names(result) == ["a"]
+
+    def test_bare_run_refreshes_unmerged_branches(self) -> None:
+        # A weekly job (out of the default run) with an unmerged branch is pulled in.
+        config = _config(_djob("a"), _djob("b", tags=["weekly"]))
+        repo = _mock_repo({"b"})
+        result = _select_run_jobs(
+            config=config, repo=repo, requested_jobs=None, requested_tags=None
+        )
+        assert _names(result) == ["a", "b"]
+
+    def test_bare_run_ignores_unmerged_names_not_in_config(self) -> None:
+        # A trailer for a removed/renamed job must not affect selection.
+        config = _config(_djob("a"))
+        repo = _mock_repo({"gone"})
+        result = _select_run_jobs(
+            config=config, repo=repo, requested_jobs=None, requested_tags=None
+        )
+        assert _names(result) == ["a"]
+
+    def test_requested_jobs_skip_unmerged_query(self) -> None:
+        # Explicit selection does not consult unmerged branches.
+        config = _config(_djob("a"), _djob("b"))
+        repo = _mock_repo({"a"})
+        result = _select_run_jobs(
+            config=config, repo=repo, requested_jobs=["b"], requested_tags=None
+        )
+        assert _names(result) == ["b"]
+        repo.unmerged_job_names.assert_not_called()
+
+    def test_requested_tags_skip_unmerged_query(self) -> None:
+        config = _config(_djob("a", tags=["weekly"]), _djob("b"))
+        repo = _mock_repo({"b"})
+        result = _select_run_jobs(
+            config=config, repo=repo, requested_jobs=None, requested_tags=["weekly"]
+        )
+        assert _names(result) == ["a"]
+        repo.unmerged_job_names.assert_not_called()
+
+    def test_unknown_requested_job_raises(self) -> None:
+        config = _config(_djob("a"))
+        repo = _mock_repo()
+        with pytest.raises(UnknownJobsError):
+            _select_run_jobs(
+                config=config, repo=repo, requested_jobs=["nope"], requested_tags=None
+            )
 
 
 class TestComputeParents:
