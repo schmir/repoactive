@@ -6,14 +6,14 @@
 `repoactive` runs your scripts against a git repository and optionally keeps
 the corresponding merge requests up to date. You write the scripts that
 produce the code changes; `repoactive` handles the rest - branches, commits,
-and (with `--create-prs`) the full MR lifecycle.
+and (with `--mode publish`) the full MR lifecycle.
 
 ## How it works
 
 You configure one or more **jobs**, each with a script (any shell command or
 executable) that modifies the repository's working tree. `repoactive` runs
 each script, captures the resulting diff, and records the change locally.
-With `--create-prs` it also:
+With `--mode publish` it also:
 
 - opens a new merge request if one does not already exist for that job, or
 - updates the existing merge request branch if the diff has changed.
@@ -23,21 +23,21 @@ need to write is the script that produces the change.
 
 ```
 [your script] → diff → repoactive → branch
-                                       ↓ (with --push or --create-prs)
+                                       ↓ (with --mode push or --mode publish)
                                     git push → merge request
-                                                    ↑ (with --create-prs)
+                                                    ↑ (with --mode publish)
                                             (create or update)
 ```
 
 1. `repoactive` creates a new commit on top of the base branch or on top of
    other repoactive managed branches.
 2. It runs the job's script against the working tree.
-3. If the script produced a diff, it records the change. With `--push` or
-   `--create-prs`, it pushes the branch; with `--create-prs`, it also
+3. If the script produced a diff, it records the change. With `--mode push`
+   or `--mode publish`, it pushes the branch; with `--mode publish`, it also
    creates or updates the merge request.
 4. If the script produced no diff, the branch is reset to the base. With
-   `--push` or `--create-prs`, the reset branch is pushed without opening or
-   updating an MR.
+   `--mode push` or `--mode publish`, the reset branch is pushed without
+   opening or updating an MR.
 
 ## Use cases
 
@@ -221,9 +221,9 @@ has an unmerged branch**, regardless of its tags. A branch is "unmerged"
 when the job's last commit has not yet landed in `trunk()`; repoactive finds
 these via the `Repoactive-Job` trailer on unmerged commits and pulls those
 jobs (and their dependencies) into the run, so each branch is rebased on the
-latest `trunk()` and the command is re-run against it. (With `--create-prs`
-such a branch has an open MR; with a plain `run` or `--push` it is just a
-branch.)
+latest `trunk()` and the command is re-run against it. (With
+`--mode publish` such a branch has an open MR; with a plain `run` or
+`--mode push` it is just a branch.)
 
 This means a job's schedule tag governs when a _new_ branch is created,
 while the default run keeps an existing branch rebased and current — you
@@ -267,7 +267,7 @@ tags = ["weekly"]
 
 ```cron
 # Run every job tagged "weekly" each Sunday at 03:00
-0 3 * * 0  repoactive run --tag weekly --create-prs
+0 3 * * 0  repoactive run --tag weekly --mode publish
 ```
 
 Because the cron is the sole trigger, the command runs exactly when cron
@@ -331,31 +331,30 @@ repoactive run regenerate-api-client sync-license-headers
 repoactive run --tag weekly
 
 # Push branches to the remote without creating MRs
-repoactive run --push
+repoactive run --mode push
 
 # Push branches and create or update merge requests
-repoactive run --create-prs
+repoactive run --mode publish
 
 # Enable debug logging
 repoactive run --debug
 ```
 
-| Option          | Short | Description                                                                                                                  |
-| --------------- | ----- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `--config PATH` | `-c`  | Config file or directory of `*.toml` files; repeat to merge. Default: `.repoactive.d/` and `.repoactive.toml` under `--repo` |
-| `--repo PATH`   | `-r`  | jj repository path (default: `.`)                                                                                            |
-| `--push`        |       | Push branches to the remote repository                                                                                       |
-| `--create-prs`  |       | Push branches and create or update pull requests                                                                             |
-| `--tag TAG`     | `-t`  | Run jobs carrying any of these tags (repeatable). With no tags/jobs the default run targets the `enabled` tag                |
-| `--debug`       | `-d`  | Enable debug logging                                                                                                         |
+| Option                          | Short | Description                                                                                                                  |
+| ------------------------------- | ----- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `--config PATH`                 | `-c`  | Config file or directory of `*.toml` files; repeat to merge. Default: `.repoactive.d/` and `.repoactive.toml` under `--repo` |
+| `--repo PATH`                   | `-r`  | jj repository path (default: `.`)                                                                                            |
+| `--mode [local\|push\|publish]` | `-m`  | How far to publish: `local` (default) applies only locally, `push` also pushes branches, `publish` also creates/updates MRs  |
+| `--tag TAG`                     | `-t`  | Run jobs carrying any of these tags (repeatable). With no tags/jobs the default run targets the `enabled` tag                |
+| `--debug`                       | `-d`  | Enable debug logging                                                                                                         |
 
-A local `run` (without `--push`/`--create-prs`) captures the jj operation id
+A local `run` (the default `--mode local`) captures the jj operation id
 beforehand and prints a `jj op restore <id>` command (both before and after
 the run, since a run can produce a lot of output). Run it to roll the
 repository - commits, bookmarks and colocated git refs - back to the state
-it was in before the run. The hint is omitted for `--push`/`--create-prs`
-runs, since restoring local state would not undo a branch already pushed or
-an MR already created.
+it was in before the run. The hint is omitted for
+`--mode push`/`--mode publish` runs, since restoring local state would not
+undo a branch already pushed or an MR already created.
 
 ## Inspecting repoactive commits
 

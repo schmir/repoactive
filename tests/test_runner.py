@@ -12,6 +12,7 @@ from repoactive.config import Config, Job, JobDefaults
 from repoactive.runner import (
     CommandError,
     JobResult,
+    RunMode,
     UnknownJobsError,
     _compute_parents,
     _run_command,
@@ -1030,7 +1031,7 @@ class TestRunAll:
         a = _job("a")
         mock_run_job.return_value = _result(a, revsets=["repoactive/a"])
 
-        run_all(config=_config(a), repo_path=REPO, local=True)
+        run_all(config=_config(a), repo_path=REPO, mode=RunMode.local)
 
         # The collect phase still runs, but a local run never applies the plan.
         mock_run_job.assert_called_once()
@@ -1044,7 +1045,7 @@ class TestRunAll:
         a = _job("a")
         mock_run_job.return_value = _result(a, revsets=["repoactive/a"])
 
-        run_all(config=_config(a), repo_path=REPO, local=False)
+        run_all(config=_config(a), repo_path=REPO, mode=RunMode.push)
 
         mock_apply_plan.assert_called_once()
 
@@ -1197,7 +1198,7 @@ class TestRunAll:
         a = _job("a")
         mock_run_job.return_value = _result(a, revsets=["repoactive/a"])
 
-        run_all(config=_config(a), repo_path=REPO, local=True)
+        run_all(config=_config(a), repo_path=REPO, mode=RunMode.local)
 
         mock_jj.return_value.op_id.assert_called_once_with()
         out = capsys.readouterr().out
@@ -1211,7 +1212,7 @@ class TestRunAll:
         a = _job("a")
         mock_run_job.return_value = _result(a, revsets=["repoactive/a"])
 
-        run_all(config=_config(a), repo_path=REPO, local=False)
+        run_all(config=_config(a), repo_path=REPO, mode=RunMode.push)
 
         # op_id is still computed for the debug log, but no restore hint is printed.
         mock_jj.return_value.op_id.assert_called_once_with()

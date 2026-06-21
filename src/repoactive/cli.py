@@ -18,7 +18,7 @@ from repoactive.config import (
 )
 from repoactive.jj import JJ, NotAColocatedRepoError, require_colocated_repo
 from repoactive.platforms import get_platform
-from repoactive.runner import run_all
+from repoactive.runner import RunMode, run_all
 
 app = typer.Typer(no_args_is_help=True)
 
@@ -78,13 +78,15 @@ def run(  # noqa: PLR0913
     repo: Annotated[
         Path, typer.Option("--repo", "-r", help="Path to the jj repository.")
     ] = _DEFAULT_REPO,
-    push: Annotated[
-        bool, typer.Option("--push", help="Push bookmarks to the remote repository.")
-    ] = False,
-    create_prs: Annotated[
-        bool,
-        typer.Option("--create-prs", help="Push bookmarks and create or update pull requests."),
-    ] = False,
+    mode: Annotated[
+        RunMode,
+        typer.Option(
+            "--mode",
+            "-m",
+            help="How far to publish: 'local' (default) applies only to the local repo, "
+            "'push' also pushes bookmarks, 'publish' also creates/updates MRs/PRs.",
+        ),
+    ] = RunMode.local,
     debug: Annotated[bool, typer.Option("--debug", "-d", help="Enable debug logging.")] = False,
     tags: Annotated[
         list[str] | None,
@@ -99,7 +101,7 @@ def run(  # noqa: PLR0913
         typer.Argument(help="Jobs to run (default: all); dependencies are auto-included."),
     ] = None,
 ) -> None:
-    """Apply jobs locally; use --push or --create-prs to publish."""
+    """Apply jobs locally; pass --mode push or --mode publish to publish."""
     if debug:
         logging.basicConfig(level=logging.DEBUG)
     _check_repo(repo)
@@ -108,15 +110,14 @@ def run(  # noqa: PLR0913
     except ConfigNotFoundError as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(code=1) from e
-    local = not push and not create_prs
-    platform = get_platform(cfg, repo) if create_prs else None
+    platform = get_platform(cfg, repo) if mode is RunMode.publish else None
     summary = run_all(
         config=cfg,
         repo_path=repo,
         platform=platform,
         requested_jobs=jobs or None,
         requested_tags=tags or None,
-        local=local,
+        mode=mode,
     )
     if not summary.ok:
         raise typer.Exit(code=1)

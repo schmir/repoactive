@@ -6,6 +6,7 @@ import subprocess
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import Path
 
 from repoactive.config import DEFAULT_TAG, Config, Job
@@ -20,6 +21,18 @@ from repoactive.updates import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class RunMode(StrEnum):
+    """How far a run publishes its results past the local jj repository.
+
+    The modes form a ladder: ``PUSH`` does everything ``LOCAL`` does and also
+    pushes bookmarks; ``PUBLISH`` additionally creates or updates MRs/PRs.
+    """
+
+    local = "local"
+    push = "push"
+    publish = "publish"
 
 
 @dataclass
@@ -404,14 +417,14 @@ def run_all(  # noqa: PLR0913, PLR0915, C901
     platform: Platform | None = None,
     requested_jobs: list[str] | None = None,
     requested_tags: list[str] | None = None,
-    local: bool = False,
+    mode: RunMode = RunMode.publish,
 ) -> RunSummary:
     repo = JJ(repo_path)
     op_id = repo.op_id()
     logger.debug(
-        "run_all: repo=%s local=%s requested_jobs=%s requested_tags=%s op_id=%s",
+        "run_all: repo=%s mode=%s requested_jobs=%s requested_tags=%s op_id=%s",
         repo_path,
-        local,
+        mode,
         requested_jobs,
         requested_tags,
         op_id,
@@ -422,10 +435,10 @@ def run_all(  # noqa: PLR0913, PLR0915, C901
 
     # For a local run, tell the user how to roll it back. Only local state can be
     # undone this way - a pushed branch or a created MR is not - so the hint is
-    # suppressed for --push/--create-prs runs. Printed again at the end since a
+    # suppressed for push/publish runs. Printed again at the end since a
     # run can produce a lot of output.
     restore_hint: str | None = None
-    if local:
+    if mode is RunMode.local:
         restore_hint = f"To undo this run, run:\n    jj op restore {op_id}"
         print(restore_hint + "\n")
 
@@ -448,8 +461,8 @@ def run_all(  # noqa: PLR0913, PLR0915, C901
     # Names of jobs that failed or were skipped - their dependents are blocked.
     blocked: set[str] = set()
     # Remote operations collected during the run. They are applied (in
-    # topological order) once every job has run, unless this is a local run -
-    # then the plan is built but never applied.
+    # topological order) once every job has run, unless this is a local-only run
+    # - then the plan is built but never applied.
     plan = UpdatePlan()
 
     print(f"Running {len(ordered_jobs)} job(s)...")
@@ -494,7 +507,7 @@ def run_all(  # noqa: PLR0913, PLR0915, C901
 
     # A local run stops here: the plan is built but deliberately not applied, so
     # nothing is pushed and no MR is created.
-    if not local:
+    if mode is not RunMode.local:
         mr_urls = apply_plan(plan, repo_path=repo_path, platform=platform)
         for name, url in mr_urls.items():
             summary.results[name].mr_url = url

@@ -255,7 +255,7 @@ class JJ:
         landed in trunk. The default run refreshes these jobs so a stale branch
         is kept rebased on the latest trunk instead of waiting for the job's next
         scheduled run. Unbounded in time: an unmerged branch may be arbitrarily
-        old. (With ``--create-prs`` such a branch has an open MR, but a branch
+        old. (With ``--mode publish`` such a branch has an open MR, but a branch
         may also exist without one.)
         """
         template = f"""
