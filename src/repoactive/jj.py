@@ -200,8 +200,6 @@ class JJ:
         output = self._run("log", "--no-graph", "-r", revset, "-T", template)
         result = []
         for line in output.splitlines():
-            if not line:
-                continue
             parts = line.split("\x1f", 4)
             if len(parts) == 5:  # noqa: PLR2004
                 result.append(
