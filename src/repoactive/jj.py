@@ -34,8 +34,51 @@ class JJError(Exception):
     pass
 
 
+class CommandFailedError(JJError):
+    """Raised when an invoked ``jj`` or ``git`` command exits non-zero."""
+
+    def __init__(self, program: str, args: tuple[str, ...], stderr: str) -> None:
+        super().__init__(f"{program} {' '.join(args)} failed:\n{stderr.strip()}")
+
+
+class RemoteNotFoundError(JJError):
+    """Raised when a named git remote does not exist."""
+
+    def __init__(self, remote: str) -> None:
+        super().__init__(f"Remote '{remote}' not found")
+
+
 class NotAColocatedRepoError(Exception):
     """Raised when --repo does not point at the root of a colocated jj repository."""
+
+
+class NotColocatedGitRepoError(NotAColocatedRepoError):
+    """Raised when --repo is a git repository not colocated with jj (no .jj)."""
+
+    def __init__(self, repo: Path) -> None:
+        super().__init__(
+            f"{repo} is a git repository but not colocated with jj (no .jj directory). "
+            "Run 'jj git init --colocate' to create a colocated repository."
+        )
+
+
+class NotAJJRepoError(NotAColocatedRepoError):
+    """Raised when --repo is not a jj repository (no .jj directory)."""
+
+    def __init__(self, repo: Path) -> None:
+        super().__init__(
+            f"{repo} is not a jj repository: no .jj directory found. "
+            "--repo must point at the root of a colocated jj repository."
+        )
+
+
+class MissingGitDirError(NotAColocatedRepoError):
+    """Raised when a jj repository has no colocated .git directory."""
+
+    def __init__(self, repo: Path) -> None:
+        super().__init__(
+            f"{repo} is not a colocated jj repository: no .git directory found next to .jj."
+        )
 
 
 def require_colocated_repo(repo: Path) -> None:
@@ -48,18 +91,10 @@ def require_colocated_repo(repo: Path) -> None:
     has_git = (repo / ".git").is_dir()
     if not has_jj:
         if has_git:
-            raise NotAColocatedRepoError(
-                f"{repo} is a git repository but not colocated with jj (no .jj directory). "
-                "Run 'jj git init --colocate' to create a colocated repository."
-            )
-        raise NotAColocatedRepoError(
-            f"{repo} is not a jj repository: no .jj directory found. "
-            "--repo must point at the root of a colocated jj repository."
-        )
+            raise NotColocatedGitRepoError(repo)
+        raise NotAJJRepoError(repo)
     if not has_git:
-        raise NotAColocatedRepoError(
-            f"{repo} is not a colocated jj repository: no .git directory found next to .jj."
-        )
+        raise MissingGitDirError(repo)
 
 
 @dataclass
@@ -98,7 +133,7 @@ class JJ:
             logger.debug(
                 "jj %s failed (rc=%s):\n%s", " ".join(args), e.returncode, e.stderr.strip()
             )
-            raise JJError(f"jj {' '.join(args)} failed:\n{e.stderr.strip()}") from e
+            raise CommandFailedError("jj", args, e.stderr) from e
         logger.debug(
             "jj %s -> %d bytes in %.3fs",
             " ".join(args),
@@ -273,7 +308,7 @@ class JJ:
             parts = line.split()
             if parts and parts[0] == remote:
                 return parts[1]
-        raise JJError(f"Remote '{remote}' not found")
+        raise RemoteNotFoundError(remote)
 
     def _git(self, *args: str, cwd: Path | None = None) -> str:
         run_cwd = cwd or self.cwd
@@ -290,7 +325,7 @@ class JJ:
             logger.debug(
                 "git %s failed (rc=%s):\n%s", " ".join(args), e.returncode, e.stderr.strip()
             )
-            raise JJError(f"git {' '.join(args)} failed:\n{e.stderr.strip()}") from e
+            raise CommandFailedError("git", args, e.stderr) from e
         return result.stdout
 
     def is_colocated(self) -> bool:

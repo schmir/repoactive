@@ -24,6 +24,73 @@ DEFAULT_TAG = "enabled"
 DISABLED_TAG = "disabled"
 
 
+class InvalidDurationError(ValueError):
+    """Raised when a duration string cannot be parsed."""
+
+    def __init__(self, value: str) -> None:
+        super().__init__(
+            f"invalid duration {value!r}: expected <number><unit> "
+            "with unit one of s, m, h, d, w (e.g. '7d')"
+        )
+
+
+class InvalidBranchPrefixError(ValueError):
+    """Raised when a branch_prefix contains disallowed characters."""
+
+    def __init__(self, value: str) -> None:
+        super().__init__(
+            f"invalid branch_prefix {value!r}: only alphanumerics, hyphens, underscores, and "
+            "slashes are allowed; must not start with '/' or contain '//'"
+        )
+
+
+class InvalidJobNameError(ValueError):
+    """Raised when a job name contains disallowed characters."""
+
+    def __init__(self, value: str) -> None:
+        super().__init__(
+            f"invalid job name {value!r}: only letters, digits, '-', and '_' are allowed"
+        )
+
+
+class InvalidTagError(ValueError):
+    """Raised when a tag contains disallowed characters."""
+
+    def __init__(self, tag: str) -> None:
+        super().__init__(f"invalid tag {tag!r}: only letters, digits, '-', and '_' are allowed")
+
+
+class DisabledAndTagsError(ValueError):
+    """Raised when a job sets both 'disabled' and 'tags'."""
+
+    def __init__(self, name: str) -> None:
+        super().__init__(
+            f"job {name!r} sets both 'disabled' and 'tags'; "
+            f"set one or the other (disabled is sugar for tags = ['{DISABLED_TAG}'])"
+        )
+
+
+class UnknownDependencyError(ValueError):
+    """Raised when a job depends_on a job that does not exist."""
+
+    def __init__(self, name: str, unknown: list[str]) -> None:
+        super().__init__(f"Job '{name}' depends_on unknown jobs: {unknown}")
+
+
+class CircularDependencyError(ValueError):
+    """Raised when jobs form a dependency cycle."""
+
+    def __init__(self, name: str) -> None:
+        super().__init__(f"Circular dependency involving '{name}'")
+
+
+class MissingJobNameError(ValueError):
+    """Raised when a [[job]] entry has no 'name' field."""
+
+    def __init__(self) -> None:
+        super().__init__("Each [[job]] entry must have a 'name' field")
+
+
 def parse_duration(value: str) -> timedelta:
     """Parse a duration like ``"7d"`` or ``"12h"`` into a timedelta.
 
@@ -32,10 +99,7 @@ def parse_duration(value: str) -> timedelta:
     """
     match = _DURATION_RE.match(value.strip())
     if not match:
-        raise ValueError(
-            f"invalid duration {value!r}: expected <number><unit> "
-            "with unit one of s, m, h, d, w (e.g. '7d')"
-        )
+        raise InvalidDurationError(value)
     amount, unit = int(match.group(1)), match.group(2)
     return timedelta(**{_DURATION_UNITS[unit]: amount})
 
@@ -50,10 +114,7 @@ class PlatformConfig(BaseModel):
 
 def _validate_branch_prefix(value: str) -> None:
     if not _BRANCH_PREFIX_RE.match(value):
-        raise ValueError(
-            f"invalid branch_prefix {value!r}: only alphanumerics, hyphens, underscores, and "
-            "slashes are allowed; must not start with '/' or contain '//'"
-        )
+        raise InvalidBranchPrefixError(value)
 
 
 class JobDefaults(BaseModel):
@@ -108,9 +169,7 @@ class Job(BaseModel):
     @classmethod
     def _check_name(cls, value: str) -> str:
         if not _JOB_NAME_RE.match(value):
-            raise ValueError(
-                f"invalid job name {value!r}: only letters, digits, '-', and '_' are allowed"
-            )
+            raise InvalidJobNameError(value)
         return value
 
     @field_validator("branch_prefix")
@@ -132,18 +191,13 @@ class Job(BaseModel):
     def _check_tags(cls, value: list[str]) -> list[str]:
         for tag in value:
             if not _TAG_RE.match(tag):
-                raise ValueError(
-                    f"invalid tag {tag!r}: only letters, digits, '-', and '_' are allowed"
-                )
+                raise InvalidTagError(tag)
         return value
 
     @model_validator(mode="after")
     def _check_disabled_xor_tags(self) -> Job:
         if self.disabled and self.tags:
-            raise ValueError(
-                f"job {self.name!r} sets both 'disabled' and 'tags'; "
-                f"set one or the other (disabled is sugar for tags = ['{DISABLED_TAG}'])"
-            )
+            raise DisabledAndTagsError(self.name)
         return self
 
     def effective_tags(self) -> set[str]:
@@ -202,14 +256,14 @@ class Config(BaseModel):
         for job in self.jobs:
             unknown = set(job.depends_on) - names
             if unknown:
-                raise ValueError(f"Job '{job.name}' depends_on unknown jobs: {sorted(unknown)}")
+                raise UnknownDependencyError(job.name, sorted(unknown))
         by_name = {j.name: j for j in self.jobs}
         visiting: set[str] = set()
         visited: set[str] = set()
 
         def detect_cycle(name: str) -> None:
             if name in visiting:
-                raise ValueError(f"Circular dependency involving '{name}'")
+                raise CircularDependencyError(name)
             if name in visited:
                 return
             visiting.add(name)
@@ -240,7 +294,7 @@ def _merge_jobs(base: list[dict], override: list[dict]) -> list[dict]:
     for job in base + override:
         name = job.get("name")
         if name is None:
-            raise ValueError("Each [[job]] entry must have a 'name' field")
+            raise MissingJobNameError
 
         if name in job_by_name:
             job_by_name[name].update(job)
@@ -284,6 +338,9 @@ _DEFAULT_CONFIG_DIR = Path(".repoactive.d")
 class ConfigNotFoundError(Exception):
     """Raised when no configuration is given and no default config exists."""
 
+    def __init__(self, config_file: Path, config_dir: Path) -> None:
+        super().__init__(f"no configuration found: neither {config_file} nor {config_dir}/ exists")
+
 
 def default_config_paths(repo: Path) -> list[Path]:
     """Config paths to use when none are passed on the command line.
@@ -300,9 +357,7 @@ def default_config_paths(repo: Path) -> list[Path]:
     if config_file.is_file():
         paths.append(config_file)
     if not paths:
-        raise ConfigNotFoundError(
-            f"no configuration found: neither {config_file} nor {config_dir}/ exists"
-        )
+        raise ConfigNotFoundError(config_file, config_dir)
     return paths
 
 

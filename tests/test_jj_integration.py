@@ -10,8 +10,11 @@ import pytest
 from repoactive.jj import (
     JJ,
     WORKSPACE_PREFIX,
-    JJError,
-    NotAColocatedRepoError,
+    CommandFailedError,
+    MissingGitDirError,
+    NotAJJRepoError,
+    NotColocatedGitRepoError,
+    RemoteNotFoundError,
     require_colocated_repo,
 )
 
@@ -192,7 +195,7 @@ class TestChangeId:
         assert repo.change_id("@-") == parent
 
     def test_raises_for_invalid_revision(self, repo: JJ) -> None:
-        with pytest.raises(JJError):
+        with pytest.raises(CommandFailedError):
             repo.change_id("does-not-exist")
 
 
@@ -328,13 +331,13 @@ class TestGetRemoteUrl:
         assert local.get_remote_url() == str(remote)
 
     def test_raises_when_no_remotes(self, repo: JJ) -> None:
-        with pytest.raises(JJError, match="not found"):
+        with pytest.raises(RemoteNotFoundError, match="not found"):
             repo.get_remote_url()
 
 
 class TestJJError:
     def test_raised_for_invalid_revision(self, repo: JJ) -> None:
-        with pytest.raises(JJError):
+        with pytest.raises(CommandFailedError):
             repo.edit("this-revision-does-not-exist")
 
 
@@ -499,20 +502,20 @@ class TestRequireColocatedRepo:
     def test_rejects_non_colocated_jj_repo(self, tmp_path: Path) -> None:
         plain = _init_repo(tmp_path / "plain", colocate=False)
         assert not (plain.cwd / ".git").exists()
-        with pytest.raises(NotAColocatedRepoError, match=r"no \.git directory"):
+        with pytest.raises(MissingGitDirError, match=r"no \.git directory"):
             require_colocated_repo(plain.cwd)
 
     def test_rejects_git_only_repo(self, tmp_path: Path) -> None:
         path = tmp_path / "gitonly"
         path.mkdir()
         subprocess.run(["git", "init", str(path)], check=True, capture_output=True)
-        with pytest.raises(NotAColocatedRepoError, match="not colocated with jj"):
+        with pytest.raises(NotColocatedGitRepoError, match="not colocated with jj"):
             require_colocated_repo(path)
 
     def test_rejects_plain_directory(self, tmp_path: Path) -> None:
         path = tmp_path / "empty"
         path.mkdir()
-        with pytest.raises(NotAColocatedRepoError, match="not a jj repository"):
+        with pytest.raises(NotAJJRepoError, match="not a jj repository"):
             require_colocated_repo(path)
 
 
@@ -521,7 +524,7 @@ class TestGit:
         assert repo._git("rev-parse", "--git-dir").strip()
 
     def test_unknown_subcommand_raises_jj_error(self, repo: JJ) -> None:
-        with pytest.raises(JJError, match="git no-such-subcommand failed"):
+        with pytest.raises(CommandFailedError, match="git no-such-subcommand failed"):
             repo._git("no-such-subcommand")
 
 

@@ -6,6 +6,7 @@ import pytest
 from repoactive.config import (
     Config,
     ConfigNotFoundError,
+    InvalidDurationError,
     Job,
     JobDefaults,
     default_config_paths,
@@ -155,15 +156,15 @@ class TestParseInterval:
         assert parse_duration("  7d  ") == timedelta(days=7)
 
     def test_unknown_unit_raises(self) -> None:
-        with pytest.raises(ValueError, match="invalid duration"):
+        with pytest.raises(InvalidDurationError, match="invalid duration"):
             parse_duration("7y")
 
     def test_missing_unit_raises(self) -> None:
-        with pytest.raises(ValueError, match="invalid duration"):
+        with pytest.raises(InvalidDurationError, match="invalid duration"):
             parse_duration("7")
 
     def test_empty_raises(self) -> None:
-        with pytest.raises(ValueError, match="invalid duration"):
+        with pytest.raises(InvalidDurationError, match="invalid duration"):
             parse_duration("")
 
 

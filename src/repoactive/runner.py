@@ -37,6 +37,13 @@ class CommandError(RuntimeError):
         self.elapsed = elapsed
 
 
+class UnknownJobsError(ValueError):
+    """Raised when requested job names do not match any configured job."""
+
+    def __init__(self, unknown: set[str]) -> None:
+        super().__init__(f"Unknown job(s): {', '.join(sorted(unknown))}")
+
+
 @dataclass
 class JobResult:
     job: Job
@@ -361,7 +368,7 @@ def _select_jobs(
 
     unknown = requested_jobs - {j.name for j in jobs}
     if unknown:
-        raise ValueError(f"Unknown job(s): {', '.join(sorted(unknown))}")
+        raise UnknownJobsError(unknown)
 
     selected: set[str]
     if requested_jobs or requested_tags:

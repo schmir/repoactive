@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from typing import assert_never
 
 from repoactive.config import Config, PlatformConfig
 from repoactive.jj import JJ
@@ -8,15 +9,29 @@ from repoactive.platforms.github import GitHubPlatform
 from repoactive.platforms.gitlab import GitLabPlatform
 
 
+class NoPlatformConfiguredError(RuntimeError):
+    """Raised when no configured platform matches the git remote's host."""
+
+    def __init__(self, remote_url: str, remote_host: str) -> None:
+        super().__init__(
+            f"No platform configured for remote '{remote_url}' (host: {remote_host!r}); "
+            f"add a [[platform]] entry with a matching url"
+        )
+
+
+class PlatformTokenNotSetError(RuntimeError):
+    """Raised when the platform token environment variable is unset or empty."""
+
+    def __init__(self, token_env: str) -> None:
+        super().__init__(f"Platform token not set: environment variable '{token_env}' is empty")
+
+
 def _match_platform(remote_url: str, platforms: list[PlatformConfig]) -> PlatformConfig:
     remote_host = extract_host(remote_url)
     for p in platforms:
         if extract_host(p.url) == remote_host:
             return p
-    raise RuntimeError(
-        f"No platform configured for remote '{remote_url}' (host: {remote_host!r}); "
-        f"add a [[platform]] entry with a matching url"
-    )
+    raise NoPlatformConfiguredError(remote_url, remote_host)
 
 
 def get_platform(config: Config, repo_path: Path) -> Platform:
@@ -25,13 +40,13 @@ def get_platform(config: Config, repo_path: Path) -> Platform:
 
     token = os.environ.get(platform_config.token_env)
     if not token:
-        raise RuntimeError(
-            f"Platform token not set: environment variable '{platform_config.token_env}' is empty"
-        )
+        raise PlatformTokenNotSetError(platform_config.token_env)
 
     repo = parse_repo_from_url(remote_url)
-    if platform_config.type == "gitlab":
-        return GitLabPlatform(url=platform_config.url, token=token, repo=repo)
-    if platform_config.type == "github":
-        return GitHubPlatform(url=platform_config.url, token=token, repo=repo)
-    raise RuntimeError(f"Unsupported platform type: {platform_config.type!r}")
+    match platform_config.type:
+        case "gitlab":
+            return GitLabPlatform(url=platform_config.url, token=token, repo=repo)
+        case "github":
+            return GitHubPlatform(url=platform_config.url, token=token, repo=repo)
+        case _:
+            assert_never(platform_config.type)

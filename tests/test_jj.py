@@ -8,8 +8,11 @@ from repoactive.jj import (
     JJ,
     WORKSPACE_PREFIX,
     Bookmark,
-    JJError,
-    NotAColocatedRepoError,
+    CommandFailedError,
+    MissingGitDirError,
+    NotAJJRepoError,
+    NotColocatedGitRepoError,
+    RemoteNotFoundError,
     require_colocated_repo,
     workspace_name,
 )
@@ -32,7 +35,7 @@ class TestJJError:
         err = CalledProcessError(1, "jj", stderr="bad state")
         with (
             patch("repoactive.jj.subprocess.run", side_effect=err),
-            pytest.raises(JJError, match="bad state"),
+            pytest.raises(CommandFailedError, match="bad state"),
         ):
             _jj().new("trunk()")
 
@@ -40,7 +43,7 @@ class TestJJError:
         err = CalledProcessError(1, "jj", stderr="")
         with (
             patch("repoactive.jj.subprocess.run", side_effect=err),
-            pytest.raises(JJError),
+            pytest.raises(CommandFailedError),
         ):
             _jj().new("trunk()")
 
@@ -304,13 +307,13 @@ class TestGetRemoteUrl:
     @patch("repoactive.jj.subprocess.run")
     def test_raises_when_remote_not_found(self, mock_run: MagicMock) -> None:
         mock_run.return_value.stdout = "origin  https://gitlab.com/org/repo.git\n"
-        with pytest.raises(JJError, match="'upstream' not found"):
+        with pytest.raises(RemoteNotFoundError, match="'upstream' not found"):
             _jj().get_remote_url("upstream")
 
     @patch("repoactive.jj.subprocess.run")
     def test_raises_when_no_remotes(self, mock_run: MagicMock) -> None:
         mock_run.return_value.stdout = ""
-        with pytest.raises(JJError):
+        with pytest.raises(RemoteNotFoundError):
             _jj().get_remote_url()
 
 
@@ -322,22 +325,22 @@ class TestEnsureColocatedRepo:
 
     def test_rejects_git_only_with_colocate_hint(self, tmp_path: Path) -> None:
         (tmp_path / ".git").mkdir()
-        with pytest.raises(NotAColocatedRepoError, match=r"jj git init --colocate"):
+        with pytest.raises(NotColocatedGitRepoError, match=r"jj git init --colocate"):
             require_colocated_repo(tmp_path)
 
     def test_rejects_missing_both(self, tmp_path: Path) -> None:
-        with pytest.raises(NotAColocatedRepoError, match=r"no \.jj directory"):
+        with pytest.raises(NotAJJRepoError, match=r"no \.jj directory"):
             require_colocated_repo(tmp_path)
 
     def test_rejects_missing_git(self, tmp_path: Path) -> None:
         (tmp_path / ".jj").mkdir()
-        with pytest.raises(NotAColocatedRepoError, match=r"no \.git directory"):
+        with pytest.raises(MissingGitDirError, match=r"no \.git directory"):
             require_colocated_repo(tmp_path)
 
     def test_rejects_jj_that_is_a_file(self, tmp_path: Path) -> None:
         (tmp_path / ".jj").write_text("")
         (tmp_path / ".git").mkdir()
-        with pytest.raises(NotAColocatedRepoError, match=r"no \.jj directory"):
+        with pytest.raises(NotColocatedGitRepoError, match=r"no \.jj directory"):
             require_colocated_repo(tmp_path)
 
     def test_rejects_non_root_directory(self, tmp_path: Path) -> None:
@@ -345,7 +348,7 @@ class TestEnsureColocatedRepo:
         (tmp_path / ".git").mkdir()
         subdir = tmp_path / "subdir"
         subdir.mkdir()
-        with pytest.raises(NotAColocatedRepoError):
+        with pytest.raises(NotAJJRepoError):
             require_colocated_repo(subdir)
 
 

@@ -12,6 +12,7 @@ from repoactive.config import Config, Job, JobDefaults
 from repoactive.runner import (
     CommandError,
     JobResult,
+    UnknownJobsError,
     _compute_parents,
     _run_command,
     _select_jobs,
@@ -150,7 +151,7 @@ class TestSelectJobs:
         assert _names(_select_jobs(config.jobs, {"c"})) == ["a", "b", "c"]
 
     def test_unknown_job_raises(self) -> None:
-        with pytest.raises(ValueError, match="Unknown job"):
+        with pytest.raises(UnknownJobsError, match="Unknown job"):
             _select_jobs(_config(_job("a")).jobs, {"nonexistent"})
 
     def test_no_disabled_jobs(self) -> None:
@@ -582,7 +583,7 @@ class TestRunJob:
         mock_jj = _mock_jj(mock_jj_cls)
         _mock_popen(mock_sub, output="boom\n", returncode=1)
         mock_jj.bookmark_exists.return_value = False
-        with pytest.raises(RuntimeError, match="command failed"):
+        with pytest.raises(CommandError, match="command failed"):
             run_job(
                 job=_job("foo"),
                 parents=["trunk()"],
@@ -642,7 +643,7 @@ class TestRunJob:
             branch_prefix="repoactive/",
             commit_title_prefix="",
         )
-        with pytest.raises(RuntimeError, match="timed out after 30m"):
+        with pytest.raises(CommandError, match="timed out after 30m"):
             run_job(job=job, parents=["trunk()"], repo_path=REPO)
 
         mock_killpg.assert_called_once_with(4242, signal.SIGKILL)
