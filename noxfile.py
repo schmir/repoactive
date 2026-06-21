@@ -10,7 +10,7 @@ import nox_uv
 nox.options.default_venv_backend = "uv"
 
 
-@nox_uv.session(python=["3.11", "3.12", "3.13", "3.14"], uv_groups=["dev"])
+@nox_uv.session(python=["3.11", "3.12", "3.13", "3.14", "3.15"], uv_groups=["dev"])
 def tests(session: nox.Session) -> None:
     """Run tests."""
     session.run("pytest", *session.posargs)
