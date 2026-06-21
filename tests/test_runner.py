@@ -15,6 +15,7 @@ from repoactive.runner import (
     RunMode,
     UnknownJobsError,
     _compute_parents,
+    _prepare_repo,
     _run_command,
     _select_jobs,
     _topological_sort,
@@ -1255,3 +1256,48 @@ class TestRunAll:
         # op_id is still computed for the debug log, but no restore hint is printed.
         mock_jj.return_value.op_id.assert_called_once_with()
         assert "jj op restore" not in capsys.readouterr().out
+
+
+class TestPrepareRepo:
+    @pytest.fixture
+    def mock_jj(self) -> Iterator[MagicMock]:
+        with patch("repoactive.runner.JJ") as cls:
+            cls.return_value.op_id.return_value = "OP-START"
+            yield cls
+
+    def test_yields_the_repo(self, mock_jj: MagicMock) -> None:
+        with _prepare_repo(REPO, RunMode.local) as repo:
+            assert repo is mock_jj.return_value
+        mock_jj.assert_called_once_with(REPO)
+
+    def test_forgets_stale_workspaces_before_yield(self, mock_jj: MagicMock) -> None:
+        # Stale workspaces must be dropped before the caller starts adding fresh
+        # ones, so the cleanup has to happen by the time the body runs.
+        repo = mock_jj.return_value
+        with _prepare_repo(REPO, RunMode.local):
+            repo.forget_stale_workspaces.assert_called_once_with()
+
+    def test_local_prints_restore_hint_before_and_after(
+        self, mock_jj: MagicMock, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        with _prepare_repo(REPO, RunMode.local):
+            # Printed once on entry; the body's own output sits between the two.
+            assert capsys.readouterr().out.count("jj op restore OP-START") == 1
+        assert capsys.readouterr().out.count("jj op restore OP-START") == 1
+
+    @pytest.mark.parametrize("mode", [RunMode.push, RunMode.publish])
+    def test_non_local_omits_restore_hint(
+        self, mode: RunMode, mock_jj: MagicMock, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # A pushed branch or created MR can't be undone with jj op restore.
+        with _prepare_repo(REPO, mode):
+            pass
+        assert "jj op restore" not in capsys.readouterr().out
+
+    def test_restore_hint_printed_even_when_body_raises(
+        self, mock_jj: MagicMock, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # The finally block still hands the user their undo hint on a crash.
+        with pytest.raises(RuntimeError, match="boom"), _prepare_repo(REPO, RunMode.local):
+            raise RuntimeError("boom")
+        assert "jj op restore OP-START" in capsys.readouterr().out

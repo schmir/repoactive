@@ -4,6 +4,7 @@ import os
 import signal
 import subprocess
 import time
+from collections.abc import Generator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -411,7 +412,31 @@ def _select_jobs(
     return result
 
 
-def run_all(  # noqa: PLR0913, PLR0915, C901
+@contextlib.contextmanager
+def _prepare_repo(repo_path: Path, mode: RunMode) -> Generator[JJ]:
+    repo = JJ(repo_path)
+    op_id = repo.op_id()
+
+    # For a local run, tell the user how to roll it back. Only local state can be
+    # undone this way - a pushed branch or a created MR is not - so the hint is
+    # suppressed for push/publish runs. Printed again at the end since a
+    # run can produce a lot of output.
+    restore_hint: str | None = None
+    if mode is RunMode.local:
+        restore_hint = f"To undo this run, run:\n    jj op restore {op_id}"
+        print(restore_hint + "\n")
+
+    try:
+        # Drop any temporary workspaces a previous, killed run left behind before we
+        # start adding fresh ones.
+        repo.forget_stale_workspaces()
+        yield repo
+    finally:
+        if restore_hint is not None:
+            print("\n" + restore_hint)
+
+
+def run_all(  # noqa: PLR0913
     *,
     config: Config,
     repo_path: Path,
@@ -425,103 +450,87 @@ def run_all(  # noqa: PLR0913, PLR0915, C901
     assert (mode is RunMode.publish) == (platform is not None), (
         f"mode={mode} is inconsistent with platform={platform!r}"
     )
-    repo = JJ(repo_path)
-    op_id = repo.op_id()
-    logger.debug(
-        "run_all: repo=%s mode=%s requested_jobs=%s requested_tags=%s op_id=%s",
-        repo_path,
-        mode,
-        requested_jobs,
-        requested_tags,
-        op_id,
-    )
-    # Drop any temporary workspaces a previous, killed run left behind before we
-    # start adding fresh ones.
-    repo.forget_stale_workspaces()
+    with _prepare_repo(repo_path, mode) as repo:
+        logger.debug(
+            "run_all: repo=%s mode=%s requested_jobs=%s requested_tags=%s",
+            repo_path,
+            mode,
+            requested_jobs,
+            requested_tags,
+        )
 
-    # For a local run, tell the user how to roll it back. Only local state can be
-    # undone this way - a pushed branch or a created MR is not - so the hint is
-    # suppressed for push/publish runs. Printed again at the end since a
-    # run can produce a lot of output.
-    restore_hint: str | None = None
-    if mode is RunMode.local:
-        restore_hint = f"To undo this run, run:\n    jj op restore {op_id}"
-        print(restore_hint + "\n")
+        # On the bare default run, also refresh jobs with an unmerged branch so a
+        # stale branch is rebased on trunk now rather than at the job's next run.
+        refresh_jobs: set[str] = set()
+        if not requested_jobs and not requested_tags:
+            refresh_jobs = repo.unmerged_job_names() & {j.name for j in config.jobs}
+            if refresh_jobs:
+                print(f"==> refreshing unmerged branches: {', '.join(sorted(refresh_jobs))}")
+            else:
+                print("==> no unmerged branches to refresh")
+        ordered_jobs = _select_jobs(
+            jobs=config.jobs,
+            requested_jobs=set(requested_jobs or []),
+            requested_tags=set(requested_tags or []),
+            refresh_jobs=refresh_jobs,
+        )
+        summary = RunSummary()
+        # Names of jobs that failed or were skipped - their dependents are blocked.
+        blocked: set[str] = set()
+        # Remote operations collected during the run. They are applied (in
+        # topological order) once every job has run, unless this is a local-only run
+        # - then the plan is built but never applied.
+        plan = UpdatePlan()
 
-    # On the bare default run, also refresh jobs with an unmerged branch so a
-    # stale branch is rebased on trunk now rather than at the job's next run.
-    refresh_jobs: set[str] = set()
-    if not requested_jobs and not requested_tags:
-        refresh_jobs = repo.unmerged_job_names() & {j.name for j in config.jobs}
-        if refresh_jobs:
-            print(f"==> refreshing unmerged branches: {', '.join(sorted(refresh_jobs))}")
-        else:
-            print("==> no unmerged branches to refresh")
-    ordered_jobs = _select_jobs(
-        jobs=config.jobs,
-        requested_jobs=set(requested_jobs or []),
-        requested_tags=set(requested_tags or []),
-        refresh_jobs=refresh_jobs,
-    )
-    summary = RunSummary()
-    # Names of jobs that failed or were skipped - their dependents are blocked.
-    blocked: set[str] = set()
-    # Remote operations collected during the run. They are applied (in
-    # topological order) once every job has run, unless this is a local-only run
-    # - then the plan is built but never applied.
-    plan = UpdatePlan()
+        print(f"Running {len(ordered_jobs)} job(s)...")
+        for job in ordered_jobs:
+            blocking_deps = [d for d in job.depends_on if d in blocked]
+            if blocking_deps:
+                print(f"==> [{job.name}] skipped (dependency failed: {', '.join(blocking_deps)})")
+                summary.skipped.add(job.name)
+                blocked.add(job.name)
+                continue
 
-    print(f"Running {len(ordered_jobs)} job(s)...")
-    for job in ordered_jobs:
-        blocking_deps = [d for d in job.depends_on if d in blocked]
-        if blocking_deps:
-            print(f"==> [{job.name}] skipped (dependency failed: {', '.join(blocking_deps)})")
-            summary.skipped.add(job.name)
-            blocked.add(job.name)
-            continue
+            resolved_job = job.resolve(config.job_defaults)
+            parents = _compute_parents(resolved_job, summary.results)
+            logger.debug("[%s] computed parents: %s", job.name, parents)
+            if _on_cooldown(resolved_job, repo_path):
+                print(f"==> [{job.name}] on cooldown ({resolved_job.cooldown_period}), skipped")
+                summary.cooldown.add(job.name)
+                # Treat like a no-op run so dependents proceed on the base branch.
+                summary.results[job.name] = JobResult(
+                    job=resolved_job, effective_revsets=parents, produced_output=False
+                )
+                continue
 
-        resolved_job = job.resolve(config.job_defaults)
-        parents = _compute_parents(resolved_job, summary.results)
-        logger.debug("[%s] computed parents: %s", job.name, parents)
-        if _on_cooldown(resolved_job, repo_path):
-            print(f"==> [{job.name}] on cooldown ({resolved_job.cooldown_period}), skipped")
-            summary.cooldown.add(job.name)
-            # Treat like a no-op run so dependents proceed on the base branch.
-            summary.results[job.name] = JobResult(
-                job=resolved_job, effective_revsets=parents, produced_output=False
-            )
-            continue
+            start = time.monotonic()
+            try:
+                result = run_job(
+                    job=resolved_job,
+                    parents=parents,
+                    repo_path=repo_path,
+                )
+                summary.results[job.name] = result
+                if result.update is not None:
+                    plan.updates.append(result.update)
+            except Exception as e:
+                # A command failure reports the command's own time (matching the
+                # success prints); other failures have no command time, so fall back
+                # to the wall time spent in run_job.
+                elapsed = e.elapsed if isinstance(e, CommandError) else time.monotonic() - start
+                print(f"==> [{job.name}] failed: {e} ({elapsed:.1f}s)")
+                summary.failed[job.name] = e
+                blocked.add(job.name)
 
-        start = time.monotonic()
-        try:
-            result = run_job(
-                job=resolved_job,
-                parents=parents,
-                repo_path=repo_path,
-            )
-            summary.results[job.name] = result
-            if result.update is not None:
-                plan.updates.append(result.update)
-        except Exception as e:
-            # A command failure reports the command's own time (matching the
-            # success prints); other failures have no command time, so fall back
-            # to the wall time spent in run_job.
-            elapsed = e.elapsed if isinstance(e, CommandError) else time.monotonic() - start
-            print(f"==> [{job.name}] failed: {e} ({elapsed:.1f}s)")
-            summary.failed[job.name] = e
-            blocked.add(job.name)
+        # A local run stops here: the plan is built but deliberately not applied, so
+        # nothing is pushed and no MR is created.
+        if mode is not RunMode.local:
+            mr_urls = apply_plan(plan, repo_path=repo_path, platform=platform, mode=mode)
+            for name, url in mr_urls.items():
+                summary.results[name].mr_url = url
 
-    # A local run stops here: the plan is built but deliberately not applied, so
-    # nothing is pushed and no MR is created.
-    if mode is not RunMode.local:
-        mr_urls = apply_plan(plan, repo_path=repo_path, platform=platform, mode=mode)
-        for name, url in mr_urls.items():
-            summary.results[name].mr_url = url
-
-    summary.print_report()
-    if restore_hint is not None:
-        print("\n" + restore_hint)
-    return summary
+        summary.print_report()
+        return summary
 
 
 def _apply_plan_push(plan: UpdatePlan, *, repo_path: Path) -> None:
