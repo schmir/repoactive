@@ -523,6 +523,42 @@ def run_all(  # noqa: PLR0913, PLR0915, C901
     return summary
 
 
+def _apply_plan_push(plan: UpdatePlan, *, repo_path: Path) -> None:
+    """Push every bookmark recorded in the plan in a single jj call.
+
+    A no-op when the plan records no pushes (git_push_bookmarks ignores an empty
+    bookmark list)."""
+    bookmarks = [update.push.bookmark for update in plan.updates if update.push is not None]
+    JJ(repo_path).git_push_bookmarks(*bookmarks)
+
+
+def _apply_plan_publish(
+    plan: UpdatePlan,
+    *,
+    platform: Platform,
+) -> dict[str, str]:
+    titles = {u.job_name: u.title for u in plan.updates}
+    mr_urls: dict[str, str] = {}
+
+    for update in plan.updates:
+        if (update.push is not None and update.push.delete) or update.mr is None:
+            continue
+
+        dep_urls = [(titles[dep], mr_urls[dep]) for dep in update.mr.depends_on if dep in mr_urls]
+        params = MRParams(
+            source_branch=update.mr.source_branch,
+            target_branch=update.mr.target_branch or platform.default_branch(),
+            title=update.mr.title,
+            description=build_mr_description(update.mr, dep_urls),
+            labels=update.mr.labels,
+            draft=update.mr.draft,
+        )
+        url = platform.ensure_mr(params)
+        mr_urls[update.job_name] = url
+        print(f"==> [{update.job_name}] {url}")
+    return mr_urls
+
+
 def apply_plan(
     plan: UpdatePlan, *, repo_path: Path, platform: Platform | None, mode: RunMode
 ) -> dict[str, str]:
@@ -533,37 +569,13 @@ def apply_plan(
     by the time a dependent that links to it is reached. Returns a
     ``{job_name: mr_url}`` map of the MRs that were created or updated.
     """
+    assert mode is not RunMode.local
     if not plan.updates:
         return {}
-
-    repo = JJ(repo_path)
-    titles = {u.job_name: u.title for u in plan.updates}
-    mr_urls: dict[str, str] = {}
-
     print(f"Applying {len(plan.updates)} update(s)...")
-    for update in plan.updates:
-        if update.push is not None:
-            repo.git_push_bookmarks(update.push.bookmark)
-            if update.push.delete:
-                # The "bookmark deleted" line was already printed during the run.
-                continue
-        if mode is RunMode.publish and update.mr is not None:
-            # run_all guarantees a platform whenever mode is publish.
-            assert platform is not None
-            dep_urls = [
-                (titles[dep], mr_urls[dep]) for dep in update.mr.depends_on if dep in mr_urls
-            ]
-            params = MRParams(
-                source_branch=update.mr.source_branch,
-                target_branch=update.mr.target_branch or platform.default_branch(),
-                title=update.mr.title,
-                description=build_mr_description(update.mr, dep_urls),
-                labels=update.mr.labels,
-                draft=update.mr.draft,
-            )
-            url = platform.ensure_mr(params)
-            mr_urls[update.job_name] = url
-            print(f"==> [{update.job_name}] {url}")
-        else:
-            print(f"==> [{update.job_name}] pushed")
-    return mr_urls
+    _apply_plan_push(plan, repo_path=repo_path)
+
+    if mode is RunMode.publish:
+        assert platform is not None
+        return _apply_plan_publish(plan, platform=platform)
+    return {}
