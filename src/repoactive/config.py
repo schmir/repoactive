@@ -276,6 +276,16 @@ class Config(BaseModel):
             detect_cycle(job.name)
         return self
 
+    def bookmark_names(self) -> set[str]:
+        """The branch/bookmark names repoactive manages, one per job.
+
+        Each is the job's resolved ``branch_prefix`` followed by its name (see
+        ``Job.branch_name``). When we start working on a repository these are the
+        bookmarks to track with ``jj bookmark track`` so that branches already
+        pushed by an earlier run are recognised instead of being recreated.
+        """
+        return {job.resolve(self.job_defaults).branch_name() for job in self.jobs}
+
 
 def _deep_merge(*, base: dict, override: dict) -> dict:
     result = dict(base)

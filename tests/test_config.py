@@ -84,6 +84,26 @@ class TestBranchName:
         assert job.branch_name() == "bot/bar"
 
 
+class TestBookmarkNames:
+    def test_empty_config(self) -> None:
+        assert _config().bookmark_names() == set()
+
+    def test_uses_default_prefix(self) -> None:
+        cfg = _config(jobs=[_job("a"), _job("b")])
+        assert cfg.bookmark_names() == {"repoactive/a", "repoactive/b"}
+
+    def test_default_prefix_from_job_defaults(self) -> None:
+        cfg = _config(jobs=[_job("a")], **{"job-defaults": {"branch_prefix": "bot/"}})
+        assert cfg.bookmark_names() == {"bot/a"}
+
+    def test_per_job_prefix_overrides_default(self) -> None:
+        cfg = _config(
+            jobs=[_job("a", branch_prefix="custom/"), _job("b")],
+            **{"job-defaults": {"branch_prefix": "bot/"}},
+        )
+        assert cfg.bookmark_names() == {"custom/a", "bot/b"}
+
+
 class TestDependsOnValidation:
     def test_valid_depends_on(self) -> None:
         cfg = _config(
