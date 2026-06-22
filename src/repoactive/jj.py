@@ -173,6 +173,12 @@ class JJ:
     def bookmark_exists(self, name: str) -> bool:
         return any(b.name == name for b in self.bookmark_list())
 
+    def bookmark_track(self, *bookmarks: str) -> None:
+        """Track the given remote bookmarks so local bookmarks follow them."""
+        if not bookmarks:
+            return
+        self._run("bookmark", "track", *bookmarks)
+
     def bookmark_list(self) -> list[Bookmark]:
         output = self._run(
             "bookmark",

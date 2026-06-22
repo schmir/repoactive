@@ -325,6 +325,63 @@ class TestBookmarkExists:
         assert repo.bookmark_exists("mybranch") is False
 
 
+class TestBookmarkTrack:
+    def test_tracks_fetched_remote_bookmark(
+        self, repo_with_remote: tuple[JJ, Path], tmp_path: Path
+    ) -> None:
+        local, remote = repo_with_remote
+        # A second clone pushes a bookmark to the shared remote.
+        other = _init_repo(tmp_path / "other")
+        subprocess.run(
+            ["jj", "--no-pager", "git", "remote", "add", "origin", str(remote)],
+            cwd=other.cwd,
+            check=True,
+            capture_output=True,
+        )
+        other.describe("shared work")
+        other.bookmark_set("feature")
+        other.git_push_bookmarks("feature")
+        # local fetches it; with jj's default the remote bookmark stays untracked,
+        # so no local "feature" bookmark exists yet.
+        subprocess.run(
+            ["jj", "--no-pager", "git", "fetch"],
+            cwd=local.cwd,
+            check=True,
+            capture_output=True,
+        )
+        assert local.bookmark_exists("feature") is False
+        local.bookmark_track("feature")
+        assert local.bookmark_exists("feature") is True
+
+    def test_tracks_multiple_bookmarks(
+        self, repo_with_remote: tuple[JJ, Path], tmp_path: Path
+    ) -> None:
+        local, remote = repo_with_remote
+        other = _init_repo(tmp_path / "other")
+        subprocess.run(
+            ["jj", "--no-pager", "git", "remote", "add", "origin", str(remote)],
+            cwd=other.cwd,
+            check=True,
+            capture_output=True,
+        )
+        other.describe("shared work")
+        other.bookmark_set("feature-a")
+        other.bookmark_set("feature-b")
+        other.git_push_bookmarks("feature-a", "feature-b")
+        subprocess.run(
+            ["jj", "--no-pager", "git", "fetch"],
+            cwd=local.cwd,
+            check=True,
+            capture_output=True,
+        )
+        local.bookmark_track("feature-a", "feature-b")
+        assert local.bookmark_exists("feature-a") is True
+        assert local.bookmark_exists("feature-b") is True
+
+    def test_no_bookmarks_is_noop(self, repo: JJ) -> None:
+        repo.bookmark_track()  # must not raise
+
+
 class TestGetRemoteUrl:
     def test_returns_origin_url(self, repo_with_remote: tuple[JJ, Path]) -> None:
         local, remote = repo_with_remote
