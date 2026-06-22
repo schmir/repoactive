@@ -490,7 +490,7 @@ def _run_one_job(  # noqa: PLR0913
 
 
 @contextlib.contextmanager
-def _prepare_repo(repo_path: Path, mode: RunMode) -> Generator[JJ]:
+def _prepare_repo(*, config: Config, repo_path: Path, mode: RunMode) -> Generator[JJ]:
     repo = JJ(repo_path)
     op_id = repo.op_id()
 
@@ -507,6 +507,10 @@ def _prepare_repo(repo_path: Path, mode: RunMode) -> Generator[JJ]:
         # Drop any temporary workspaces a previous, killed run left behind before we
         # start adding fresh ones.
         repo.forget_stale_workspaces()
+        # Track the bookmarks repoactive manages so a branch an earlier run pushed
+        # is recognised (and rebased/updated) instead of recreated. Tracking an
+        # absent bookmark is a harmless no-op.
+        repo.bookmark_track(*sorted(config.bookmark_names()))
         yield repo
     finally:
         if restore_hint is not None:
@@ -527,7 +531,7 @@ def run_all(  # noqa: PLR0913
     assert (mode is RunMode.publish) == (platform is not None), (
         f"mode={mode} is inconsistent with platform={platform!r}"
     )
-    with _prepare_repo(repo_path, mode) as repo:
+    with _prepare_repo(config=config, repo_path=repo_path, mode=mode) as repo:
         logger.debug(
             "run_all: repo=%s mode=%s requested_jobs=%s requested_tags=%s",
             repo_path,
