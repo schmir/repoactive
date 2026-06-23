@@ -42,4 +42,4 @@ docker-build:
 
 # Update the nix flake lockfile
 update-flake:
-    nix flake update
+    ./scripts/update-flake.sh
