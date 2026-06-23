@@ -16,7 +16,13 @@ from repoactive.config import (
     load_config,
     parse_duration,
 )
-from repoactive.jj import JJ, NotAColocatedRepoError, require_colocated_repo
+from repoactive.jj import (
+    JJ,
+    JJNotFoundError,
+    NotAColocatedRepoError,
+    require_colocated_repo,
+    require_jj_on_path,
+)
 from repoactive.platforms import get_platform
 from repoactive.runner import RunMode, run_all
 
@@ -36,6 +42,15 @@ class MergeStatus(StrEnum):
 def _resolve_config(config: list[Path] | None, repo: Path) -> list[Path]:
     """Use the given config paths, or discover defaults inside ``repo``."""
     return config or default_config_paths(repo)
+
+
+def _check_jj() -> None:
+    """Exit with a clear error unless the jj executable is on PATH."""
+    try:
+        require_jj_on_path()
+    except JJNotFoundError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(code=1) from e
 
 
 def _check_repo(repo: Path) -> None:
@@ -104,6 +119,7 @@ def run(  # noqa: PLR0913
     """Apply jobs locally; pass --mode push or --mode publish to publish."""
     if debug:
         logging.basicConfig(level=logging.DEBUG)
+    _check_jj()
     _check_repo(repo)
     try:
         cfg = load_config(_resolve_config(config, repo))
@@ -197,6 +213,7 @@ def recent_commits(
     By default shows all commits; pass --status merged or --status unmerged to
     filter by whether the commit has landed in trunk.
     """
+    _check_jj()
     _check_repo(repo)
     try:
         delta = parse_duration(within)

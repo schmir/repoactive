@@ -24,6 +24,9 @@ WORKSPACE_PREFIX = "repoactive-tmp-"
 # git counterpart.
 GIT_ROOT_COMMIT_ID = "0" * 40
 
+# Where to point users who don't have jj installed.
+JJ_INSTALL_URL = "https://docs.jj-vcs.dev/latest/install-and-setup/#installation-and-setup"
+
 
 def workspace_name(job_name: str) -> str:
     """Workspace name repoactive uses for a job's temporary workspace."""
@@ -46,6 +49,22 @@ class RemoteNotFoundError(JJError):
 
     def __init__(self, remote: str) -> None:
         super().__init__(f"Remote '{remote}' not found")
+
+
+class JJNotFoundError(Exception):
+    """Raised when the ``jj`` executable is not on PATH."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            f"Error: 'jj' was not found on PATH. Install jujutsu to use repoactive: "
+            f"{JJ_INSTALL_URL}"
+        )
+
+
+def require_jj_on_path() -> None:
+    """Verify the ``jj`` executable is on PATH, raising JJNotFoundError otherwise."""
+    if shutil.which("jj") is None:
+        raise JJNotFoundError()
 
 
 class NotAColocatedRepoError(Exception):

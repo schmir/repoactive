@@ -9,11 +9,13 @@ from repoactive.jj import (
     WORKSPACE_PREFIX,
     Bookmark,
     CommandFailedError,
+    JJNotFoundError,
     MissingGitDirError,
     NotAJJRepoError,
     NotColocatedGitRepoError,
     RemoteNotFoundError,
     require_colocated_repo,
+    require_jj_on_path,
     workspace_name,
 )
 
@@ -320,6 +322,19 @@ class TestGetRemoteUrl:
         mock_run.return_value.stdout = ""
         with pytest.raises(RemoteNotFoundError):
             _jj().get_remote_url()
+
+
+class TestRequireJJOnPath:
+    def test_accepts_when_on_path(self) -> None:
+        with patch("repoactive.jj.shutil.which", return_value="/usr/bin/jj"):
+            require_jj_on_path()  # does not raise
+
+    def test_rejects_when_missing(self) -> None:
+        with (
+            patch("repoactive.jj.shutil.which", return_value=None),
+            pytest.raises(JJNotFoundError, match=r"docs\.jj-vcs\.dev"),
+        ):
+            require_jj_on_path()
 
 
 class TestEnsureColocatedRepo:

@@ -148,6 +148,13 @@ class TestRun:
         result = runner.invoke(app, ["run", "--repo", str(repo)])
         assert result.exit_code == 1
 
+    def test_missing_jj_points_to_install_docs(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path)
+        with patch("repoactive.jj.shutil.which", return_value=None):
+            result = runner.invoke(app, ["run", "--repo", str(repo)])
+        assert result.exit_code == 1
+        assert "docs.jj-vcs.dev" in result.output
+
 
 class TestDumpSchema:
     def test_writes_json_schema(self, tmp_path: Path) -> None:
