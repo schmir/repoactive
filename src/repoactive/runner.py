@@ -10,6 +10,8 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 
+import typer
+
 from repoactive.config import DEFAULT_TAG, Config, Job
 from repoactive.jj import JJ, JOB_TRAILER_KEY, workspace_name
 from repoactive.platforms.base import MRParams, Platform
@@ -490,18 +492,9 @@ def _run_one_job(  # noqa: PLR0913
 
 
 @contextlib.contextmanager
-def _prepare_repo(*, config: Config, repo_path: Path, mode: RunMode) -> Generator[JJ]:
+def _prepare_repo(*, config: Config, repo_path: Path) -> Generator[JJ]:
     repo = JJ(repo_path)
     op_id = repo.op_id()
-
-    # For a local run, tell the user how to roll it back. Only local state can be
-    # undone this way - a pushed branch or a created MR is not - so the hint is
-    # suppressed for push/publish runs. Printed again at the end since a
-    # run can produce a lot of output.
-    restore_hint: str | None = None
-    if mode is RunMode.local:
-        restore_hint = f"To undo this run, run:\n    jj op restore {op_id}"
-        print(restore_hint + "\n")
 
     try:
         # Drop any temporary workspaces a previous, killed run left behind before we
@@ -513,8 +506,18 @@ def _prepare_repo(*, config: Config, repo_path: Path, mode: RunMode) -> Generato
         repo.bookmark_track(*sorted(config.bookmark_names()))
         yield repo
     finally:
-        if restore_hint is not None:
-            print("\n" + restore_hint)
+        # Tell the user how to roll back the run. This only undoes changes made to the
+        # local repository - a pushed branch or a created MR is not affected - so the
+        # hint says so explicitly. Printed at the end (not the start) so it is the last
+        # thing on screen after a run that can produce a lot of output.
+        restore_hint = (
+            "\n"
+            "!! To undo the changes made to the local repository by this run\n"
+            "!! (this does not affect any pushed branches or created MRs):\n"
+            f"!!     jj --repository {repo_path.resolve()} op restore {op_id}"
+            "\n"
+        )
+        typer.secho(restore_hint, fg=typer.colors.CYAN, bold=True)
 
 
 def run_all(  # noqa: PLR0913
@@ -531,7 +534,7 @@ def run_all(  # noqa: PLR0913
     assert (mode is RunMode.publish) == (platform is not None), (
         f"mode={mode} is inconsistent with platform={platform!r}"
     )
-    with _prepare_repo(config=config, repo_path=repo_path, mode=mode) as repo:
+    with _prepare_repo(config=config, repo_path=repo_path) as repo:
         logger.debug(
             "run_all: repo=%s mode=%s requested_jobs=%s requested_tags=%s",
             repo_path,
