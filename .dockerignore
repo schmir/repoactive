@@ -1,0 +1,13 @@
+**
+
+!src/
+!tests/
+
+!README.md
+!flake.lock
+!flake.nix
+!pyproject.toml
+!uv.lock
+
+**/*.py[cod]
+**/__pycache__/

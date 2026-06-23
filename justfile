@@ -39,6 +39,7 @@ dev:
 # Build the repoactive Docker image
 docker-build:
     docker build -t repoactive .
+    docker image ls repoactive
 
 # Update the nix flake lockfile
 update-flake:
