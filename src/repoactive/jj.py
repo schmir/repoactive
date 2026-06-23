@@ -170,6 +170,14 @@ class JJ:
         """
         return self._run("op", "log", "--no-graph", "--limit", "1", "-T", "id.short()").strip()
 
+    def git_init_colocate(self) -> None:
+        """Initialise a jj repository colocated with the git repository at ``cwd``.
+
+        Runs ``jj git init --colocate``, which creates a ``.jj`` directory next
+        to the existing ``.git`` without touching git history.
+        """
+        self._run("git", "init", "--colocate")
+
     def new(self, *parents: str) -> None:
         self._run("new", *parents)
 

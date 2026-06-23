@@ -143,6 +143,27 @@ class TestRun:
         result = runner.invoke(app, ["run", "--repo", str(tmp_path)])
         assert result.exit_code == 1
 
+    def test_plain_git_repo_is_colocated_in_place(self, tmp_path: Path) -> None:
+        repo = tmp_path
+        (repo / ".git").mkdir()
+        cfg = repo / "config.toml"
+        _write_job(cfg, "a")
+        jj = MagicMock()
+
+        def fake_init() -> None:
+            (repo / ".jj").mkdir()
+
+        jj.git_init_colocate.side_effect = fake_init
+        with (
+            patch("repoactive.cli.JJ", return_value=jj),
+            patch("repoactive.cli.run_all", return_value=RunSummary()),
+        ):
+            result = runner.invoke(app, ["run", "--repo", str(repo), "--config", str(cfg)])
+        assert result.exit_code == 0
+        jj.git_init_colocate.assert_called_once()
+        assert "jj git init --colocate" in result.output
+        assert "To undo" in result.output
+
     def test_missing_config_exits_nonzero(self, tmp_path: Path) -> None:
         repo = _make_repo(tmp_path)
         result = runner.invoke(app, ["run", "--repo", str(repo)])

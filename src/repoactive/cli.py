@@ -20,6 +20,7 @@ from repoactive.jj import (
     JJ,
     JJNotFoundError,
     NotAColocatedRepoError,
+    NotColocatedGitRepoError,
     require_colocated_repo,
     require_jj_on_path,
 )
@@ -54,9 +55,24 @@ def _check_jj() -> None:
 
 
 def _check_repo(repo: Path) -> None:
-    """Exit with a clear error unless ``repo`` is a colocated jj repository root."""
+    """Ensure ``repo`` is a colocated jj repository root, else exit with a clear error.
+
+    A plain git repository (``.git`` but no ``.jj``) is converted in place by
+    running ``jj git init --colocate``; other invalid states exit non-zero.
+    """
     try:
         require_colocated_repo(repo)
+    except NotColocatedGitRepoError:
+        JJ(repo).git_init_colocate()
+        abs_repo = repo.resolve()
+        typer.secho(
+            f"\n!! {abs_repo} was a plain git repository; ran 'jj git init --colocate' to make "
+            f"it a colocated jj repository.\n"
+            f"!! To undo, remove the jj data: rm -rf {abs_repo / '.jj'}\n",
+            err=True,
+            fg=typer.colors.YELLOW,
+            bold=True,
+        )
     except NotAColocatedRepoError as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(code=1) from e

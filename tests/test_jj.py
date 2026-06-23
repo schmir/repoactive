@@ -64,6 +64,14 @@ class TestNew:
         assert mock_run.call_args == _call("new", "repoactive/a", "repoactive/b")
 
 
+class TestGitInitColocate:
+    @patch("repoactive.jj.subprocess.run")
+    def test_runs_git_init_colocate(self, mock_run: MagicMock) -> None:
+        mock_run.return_value.stdout = ""
+        _jj().git_init_colocate()
+        assert mock_run.call_args == _call("git", "init", "--colocate")
+
+
 class TestOp:
     @patch("repoactive.jj.subprocess.run")
     def test_op_id_returns_stripped_id(self, mock_run: MagicMock) -> None:
