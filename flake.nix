@@ -31,7 +31,7 @@
         {
           default = pkgs.mkShell {
             packages = with pkgs; [
-              git
+              gitMinimal
               jujutsu
               just
               prettier
@@ -41,6 +41,26 @@
               shfmt
               taplo
               treefmt
+              uv
+            ];
+          };
+        }
+      );
+      packages = forAllSystems (
+        system:
+        let
+          pkgs = nixpkgs.legacyPackages.${system};
+        in
+        {
+          # A single closure with just the dev tools (no stdenv / build
+          # toolchain). Used to build a slim Docker image — see
+          # Dockerfile.devtools.
+          devtools = pkgs.buildEnv {
+            name = "repoactive-devtools";
+            paths = with pkgs; [
+              git
+              jujutsu
+              just
               uv
             ];
           };

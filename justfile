@@ -41,6 +41,10 @@ docker-build:
 docker-smoketest:
     uv run nox -s docker-smoketest
 
+# Build a slim Docker image with the dev tools (git, jj, just, uv)
+tools-image tag="repoactive-tools":
+    docker build -f Dockerfile.devtools -t {{tag}} .
+
 # Update the nix flake lockfile
 update-flake:
     ./scripts/update-flake.sh

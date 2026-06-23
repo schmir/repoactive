@@ -1,0 +1,60 @@
+# syntax=docker/dockerfile:1
+#
+# Slim image with this project's dev tools (git, jujutsu, just, ruff, uv,
+# treefmt, ...): the flake's `devtools` package, which is a plain buildEnv of
+# those tools without the stdenv / build toolchain that `nix develop` pulls in.
+# repoactive itself is also installed (with uv) and on PATH.
+#
+#   docker build -f Dockerfile.devtools -t repoactive-tools .
+#
+#   # interactive shell with the tools on PATH:
+#   docker run --rm -it -v "$PWD:/src" repoactive-tools
+#   # or run a single command:
+#   docker run --rm -v "$PWD:/src" repoactive-tools ruff check
+#   docker run --rm -v "$PWD:/src" repoactive-tools repoactive --help
+#
+
+# --- Stage 1: build the devtools closure --------------------------------------
+FROM nixos/nix:latest AS build
+
+# Flakes and the new-style CLI are still behind experimental-features.
+RUN echo "experimental-features = nix-command flakes" >> /etc/nix/nix.conf
+
+WORKDIR /flake
+# Only the flake metadata is needed to evaluate and build the package.
+COPY flake.nix flake.lock ./
+
+# Build the buildEnv and copy its runtime closure into /rootfs, plus a stable
+# /rootfs/devtools symlink to the buildEnv (whose bin/ holds every tool). `path:`
+# reads the flake from the filesystem, so no git checkout is required.
+RUN nix build "path:/flake#devtools" --out-link /devtools \
+    && mkdir -p /rootfs/nix/store \
+    && nix-store -qR /devtools | xargs cp -a -t /rootfs/nix/store \
+    && ln -s "$(readlink -f /devtools)" /rootfs/devtools
+
+# --- Stage 2: slim runtime with only the closure ------------------------------
+FROM debian:trixie-slim
+
+# ca-certificates lets the bundled git talk to https remotes; every other tool
+# comes from the copied Nix closure below.
+RUN export DEBIAN_FRONTEND=noninteractive \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=build /rootfs/nix/store /nix/store
+COPY --from=build /rootfs/devtools /devtools
+ENV PATH="/devtools/bin:${PATH}"
+
+# --- Install repoactive with uv (same approach as the top-level Dockerfile),
+# reusing the uv that came from the Nix closure. UV_TOOL_BIN_DIR drops the
+# `repoactive` entrypoint into /usr/local/bin, which is already on PATH.
+RUN --mount=type=bind,target=/app <<EOF
+    set -eu
+    export HOME=/usr/local/uv-home
+    export UV_TOOL_BIN_DIR=/usr/local/bin
+    uv --no-cache tool install --compile-bytecode /app
+EOF
+
+WORKDIR /src
+CMD ["bash"]
