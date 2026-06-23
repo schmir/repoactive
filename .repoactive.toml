@@ -7,19 +7,22 @@ branch_prefix = "repoactive/"
 name = "uv-lock-upgrade"
 command = "uv lock --upgrade"
 title = "build: upgrade all dependencies"
-tags = ["monthly"]
+tags = ["weekly"]
+cooldown_period = "14d"
 
 [[job]]
 name = "update-flake"
 command = "./scripts/update-flake.sh"
 title = "build: update flake inputs"
 tags = ["weekly"]
+cooldown_period = "14d"
 
 [[job]]
 name = "prek-autoupdate"
 command = "./scripts/prek.sh autoupdate"
 title = "ci: update pre-commit hooks"
 tags = ["weekly"]
+cooldown_period = "14d"
 
 [[job]]
 name = "prek-run-all"
