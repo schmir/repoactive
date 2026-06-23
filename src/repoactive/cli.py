@@ -178,13 +178,13 @@ def validate_config(
     try:
         paths = _resolve_config(config, repo)
         files = expand_config_paths(paths)
+        typer.echo("Configuration files:")
+        for file in files:
+            typer.echo(f"  {file}")
         cfg = load_config(paths)
     except Exception as e:
         typer.echo(f"Invalid config: {e}", err=True)
         raise typer.Exit(code=1) from e
-    typer.echo("Configuration files:")
-    for file in files:
-        typer.echo(f"  {file}")
     typer.echo(f"Config OK: {len(cfg.jobs)} job(s) defined.")
 
 
