@@ -503,7 +503,7 @@ def _prepare_repo(*, config: Config, repo_path: Path) -> Generator[JJ]:
         # Track the bookmarks repoactive manages so a branch an earlier run pushed
         # is recognised (and rebased/updated) instead of recreated. Tracking an
         # absent bookmark is a harmless no-op.
-        repo.bookmark_track(*sorted(config.bookmark_names()))
+        repo.bookmark_track(*sorted(config.bookmark_names() | config.base_branches()))
         yield repo
     finally:
         # Tell the user how to roll back the run. This only undoes changes made to the

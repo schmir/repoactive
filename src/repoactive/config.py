@@ -293,6 +293,9 @@ class Config(BaseModel):
             detect_cycle(job.name)
         return self
 
+    def _resolved_jobs(self) -> list[Job]:
+        return [job.resolve(self.job_defaults) for job in self.jobs]
+
     def bookmark_names(self) -> set[str]:
         """The branch/bookmark names repoactive manages, one per job.
 
@@ -301,7 +304,11 @@ class Config(BaseModel):
         bookmarks to track with ``jj bookmark track`` so that branches already
         pushed by an earlier run are recognised instead of being recreated.
         """
-        return {job.resolve(self.job_defaults).branch_name() for job in self.jobs}
+        return {job.branch_name() for job in self._resolved_jobs()}
+
+    def base_branches(self) -> set[str]:
+        """All branches a job uses as base_branch"""
+        return {job.base_branch for job in self._resolved_jobs() if job.base_branch}
 
 
 def _deep_merge(*, base: dict, override: dict) -> dict:

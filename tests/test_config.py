@@ -105,6 +105,38 @@ class TestBookmarkNames:
         assert cfg.bookmark_names() == {"custom/a", "bot/b"}
 
 
+class TestBaseBranches:
+    def test_empty_config(self) -> None:
+        assert _config().base_branches() == set()
+
+    def test_jobs_without_base_branch_yield_empty(self) -> None:
+        cfg = _config(jobs=[_job("a"), _job("b")])
+        assert cfg.base_branches() == set()
+
+    def test_collects_per_job_base_branches(self) -> None:
+        cfg = _config(jobs=[_job("a", base_branch="main"), _job("b", base_branch="develop")])
+        assert cfg.base_branches() == {"main", "develop"}
+
+    def test_deduplicates_shared_base_branch(self) -> None:
+        cfg = _config(jobs=[_job("a", base_branch="main"), _job("b", base_branch="main")])
+        assert cfg.base_branches() == {"main"}
+
+    def test_falls_back_to_job_defaults(self) -> None:
+        cfg = _config(jobs=[_job("a")], **{"job-defaults": {"base_branch": "main"}})
+        assert cfg.base_branches() == {"main"}
+
+    def test_per_job_overrides_default(self) -> None:
+        cfg = _config(
+            jobs=[_job("a", base_branch="custom"), _job("b")],
+            **{"job-defaults": {"base_branch": "main"}},
+        )
+        assert cfg.base_branches() == {"custom", "main"}
+
+    def test_mix_of_set_and_unset_without_default(self) -> None:
+        cfg = _config(jobs=[_job("a", base_branch="main"), _job("b")])
+        assert cfg.base_branches() == {"main"}
+
+
 class TestDependsOnValidation:
     def test_valid_depends_on(self) -> None:
         cfg = _config(
