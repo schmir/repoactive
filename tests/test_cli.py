@@ -54,18 +54,18 @@ class TestValidateConfigShowsLocations:
         assert lines[2].strip() == str(conf_dir / "02-extra.toml")
         assert "Config OK: 2 job(s) defined." in result.stdout
 
-    def test_invalid_config_reports_error_and_exits_nonzero(self, tmp_path: Path) -> None:
+    def test_invalid_config_reports_error_and_names_file(self, tmp_path: Path) -> None:
         cfg = tmp_path / "config.toml"
         cfg.write_text('[[job]]\nname = "a"\nbogus = true\n')
         result = runner.invoke(app, ["validate-config", "--config", str(cfg)])
         assert result.exit_code == 1
-        assert "Invalid config:" in result.output
+        assert f"Invalid config in {cfg}:" in result.output
 
-    def test_missing_config_reports_error_and_exits_nonzero(self, tmp_path: Path) -> None:
+    def test_missing_config_reports_error_and_names_file(self, tmp_path: Path) -> None:
         missing = tmp_path / "does-not-exist.toml"
         result = runner.invoke(app, ["validate-config", "--config", str(missing)])
         assert result.exit_code == 1
-        assert "Invalid config:" in result.output
+        assert f"Invalid config in {missing}:" in result.output
 
 
 class TestRun:

@@ -5,6 +5,7 @@ import pytest
 
 from repoactive.config import (
     Config,
+    ConfigError,
     ConfigNotFoundError,
     InvalidDurationError,
     Job,
@@ -272,8 +273,9 @@ class TestLoadConfig:
         assert cfg.jobs[0].name == "x"
 
     def test_file_not_found(self, tmp_path: Path) -> None:
-        with pytest.raises(FileNotFoundError):
-            load_config([tmp_path / "missing.toml"])
+        missing = tmp_path / "missing.toml"
+        with pytest.raises(ConfigError, match=str(missing)):
+            load_config([missing])
 
     def test_multiple_platforms(self, tmp_path: Path) -> None:
         f = tmp_path / ".repoactive.toml"
@@ -393,8 +395,39 @@ class TestLoadConfig:
         override.write_text(
             '[[job]]\nname = "b"\ncommand = "cmd"\ntitle = "B"\ndepends_on = ["nonexistent"]\n'
         )
-        with pytest.raises(ValueError, match="unknown jobs"):
+        with pytest.raises(ConfigError, match="unknown jobs"):
             load_config([base, override])
+
+    def test_toml_parse_error_names_file(self, tmp_path: Path) -> None:
+        bad = tmp_path / "broken.toml"
+        bad.write_text("this is not = valid = toml\n")
+        with pytest.raises(ConfigError, match=str(bad)):
+            load_config([bad])
+
+    def test_validation_error_names_offending_file(self, tmp_path: Path) -> None:
+        base = tmp_path / "base.toml"
+        base.write_text(
+            '[[platform]]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
+            '[[job]]\nname = "a"\ncommand = "cmd"\ntitle = "A"\n'
+        )
+        override = tmp_path / "override.toml"
+        override.write_text(
+            '[[job]]\nname = "b"\ncommand = "cmd"\ntitle = "B"\ntimeout = "nope"\n'
+        )
+        # the error points at override.toml, the file that introduced the bad value
+        with pytest.raises(ConfigError, match=r"override\.toml") as exc_info:
+            load_config([base, override])
+        assert "base.toml" not in str(exc_info.value)
+        assert "invalid duration" in str(exc_info.value)
+
+    def test_missing_job_name_names_file(self, tmp_path: Path) -> None:
+        f = tmp_path / "nameless.toml"
+        f.write_text(
+            '[[platform]]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
+            '[[job]]\ncommand = "cmd"\ntitle = "A"\n'
+        )
+        with pytest.raises(ConfigError, match=str(f)):
+            load_config([f])
 
     def test_directory_reads_toml_files_sorted(self, tmp_path: Path) -> None:
         conf_dir = tmp_path / "conf.d"

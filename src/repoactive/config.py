@@ -3,11 +3,19 @@ from __future__ import annotations
 import logging
 import re
 import tomllib
+from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +97,15 @@ class MissingJobNameError(ValueError):
 
     def __init__(self) -> None:
         super().__init__("Each [[job]] entry must have a 'name' field")
+
+
+class ConfigError(Exception):
+    """Wraps a parse or validation error with the config source it came from."""
+
+    def __init__(self, source: str, error: Exception) -> None:
+        self.source = source
+        self.error = error
+        super().__init__(f"in {source}:\n  {error}")
 
 
 def parse_duration(value: str) -> timedelta:
@@ -382,24 +399,39 @@ def expand_config_paths(paths: list[Path]) -> list[Path]:
     return expanded
 
 
+@dataclass(frozen=True)
+class _ConfigSource:
+    """A parsed config along with the label naming where it came from."""
+
+    label: str
+    data: dict
+
+
 def load_config(paths: list[Path]) -> Config:
     assert paths
-    configs = [
-        tomllib.loads(_default_platforms),
-        *(tomllib.loads(path.read_text()) for path in expand_config_paths(paths)),
-    ]
+    sources = [_ConfigSource("<built-in defaults>", tomllib.loads(_default_platforms))]
+    for path in expand_config_paths(paths):
+        try:
+            data = tomllib.loads(path.read_text())
+        except (OSError, tomllib.TOMLDecodeError) as e:
+            raise ConfigError(str(path), e) from e
+        sources.append(_ConfigSource(str(path), data))
 
     merged = {}
-    for data in configs:
-        jobs = _merge_jobs(base=merged.get("job", []), override=data.get("job", []))
-        platforms = _merge_platforms(
-            base=merged.get("platform", []), override=data.get("platform", [])
-        )
-        merged = _deep_merge(base=merged, override=data)
-        merged["job"] = jobs
-        merged["platform"] = platforms
-        merged.pop("$schema", None)
-        Config.model_validate(merged)  # ensure it's valid after each merge
+    for source in sources:
+        data = source.data
+        try:
+            jobs = _merge_jobs(base=merged.get("job", []), override=data.get("job", []))
+            platforms = _merge_platforms(
+                base=merged.get("platform", []), override=data.get("platform", [])
+            )
+            merged = _deep_merge(base=merged, override=data)
+            merged["job"] = jobs
+            merged["platform"] = platforms
+            merged.pop("$schema", None)
+            Config.model_validate(merged)  # ensure it's valid after each merge
+        except (ValueError, ValidationError) as e:
+            raise ConfigError(source.label, e) from e
     config = Config.model_validate(merged)
     logger.debug("loaded config: %s", config.model_dump_json(indent=2))
     return config

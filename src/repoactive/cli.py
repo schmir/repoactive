@@ -10,6 +10,7 @@ import typer
 
 from repoactive.config import (
     Config,
+    ConfigError,
     ConfigNotFoundError,
     default_config_paths,
     expand_config_paths,
@@ -142,6 +143,9 @@ def run(  # noqa: PLR0913
     except ConfigNotFoundError as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(code=1) from e
+    except ConfigError as e:
+        typer.echo(f"Invalid config {e}", err=True)
+        raise typer.Exit(code=1) from e
     platform = get_platform(cfg, repo) if mode is RunMode.publish else None
     summary = run_all(
         config=cfg,
@@ -182,6 +186,9 @@ def validate_config(
         for file in files:
             typer.echo(f"  {file}")
         cfg = load_config(paths)
+    except ConfigError as e:
+        typer.echo(f"Invalid config {e}", err=True)
+        raise typer.Exit(code=1) from e
     except Exception as e:
         typer.echo(f"Invalid config: {e}", err=True)
         raise typer.Exit(code=1) from e
