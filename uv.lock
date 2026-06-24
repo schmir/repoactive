@@ -765,7 +765,7 @@ wheels = [
 
 [[package]]
 name = "repoactive"
-version = "0.0.12.dev1"
+version = "0.0.12"
 source = { editable = "." }
 dependencies = [
     { name = "pydantic" },
