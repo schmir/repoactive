@@ -8,14 +8,18 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from repoactive.config import Config, Job, JobDefaults
+from repoactive.config import Config, Job, JobDefaults, MissingJobNameError
 from repoactive.runner import (
+    REPOACTIVE_JOBS_DIR_ENV,
     CommandError,
+    GeneratedJobError,
     JobResult,
     RunMode,
     RunSummary,
     UnknownJobsError,
+    _build_generated_jobs,
     _compute_parents,
+    _load_job_specs,
     _prepare_repo,
     _run_command,
     _run_one_job,
@@ -24,6 +28,7 @@ from repoactive.runner import (
     _topological_sort,
     apply_plan,
     run_all,
+    run_generator,
     run_job,
 )
 from repoactive.updates import BookmarkPush, JobUpdate, MRUpdate, UpdatePlan
@@ -383,6 +388,7 @@ class TestRunOneJob:
                 summary=summary,
                 blocked=blocked,
                 plan=plan,
+                run_names={job_b.name},
             )
         assert summary.skipped == {"b"}
         assert "b" in blocked
@@ -405,6 +411,7 @@ class TestRunOneJob:
                 summary=summary,
                 blocked=set(),
                 plan=plan,
+                run_names={"a"},
             )
         assert summary.cooldown == {"a"}
         # A no-op result is recorded so dependents proceed on the base branch.
@@ -430,6 +437,7 @@ class TestRunOneJob:
                 summary=summary,
                 blocked=set(),
                 plan=plan,
+                run_names={"a"},
             )
         assert summary.results["a"] is result
         assert plan.updates == []
@@ -460,6 +468,7 @@ class TestRunOneJob:
                 summary=summary,
                 blocked=set(),
                 plan=plan,
+                run_names={"a"},
             )
         assert plan.updates == [update]
 
@@ -480,6 +489,7 @@ class TestRunOneJob:
                 summary=summary,
                 blocked=blocked,
                 plan=UpdatePlan(),
+                run_names={"a"},
             )
         assert summary.failed == {"a": err}
         assert blocked == {"a"}
@@ -502,6 +512,7 @@ class TestRunOneJob:
                 summary=summary,
                 blocked=blocked,
                 plan=UpdatePlan(),
+                run_names={"a"},
             )
         assert summary.failed == {"a": err}
         assert blocked == {"a"}
@@ -1012,6 +1023,188 @@ class TestRunJob:
         mock_jj.rebase.assert_not_called()
 
 
+def _gen(
+    name: str = "gen", *, tags: list[str] | None = None, cooldown_period: str | None = None
+) -> Job:
+    """A resolved generator job (emits_jobs=True) for inheritance tests."""
+    return Job(
+        name=name,
+        command="discover",
+        title="Gen",
+        emits_jobs=True,
+        tags=tags or [],
+        cooldown_period=cooldown_period,
+    ).resolve(JobDefaults())
+
+
+class TestBuildGeneratedJobs:
+    def test_inherits_tags_depends_on_and_records_generator(self) -> None:
+        gen = _gen(tags=["weekly"])
+        spec = {"name": "child", "command": "c", "title": "Child"}
+        [job] = _build_generated_jobs(generator=gen, specs=[spec], run_names={"gen"})
+        assert job.tags == ["weekly"]
+        assert job.depends_on == ["gen"]
+        assert job.generated_by == "gen"
+
+    def test_plain_generator_children_inherit_enabled(self) -> None:
+        # A plain generator carries the implicit 'enabled' tag; children do too.
+        [job] = _build_generated_jobs(
+            generator=_gen(),
+            specs=[{"name": "child", "command": "c", "title": "Child"}],
+            run_names={"gen"},
+        )
+        assert job.tags == ["enabled"]
+
+    def test_spec_tags_override_inheritance(self) -> None:
+        [job] = _build_generated_jobs(
+            generator=_gen(tags=["weekly"]),
+            specs=[{"name": "child", "command": "c", "title": "Child", "tags": ["daily"]}],
+            run_names={"gen"},
+        )
+        assert job.tags == ["daily"]
+
+    def test_disabled_spec_keeps_no_tags(self) -> None:
+        # 'disabled' and 'tags' are mutually exclusive, so an emitted job that
+        # sets disabled does not also inherit the generator's tags.
+        [job] = _build_generated_jobs(
+            generator=_gen(tags=["weekly"]),
+            specs=[{"name": "child", "command": "c", "title": "Child", "disabled": True}],
+            run_names={"gen"},
+        )
+        assert job.tags == []
+        assert job.disabled is True
+
+    def test_inherits_cooldown_period(self) -> None:
+        [job] = _build_generated_jobs(
+            generator=_gen(cooldown_period="7d"),
+            specs=[{"name": "child", "command": "c", "title": "Child"}],
+            run_names={"gen"},
+        )
+        assert job.cooldown_period == "7d"
+
+    def test_spec_cooldown_overrides_inheritance(self) -> None:
+        [job] = _build_generated_jobs(
+            generator=_gen(cooldown_period="7d"),
+            specs=[{"name": "child", "command": "c", "title": "Child", "cooldown_period": "1d"}],
+            run_names={"gen"},
+        )
+        assert job.cooldown_period == "1d"
+
+    def test_sibling_depends_on_allowed(self) -> None:
+        specs = [
+            {"name": "a", "command": "c", "title": "A"},
+            {"name": "b", "command": "c", "title": "B", "depends_on": ["a"]},
+        ]
+        jobs = _build_generated_jobs(generator=_gen(), specs=specs, run_names={"gen"})
+        assert jobs[1].depends_on == ["a"]
+
+    def test_name_collision_raises(self) -> None:
+        with pytest.raises(GeneratedJobError, match="collides"):
+            _build_generated_jobs(
+                generator=_gen(),
+                specs=[{"name": "taken", "command": "c", "title": "T"}],
+                run_names={"gen", "taken"},
+            )
+
+    def test_nested_generator_raises(self) -> None:
+        with pytest.raises(GeneratedJobError, match="no recursion"):
+            _build_generated_jobs(
+                generator=_gen(),
+                specs=[{"name": "child", "command": "c", "title": "T", "emits_jobs": True}],
+                run_names={"gen"},
+            )
+
+    def test_unknown_dependency_raises(self) -> None:
+        with pytest.raises(GeneratedJobError, match="not in this run"):
+            _build_generated_jobs(
+                generator=_gen(),
+                specs=[{"name": "child", "command": "c", "title": "T", "depends_on": ["ghost"]}],
+                run_names={"gen"},
+            )
+
+    def test_invalid_spec_raises(self) -> None:
+        with pytest.raises(GeneratedJobError, match="invalid"):
+            _build_generated_jobs(
+                generator=_gen(),
+                specs=[{"name": "child", "command": "c", "title": "T", "bogus": 1}],
+                run_names={"gen"},
+            )
+
+    def test_missing_name_raises(self) -> None:
+        with pytest.raises(MissingJobNameError):
+            _build_generated_jobs(
+                generator=_gen(),
+                specs=[{"command": "c", "title": "T"}],
+                run_names={"gen"},
+            )
+
+
+class TestLoadJobSpecs:
+    def test_merges_sorted_toml_fragments(self, tmp_path: Path) -> None:
+        (tmp_path / "01.toml").write_text('[[job]]\nname = "a"\ncommand = "c"\ntitle = "A"\n')
+        (tmp_path / "02.toml").write_text('[[job]]\nname = "b"\ncommand = "c"\ntitle = "B"\n')
+        specs = _load_job_specs(tmp_path)
+        assert [s["name"] for s in specs] == ["a", "b"]
+
+    def test_empty_directory_yields_nothing(self, tmp_path: Path) -> None:
+        assert _load_job_specs(tmp_path) == []
+
+
+class TestRunGenerator:
+    @patch("repoactive.runner._load_job_specs", return_value=[{"name": "x"}])
+    @patch("repoactive.runner._run_command")
+    @patch("repoactive.runner.JJ")
+    def test_runs_command_with_jobs_dir_and_abandons(
+        self, mock_jj_cls: MagicMock, mock_run_command: MagicMock, mock_load: MagicMock
+    ) -> None:
+        mock_jj = _mock_jj(mock_jj_cls)
+
+        specs = run_generator(job=_gen(), parents=["trunk()"], repo_path=REPO)
+
+        mock_jj.new.assert_called_once_with("trunk()")
+        # The working copy is abandoned: a generator never produces a diff.
+        mock_jj.abandon.assert_called_once_with()
+        env = mock_run_command.call_args.kwargs["env"]
+        assert REPOACTIVE_JOBS_DIR_ENV in env
+        assert specs == [{"name": "x"}]
+
+    @patch("repoactive.runner._run_command", side_effect=CommandError("boom", elapsed=1.0))
+    @patch("repoactive.runner.JJ")
+    def test_command_failure_abandons_and_raises(
+        self, mock_jj_cls: MagicMock, mock_run_command: MagicMock
+    ) -> None:
+        mock_jj = _mock_jj(mock_jj_cls)
+        with pytest.raises(CommandError, match="boom"):
+            run_generator(job=_gen(), parents=["trunk()"], repo_path=REPO)
+        mock_jj.abandon.assert_called_once_with()
+
+
+class TestDualTrailer:
+    @patch("repoactive.runner.JJ")
+    @patch("repoactive.runner.subprocess.Popen")
+    def test_generated_job_records_both_trailers(
+        self, mock_sub: MagicMock, mock_jj_cls: MagicMock
+    ) -> None:
+        mock_jj = _mock_jj(mock_jj_cls)
+        _mock_popen(mock_sub)
+        mock_jj.bookmark_exists.return_value = False
+        mock_jj.is_empty.return_value = False
+        job = Job(
+            name="child",
+            command="c",
+            title="Change child",
+            generated_by="gen",
+            branch_prefix="repoactive/",
+            commit_title_prefix="",
+        )
+
+        run_job(job=job, parents=["trunk()"], repo_path=REPO)
+
+        mock_jj.describe.assert_called_once_with(
+            "Change child\n\nRepoactive-Job: child\nRepoactive-Job: gen"
+        )
+
+
 def _push_update(name: str) -> JobUpdate:
     return JobUpdate(
         job_name=name,
@@ -1462,6 +1655,76 @@ class TestRunAll:
         out = capsys.readouterr().out
         assert out.count("jj --repository /repo op restore OP-START") == 1
         assert "local repository" in out
+
+    @staticmethod
+    def _generator_config(**gen_fields: object) -> Config:
+        return Config.model_validate(
+            {
+                "platform": [{"url": "https://gitlab.com", "type": "gitlab", "token_env": "T"}],
+                "jobs": [
+                    {"name": "gen", "command": "discover", "title": "Gen", "emits_jobs": True}
+                    | gen_fields
+                ],
+            }
+        )
+
+    @patch("repoactive.runner.run_job")
+    @patch(
+        "repoactive.runner.run_generator",
+        return_value=[{"name": "child", "command": "c", "title": "Child"}],
+    )
+    def test_generator_emits_and_runs_child(
+        self, mock_run_generator: MagicMock, mock_run_job: MagicMock, mock_jj: MagicMock
+    ) -> None:
+        mock_run_job.return_value = _result(_job("child"), revsets=["repoactive/child"])
+
+        summary = run_all(config=self._generator_config(), repo_path=REPO)
+
+        mock_run_generator.assert_called_once()
+        # The emitted child runs in the same invocation.
+        called = {c.kwargs["job"].name for c in mock_run_job.call_args_list}
+        assert called == {"child"}
+        # The generator itself records a no-op result so dependents parent on it.
+        assert summary.results["gen"].produced_output is False
+
+    @patch("repoactive.runner.run_job")
+    @patch(
+        "repoactive.runner.run_generator",
+        return_value=[{"name": "child", "command": "c", "title": "Child"}],
+    )
+    def test_emitted_child_bookmark_is_tracked(
+        self, mock_run_generator: MagicMock, mock_run_job: MagicMock, mock_jj: MagicMock
+    ) -> None:
+        mock_run_job.return_value = _result(_job("child"), revsets=["repoactive/child"])
+
+        run_all(config=self._generator_config(), repo_path=REPO)
+
+        tracked = [c.args for c in mock_jj.return_value.bookmark_track.call_args_list]
+        assert ("repoactive/child",) in tracked
+
+    @patch("repoactive.runner.run_job")
+    @patch("repoactive.runner.run_generator")
+    def test_generator_on_cooldown_emits_nothing(
+        self, mock_run_generator: MagicMock, mock_run_job: MagicMock, mock_jj: MagicMock
+    ) -> None:
+        # A landed child (dual trailer) puts the generator on cooldown; the whole
+        # fan-out is skipped for this run.
+        mock_jj.return_value.has_recent_job_commit.return_value = True
+
+        summary = run_all(config=self._generator_config(cooldown_period="7d"), repo_path=REPO)
+
+        mock_run_generator.assert_not_called()
+        mock_run_job.assert_not_called()
+        assert summary.cooldown == {"gen"}
+
+    @patch("repoactive.runner.run_generator", side_effect=RuntimeError("boom"))
+    def test_generator_failure_is_recorded(
+        self, mock_run_generator: MagicMock, mock_jj: MagicMock
+    ) -> None:
+        summary = run_all(config=self._generator_config(), repo_path=REPO)
+
+        assert "gen" in summary.failed
+        assert not summary.ok
 
 
 class TestPrepareRepo:

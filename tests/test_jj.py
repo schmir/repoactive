@@ -387,6 +387,13 @@ class TestUnmergedJobNames:
         assert _jj().unmerged_job_names() == {"uv-lock-upgrade", "prek-autoupdate"}
 
     @patch("repoactive.jj.subprocess.run")
+    def test_splits_multiple_trailers_on_one_commit(self, mock_run: MagicMock) -> None:
+        # A generated job's commit carries its own name and the generator's,
+        # comma-joined; both must be returned (see ADR 0004).
+        mock_run.return_value.stdout = "deps-pkg-a,per-package\ndeps-pkg-b,per-package\n"
+        assert _jj().unmerged_job_names() == {"deps-pkg-a", "deps-pkg-b", "per-package"}
+
+    @patch("repoactive.jj.subprocess.run")
     def test_empty_when_no_unmerged_commits(self, mock_run: MagicMock) -> None:
         mock_run.return_value.stdout = ""
         assert _jj().unmerged_job_names() == set()

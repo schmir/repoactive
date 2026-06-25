@@ -69,9 +69,9 @@ differences in behavior:
      weekly too.
    - **depends_on** — an emitted job defaults to `depends_on = [generator]`
      unless its own entry sets `depends_on`. Because the generator produces
-     no diff and is abandoned, its `effective_revsets` falls back to its
-     own parents (`trunk()` or its `base_branch`), so the implicit edge
-     means "build flat on trunk" — the common fan-out case. Overriding
+     no diff and is abandoned, its `effective_revsets` falls back to its own
+     parents (`trunk()` or its `base_branch`), so the implicit edge means
+     "build flat on trunk" — the common fan-out case. Overriding
      `depends_on` to a _sibling_ generated job (or a static job) is how you
      opt into a stacked-MR chain (`deps-pkg-b depends_on deps-pkg-a`).
    - **cooldown_period** — and the other `job-defaults`-style fields

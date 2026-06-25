@@ -256,7 +256,11 @@ def recent_commits(
     commits = JJ(repo).recent_job_commits(cutoff, revset=revset)
 
     filter_names = set(jobs) if jobs else None
-    shown = [c for c in commits if filter_names is None or c.job_name in filter_names]
+    # A commit may carry several Repoactive-Job trailers (a generated job records
+    # both its own name and its generator's), joined with commas in job_name.
+    shown = [
+        c for c in commits if filter_names is None or (set(c.job_name.split(",")) & filter_names)
+    ]
 
     if not shown:
         typer.echo("No matching commits found.")

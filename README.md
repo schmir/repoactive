@@ -276,6 +276,64 @@ inferring a schedule from `repoactive`'s own history: real cron is stateful
 and excludes the other days, whereas `repoactive` only ever sees what has
 _landed_ (see `cooldown_period` below).
 
+## Generating jobs dynamically
+
+Sometimes the useful set of jobs depends on the repository's contents — one
+job per package in a monorepo, one per entry in a manifest — and you don't
+want to hand-maintain them. A **generator** is an ordinary `[[job]]` with
+`emits_jobs = true`. Instead of producing a diff, its command writes one or
+more `*.toml` job fragments into the directory named by the
+`REPOACTIVE_JOBS_DIR` environment variable, and the jobs it emits run in the
+same invocation.
+
+```toml
+[[job]]
+name = "per-package"
+command = "./scripts/emit_upgrade_jobs.sh"
+title = "discover package upgrade jobs"
+emits_jobs = true
+# Inherited by every emitted job unless the job overrides it (see below).
+tags = ["weekly"]
+cooldown_period = "7d"
+```
+
+The command writes fragments using the normal `[[job]]` syntax, e.g.
+
+```toml
+# $REPOACTIVE_JOBS_DIR/pkg-a.toml
+[[job]]
+name = "upgrade-pkg-a"
+command = "uv lock --upgrade --package pkg-a"
+title = "build: upgrade pkg-a"
+```
+
+Key points:
+
+- **Selection is unchanged.** A generator is selected like any job (by the
+  bare run, by name, or by `--tag`); selecting it runs it _and_ everything
+  it emits.
+- **Inheritance with override.** Each emitted job inherits the generator's
+  `tags`, `cooldown_period`, `base_branch`, `timeout`, `labels`,
+  `branch_prefix`/title prefixes, `draft` and `create_mr` unless its own
+  fragment sets them. It also defaults to `depends_on = ["<generator>"]`
+  (i.e. built flat on `trunk()`); override `depends_on` to a sibling emitted
+  job to stack them into an MR chain.
+- **Stable names are your responsibility.** Cooldown, branches and the
+  `Repoactive-Job` trailer all key on a job's `name`, so derive emitted
+  names deterministically from repository state (`upgrade-pkg-a`, not a
+  random id).
+- **The generator never commits.** Any change its command leaves in the
+  working copy is discarded; its only output is the job list.
+- **Batch cooldown.** Each emitted commit carries a second `Repoactive-Job`
+  trailer with the generator's name, so a `cooldown_period` on the generator
+  throttles the whole fan-out: it is skipped until enough time has passed
+  since the most recent emitted job landed.
+
+Emitted jobs may not themselves be generators (no recursion), may not reuse
+an existing job's name, and may only `depends_on` jobs that are part of the
+same run. See [ADR 0004](docs/adr/0004-job-generators.md) for the full
+design.
+
 ## Throttling jobs with `cooldown_period`
 
 Every commit `repoactive` creates carries a `Repoactive-Job: <name>` trailer

@@ -1,9 +1,12 @@
 import contextlib
 import logging
 import os
+import shutil
 import signal
 import subprocess
+import tempfile
 import time
+import tomllib
 from collections.abc import Generator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -11,8 +14,16 @@ from enum import StrEnum
 from pathlib import Path
 
 import typer
+from pydantic import ValidationError
 
-from repoactive.config import DEFAULT_TAG, Config, Job
+from repoactive.config import (
+    DEFAULT_TAG,
+    Config,
+    Job,
+    MissingJobNameError,
+    _merge_jobs,
+    expand_config_paths,
+)
 from repoactive.jj import JJ, JOB_TRAILER_KEY, workspace_name
 from repoactive.platforms.base import MRParams, Platform
 from repoactive.updates import (
@@ -24,6 +35,25 @@ from repoactive.updates import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Environment variable naming the directory a generator (``emits_jobs``) command
+# writes its ``*.toml`` job fragments into. See docs/adr/0004-job-generators.md.
+REPOACTIVE_JOBS_DIR_ENV = "REPOACTIVE_JOBS_DIR"
+
+# Fields an emitted job inherits from its generator when the emitted entry does
+# not set them itself (``tags`` and ``depends_on`` are handled separately because
+# their defaults are not a plain copy). See docs/adr/0004-job-generators.md.
+_INHERITED_FIELDS = (
+    "cooldown_period",
+    "base_branch",
+    "timeout",
+    "labels",
+    "branch_prefix",
+    "mr_title_prefix",
+    "commit_title_prefix",
+    "draft",
+    "create_mr",
+)
 
 
 class RunMode(StrEnum):
@@ -58,6 +88,14 @@ class UnknownJobsError(ValueError):
 
     def __init__(self, unknown: set[str]) -> None:
         super().__init__(f"Unknown job(s): {', '.join(sorted(unknown))}")
+
+
+class GeneratedJobError(ValueError):
+    """Raised when a generator emits an invalid job set (collision, recursion,
+    unknown dependency, or a job that fails validation)."""
+
+    def __init__(self, generator: str, message: str) -> None:
+        super().__init__(f"generator {generator!r}: {message}")
 
 
 @dataclass
@@ -145,7 +183,7 @@ def _kill_process_group(proc: subprocess.Popen[str]) -> None:
         os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
 
 
-def _run_command(job: Job, cwd: Path) -> CommandResult:
+def _run_command(job: Job, cwd: Path, env: dict[str, str] | None = None) -> CommandResult:
     start = time.monotonic()
     # start_new_session puts the command in its own process group so a timeout
     # can kill the whole tree (see _kill_process_group).
@@ -161,6 +199,9 @@ def _run_command(job: Job, cwd: Path) -> CommandResult:
         encoding="utf-8",
         errors="replace",
         start_new_session=True,
+        # env extends (not replaces) the inherited environment, so the command
+        # still sees PATH etc.; used to pass REPOACTIVE_JOBS_DIR to a generator.
+        env={**os.environ, **env} if env else None,
     )
     try:
         output, _ = proc.communicate(timeout=job.timeout_seconds())
@@ -234,7 +275,12 @@ def _publish_job(
         commit_message += f"\n\n{indented}"
     # Trailer must be the final paragraph so jj/git recognise it as a trailer;
     # it lets later runs detect when this job last landed (see cooldown handling).
-    commit_message += f"\n\n{JOB_TRAILER_KEY}: {job.name}"
+    # A job produced by a generator records a second trailer with the generator's
+    # name, giving the generator a cooldown over the whole fan-out (ADR 0004).
+    trailers = [f"{JOB_TRAILER_KEY}: {job.name}"]
+    if job.generated_by:
+        trailers.append(f"{JOB_TRAILER_KEY}: {job.generated_by}")
+    commit_message += "\n\n" + "\n".join(trailers)
     ws.describe(commit_message)
     change_id = ws.change_id()
 
@@ -329,6 +375,105 @@ def run_job(
             ws=ws,
             command_result=command_result,
         )
+
+
+def _load_job_specs(jobs_dir: Path) -> list[dict]:
+    """Parse the ``*.toml`` fragments a generator wrote into ``jobs_dir``.
+
+    Files are read in sorted order and their ``[[job]]`` entries merged by name
+    (later files win), the same machinery used for the ``.repoactive.d``
+    directory. Returns the raw job-spec dicts, before inheritance/validation.
+    """
+    specs: list[dict] = []
+    for path in expand_config_paths([jobs_dir]):
+        data = tomllib.loads(path.read_text())
+        specs = _merge_jobs(base=specs, override=data.get("job", []))
+    return specs
+
+
+def run_generator(*, job: Job, parents: list[str], repo_path: Path) -> list[dict]:
+    """Run a generator job and return the raw job specs it emitted.
+
+    The command runs in a fresh workspace on top of ``parents`` with
+    ``REPOACTIVE_JOBS_DIR`` pointing at an empty directory; it writes ``*.toml``
+    fragments there which are parsed once it exits. The generator produces no
+    diff: any working-copy change it leaves is discarded (ADR 0004).
+    """
+    logger.debug("starting generator: %s", job.name)
+    repo = JJ(repo_path)
+    with repo.temp_workspace(workspace_name(job.name)) as ws:
+        ws.new(*parents)
+        ws.git_sync_head()
+        # The output directory lives outside the workspace so the files written
+        # there never show up as a diff in the working copy.
+        jobs_dir = Path(tempfile.mkdtemp(prefix="repoactive-jobs-"))
+        logger.debug("[%s] running generator command (jobs dir %s)", job.name, jobs_dir)
+        try:
+            try:
+                _run_command(job, ws.cwd, env={REPOACTIVE_JOBS_DIR_ENV: str(jobs_dir)})
+            except CommandError:
+                ws.abandon()
+                raise
+            specs = _load_job_specs(jobs_dir)
+        finally:
+            shutil.rmtree(jobs_dir, ignore_errors=True)
+        ws.abandon()
+    logger.debug("[%s] generator emitted %d job spec(s)", job.name, len(specs))
+    return specs
+
+
+def _build_generated_job(*, generator: Job, spec: dict, run_names: set[str]) -> Job:
+    """Build one emitted ``Job`` from its raw spec, applying inheritance.
+
+    The job inherits the (resolved) generator's tags, ``depends_on`` and the
+    ``_INHERITED_FIELDS`` unless the spec overrides them, and records the
+    generator in ``generated_by``. Raises GeneratedJobError on a missing name, a
+    name colliding with an existing job, a nested generator, or a job that fails
+    validation."""
+    name = spec.get("name")
+    if not name:
+        raise MissingJobNameError
+    if name in run_names:
+        raise GeneratedJobError(
+            generator.name, f"emitted job {name!r} collides with an existing job"
+        )
+    if spec.get("emits_jobs"):
+        raise GeneratedJobError(
+            generator.name, f"emitted job {name!r} may not itself be a generator (no recursion)"
+        )
+    merged = dict(spec)
+    if "tags" not in merged and "disabled" not in merged:
+        merged["tags"] = sorted(generator.effective_tags())
+    if "depends_on" not in merged:
+        merged["depends_on"] = [generator.name]
+    for f in _INHERITED_FIELDS:
+        merged.setdefault(f, getattr(generator, f))
+    merged["generated_by"] = generator.name
+    try:
+        return Job.model_validate(merged)
+    except ValidationError as e:
+        raise GeneratedJobError(generator.name, f"emitted job {name!r} is invalid: {e}") from e
+
+
+def _build_generated_jobs(*, generator: Job, specs: list[dict], run_names: set[str]) -> list[Job]:
+    """Turn a generator's raw specs into validated ``Job`` objects.
+
+    Validates each spec (see ``_build_generated_job``) and then that every
+    ``depends_on`` target is within this run (the existing jobs or a sibling
+    emitted job). ``generator`` must be resolved (its inherited fields filled in).
+    """
+    emitted = [
+        _build_generated_job(generator=generator, spec=spec, run_names=run_names) for spec in specs
+    ]
+    allowed = run_names | {j.name for j in emitted}
+    for j in emitted:
+        unknown = set(j.depends_on) - allowed
+        if unknown:
+            raise GeneratedJobError(
+                generator.name,
+                f"emitted job {j.name!r} depends_on jobs not in this run: {sorted(unknown)}",
+            )
+    return emitted
 
 
 def _on_cooldown(job: Job, repo_path: Path) -> bool:
@@ -447,17 +592,21 @@ def _run_one_job(  # noqa: PLR0913
     summary: RunSummary,
     blocked: set[str],
     plan: UpdatePlan,
-) -> None:
+    run_names: set[str],
+) -> list[Job]:
     """Run a single job, recording its outcome in ``summary``/``blocked``/``plan``.
 
     A failed or skipped job adds its name to ``blocked`` so its dependents are
-    skipped in turn."""
+    skipped in turn. Returns the jobs a generator (``emits_jobs``) produced — an
+    empty list for an ordinary job or a generator that emitted nothing/was
+    skipped. ``run_names`` is the set of job names already in this run, used to
+    reject an emitted job that collides with an existing name."""
     blocking_deps = [d for d in job.depends_on if d in blocked]
     if blocking_deps:
         print(f"==> [{job.name}] skipped (dependency failed: {', '.join(blocking_deps)})")
         summary.skipped.add(job.name)
         blocked.add(job.name)
-        return
+        return []
 
     resolved_job = job.resolve(config.job_defaults)
     parents = _compute_parents(resolved_job, summary.results)
@@ -469,7 +618,17 @@ def _run_one_job(  # noqa: PLR0913
         summary.results[job.name] = JobResult(
             job=resolved_job, effective_revsets=parents, produced_output=False
         )
-        return
+        return []
+
+    if resolved_job.emits_jobs:
+        return _run_generator_job(
+            job=resolved_job,
+            parents=parents,
+            repo_path=repo_path,
+            summary=summary,
+            blocked=blocked,
+            run_names=run_names,
+        )
 
     start = time.monotonic()
     try:
@@ -489,6 +648,41 @@ def _run_one_job(  # noqa: PLR0913
         print(f"==> [{job.name}] failed: {e} ({elapsed:.1f}s)")
         summary.failed[job.name] = e
         blocked.add(job.name)
+    return []
+
+
+def _run_generator_job(  # noqa: PLR0913
+    *,
+    job: Job,
+    parents: list[str],
+    repo_path: Path,
+    summary: RunSummary,
+    blocked: set[str],
+    run_names: set[str],
+) -> list[Job]:
+    """Run a generator and return its emitted jobs (resolved ``job`` required).
+
+    The generator itself produces no diff; a no-op ``JobResult`` is recorded so
+    its emitted jobs (which depend on it) compute their parents through it. A
+    failure to run or to build the emitted set blocks the generator's
+    dependents, exactly like an ordinary job failure."""
+    start = time.monotonic()
+    try:
+        specs = run_generator(job=job, parents=parents, repo_path=repo_path)
+        emitted = _build_generated_jobs(generator=job, specs=specs, run_names=run_names)
+    except Exception as e:
+        elapsed = e.elapsed if isinstance(e, CommandError) else time.monotonic() - start
+        print(f"==> [{job.name}] failed: {e} ({elapsed:.1f}s)")
+        summary.failed[job.name] = e
+        blocked.add(job.name)
+        return []
+
+    summary.results[job.name] = JobResult(
+        job=job, effective_revsets=parents, produced_output=False
+    )
+    names = ", ".join(j.name for j in emitted) if emitted else "none"
+    print(f"==> [{job.name}] generated {len(emitted)} job(s): {names}")
+    return emitted
 
 
 @contextlib.contextmanager
@@ -543,11 +737,13 @@ def run_all(  # noqa: PLR0913
             requested_tags,
         )
 
-        ordered_jobs = _select_run_jobs(
-            config=config,
-            repo=repo,
-            requested_jobs=requested_jobs,
-            requested_tags=requested_tags,
+        ordered_jobs = list(
+            _select_run_jobs(
+                config=config,
+                repo=repo,
+                requested_jobs=requested_jobs,
+                requested_tags=requested_tags,
+            )
         )
         summary = RunSummary()
         # Names of jobs that failed or were skipped - their dependents are blocked.
@@ -558,15 +754,36 @@ def run_all(  # noqa: PLR0913
         plan = UpdatePlan()
 
         print(f"Running {len(ordered_jobs)} job(s)...")
-        for job in ordered_jobs:
-            _run_one_job(
+        # ordered_jobs grows as generators emit jobs; ``done`` skips jobs already
+        # processed after a re-sort. A generator's emitted jobs are spliced in and
+        # the list re-sorted so each runs after its dependencies (the generator
+        # included). See docs/adr/0004-job-generators.md.
+        done: set[str] = set()
+        idx = 0
+        while idx < len(ordered_jobs):
+            job = ordered_jobs[idx]
+            idx += 1
+            if job.name in done:
+                continue
+            done.add(job.name)
+            emitted = _run_one_job(
                 job=job,
                 config=config,
                 repo_path=repo_path,
                 summary=summary,
                 blocked=blocked,
                 plan=plan,
+                run_names={j.name for j in ordered_jobs},
             )
+            if emitted:
+                # Track the new jobs' bookmarks so a branch an earlier run already
+                # pushed is reused rather than recreated, then splice them in and
+                # re-sort so they run after their dependencies.
+                repo.bookmark_track(
+                    *sorted(j.resolve(config.job_defaults).branch_name() for j in emitted)
+                )
+                ordered_jobs = _topological_sort(ordered_jobs + emitted)
+                idx = 0
 
         # A local run stops here: the plan is built but deliberately not applied, so
         # nothing is pushed and no MR is created.

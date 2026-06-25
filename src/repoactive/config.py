@@ -173,6 +173,15 @@ class Job(BaseModel):
     tags: list[str] = Field(default_factory=list)
     depends_on: list[str] = Field(default_factory=list)
     output_in_commit: bool = True
+    # When true, the command does not produce a diff to commit; instead it writes
+    # one or more *.toml job fragments into the directory named by the
+    # REPOACTIVE_JOBS_DIR environment variable, and those jobs are run in the same
+    # invocation. See docs/adr/0004-job-generators.md.
+    emits_jobs: bool = False
+    # Set by repoactive (never written in config) on jobs produced by a generator:
+    # the generator's name, recorded as a second Repoactive-Job trailer so the
+    # generator gets a meaningful cooldown over the whole fan-out.
+    generated_by: str | None = None
 
     # the following fields will be resolved from the defaults
     branch_prefix: str | None = None
