@@ -3,10 +3,23 @@
 [job-defaults]
 branch_prefix = "repoactive/"
 
+# Upgrade every dependency at once in a single MR. Replaced by the per-dependency
+# upgrade-deps generator below; kept here (commented out) as the simpler alternative.
+# [[job]]
+# name = "uv-lock-upgrade"
+# command = "uv lock --upgrade"
+# title = "build: upgrade all dependencies"
+# tags = ["weekly"]
+# cooldown_period = "14d"
+
+# Generator: emit one "upgrade-<dep>" job per [project.dependencies] entry, each
+# running "uv lock -P <dep>". The emitted jobs inherit the tags and cooldown_period
+# set here. See docs/adr/0004-job-generators.md.
 [[job]]
-name = "uv-lock-upgrade"
-command = "uv lock --upgrade"
-title = "build: upgrade all dependencies"
+name = "upgrade-deps"
+command = "./scripts/emit-upgrade-jobs.py"
+title = "discover per-dependency upgrade jobs"
+emits_jobs = true
 tags = ["weekly"]
 cooldown_period = "14d"
 
