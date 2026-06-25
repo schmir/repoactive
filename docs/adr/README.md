@@ -19,3 +19,9 @@ it.
   — Accepted. The bare `repoactive run` rebases any job with an unmerged
   branch onto the latest `trunk()`, regardless of tags, so a stale branch
   isn't stuck until the job's next scheduled run.
+- [0004 — Job generators (dynamically created jobs)](0004-job-generators.md)
+  — Accepted. An `emits_jobs` job writes `*.toml` fragments to a directory;
+  the emitted jobs are force-included into the same run, inheriting the
+  generator's fields (tags, `depends_on`, `cooldown_period`, …) overridably.
+  A dual `Repoactive-Job` trailer gives the generator a meaningful
+  `cooldown_period` over the whole fan-out.
