@@ -56,8 +56,7 @@ class JJNotFoundError(Exception):
 
     def __init__(self) -> None:
         super().__init__(
-            f"Error: 'jj' was not found on PATH. Install jujutsu to use repoactive: "
-            f"{JJ_INSTALL_URL}"
+            f"'jj' was not found on PATH. Install jujutsu to use repoactive: {JJ_INSTALL_URL}"
         )
 
 

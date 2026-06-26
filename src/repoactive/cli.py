@@ -52,12 +52,17 @@ def _resolve_config(config: list[Path] | None, repo: Path) -> list[Path]:
     return config or default_config_paths(repo)
 
 
+def _error(message: str) -> None:
+    """Print ``message`` to stderr as a bold red ``Error:`` line."""
+    typer.secho(f"Error: {message}", err=True, fg=typer.colors.RED, bold=True)
+
+
 def _check_jj() -> None:
     """Exit with a clear error unless the jj executable is on PATH."""
     try:
         require_jj_on_path()
     except JJNotFoundError as e:
-        typer.echo(str(e), err=True)
+        _error(str(e))
         raise typer.Exit(code=1) from e
 
 
@@ -81,7 +86,7 @@ def _check_repo(repo: Path) -> None:
             bold=True,
         )
     except NotAColocatedRepoError as e:
-        typer.echo(str(e), err=True)
+        _error(str(e))
         raise typer.Exit(code=1) from e
 
 
@@ -147,10 +152,10 @@ def run(  # noqa: PLR0913
     try:
         cfg = load_config(_resolve_config(config, repo))
     except ConfigNotFoundError as e:
-        typer.echo(str(e), err=True)
+        _error(str(e))
         raise typer.Exit(code=1) from e
     except ConfigError as e:
-        typer.echo(f"Invalid config {e}", err=True)
+        _error(f"Invalid config {e}")
         raise typer.Exit(code=1) from e
     platform = get_platform(cfg, repo) if mode is RunMode.publish else None
     try:
@@ -163,7 +168,7 @@ def run(  # noqa: PLR0913
             mode=mode,
         )
     except RunLockHeldError as e:
-        typer.secho(f"Error: {e}", err=True, fg=typer.colors.RED, bold=True)
+        _error(str(e))
         raise typer.Exit(code=LOCK_HELD_EXIT_CODE) from e
     if not summary.ok:
         raise typer.Exit(code=1)
@@ -197,10 +202,10 @@ def validate_config(
             typer.echo(f"  {file}")
         cfg = load_config(paths)
     except ConfigError as e:
-        typer.echo(f"Invalid config {e}", err=True)
+        _error(f"Invalid config {e}")
         raise typer.Exit(code=1) from e
     except Exception as e:
-        typer.echo(f"Invalid config: {e}", err=True)
+        _error(f"Invalid config {e}")
         raise typer.Exit(code=1) from e
     typer.echo(f"Config OK: {len(cfg.jobs)} job(s) defined.")
 
@@ -251,7 +256,7 @@ def recent_commits(
     try:
         delta = parse_duration(within)
     except ValueError as e:
-        typer.echo(str(e), err=True)
+        _error(str(e))
         raise typer.Exit(code=1) from e
 
     match merge_status:
