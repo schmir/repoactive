@@ -25,6 +25,7 @@ from repoactive.config import (
     expand_config_paths,
 )
 from repoactive.jj import JJ, JOB_TRAILER_KEY, workspace_name
+from repoactive.lock import run_lock
 from repoactive.platforms.base import MRParams, Platform
 from repoactive.updates import (
     BookmarkPush,
@@ -759,7 +760,10 @@ def run_all(  # noqa: PLR0913
     assert (mode is RunMode.publish) == (platform is not None), (
         f"mode={mode} is inconsistent with platform={platform!r}"
     )
-    with _prepare_repo(config=config, repo_path=repo_path) as repo:
+    # Serialise runs against the same repository: a run mutates repo-global state
+    # (workspaces, bookmarks, pushes), and forget_stale_workspaces would clobber a
+    # concurrent run's live workspaces. Fail-fast if another run holds the lock.
+    with run_lock(repo_path), _prepare_repo(config=config, repo_path=repo_path) as repo:
         logger.debug(
             "run_all: repo=%s mode=%s requested_jobs=%s requested_tags=%s",
             repo_path,

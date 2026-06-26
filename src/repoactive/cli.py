@@ -25,8 +25,14 @@ from repoactive.jj import (
     require_colocated_repo,
     require_jj_on_path,
 )
+from repoactive.lock import RunLockHeldError
 from repoactive.platforms import get_platform
 from repoactive.runner import RunMode, run_all
+
+# Exit code used when another repoactive run already holds the repository lock,
+# kept distinct from the generic failure code (1) so a scheduler can tell
+# "already running" apart from "run failed".
+LOCK_HELD_EXIT_CODE = 2
 
 app = typer.Typer(no_args_is_help=True)
 
@@ -147,14 +153,18 @@ def run(  # noqa: PLR0913
         typer.echo(f"Invalid config {e}", err=True)
         raise typer.Exit(code=1) from e
     platform = get_platform(cfg, repo) if mode is RunMode.publish else None
-    summary = run_all(
-        config=cfg,
-        repo_path=repo,
-        platform=platform,
-        requested_jobs=jobs or None,
-        requested_tags=tags or None,
-        mode=mode,
-    )
+    try:
+        summary = run_all(
+            config=cfg,
+            repo_path=repo,
+            platform=platform,
+            requested_jobs=jobs or None,
+            requested_tags=tags or None,
+            mode=mode,
+        )
+    except RunLockHeldError as e:
+        typer.secho(f"Error: {e}", err=True, fg=typer.colors.RED, bold=True)
+        raise typer.Exit(code=LOCK_HELD_EXIT_CODE) from e
     if not summary.ok:
         raise typer.Exit(code=1)
 

@@ -300,6 +300,24 @@ inferring a schedule from `repoactive`'s own history: real cron is stateful
 and excludes the other days, whereas `repoactive` only ever sees what has
 _landed_ (see `cooldown_period` below).
 
+#### One run at a time per repository
+
+A `repoactive run` takes an exclusive per-repository lock for its duration,
+so two runs against the same repository never interleave (and corrupt each
+other's branches and temporary workspaces). If a run is started while
+another is still in progress — a slow run overrunning the next cron tick,
+say — the second one **exits immediately with status code 2** instead of
+waiting or racing. That code is distinct from the generic failure code (1),
+so a wrapper can treat "already running" as benign:
+
+```cron
+0 3 * * 0  repoactive run --tag weekly --mode publish || test $? -eq 2
+```
+
+The lock is an advisory `flock` on `.jj/repoactive.lock`; the OS releases it
+automatically if a run is killed, so a crashed run never leaves the
+repository locked.
+
 ## Generating jobs dynamically
 
 Sometimes the useful set of jobs depends on the repository's contents — one

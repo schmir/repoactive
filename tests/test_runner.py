@@ -1363,8 +1363,15 @@ class TestApplyPlan:
 class TestRunAll:
     @pytest.fixture(autouse=True)
     def mock_jj(self) -> Iterator[MagicMock]:
-        """Stub the JJ class run_all constructs (unmerged_job_names + cooldown query)."""
-        with patch("repoactive.runner.JJ") as cls:
+        """Stub the JJ class run_all constructs (unmerged_job_names + cooldown query).
+
+        Also bypass the real per-repository run lock (REPO is a fake path with no
+        ``.jj`` directory); lock behaviour is covered separately in test_lock.py.
+        """
+        with (
+            patch("repoactive.runner.run_lock"),
+            patch("repoactive.runner.JJ") as cls,
+        ):
             cls.return_value.unmerged_job_names.return_value = set()
             cls.return_value.has_recent_job_commit.return_value = False
             cls.return_value.op_id.return_value = "OP-START"

@@ -6,8 +6,9 @@ from unittest.mock import MagicMock, patch
 
 from typer.testing import CliRunner
 
-from repoactive.cli import app
+from repoactive.cli import LOCK_HELD_EXIT_CODE, app
 from repoactive.jj import JobCommit
+from repoactive.lock import RunLockHeldError
 from repoactive.runner import RunMode, RunSummary
 
 runner = CliRunner()
@@ -91,6 +92,16 @@ class TestRun:
         with patch("repoactive.cli.run_all", return_value=summary):
             result = runner.invoke(app, ["run", "--repo", str(repo), "--config", str(cfg)])
         assert result.exit_code == 1
+
+    def test_lock_held_exits_with_distinct_code(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path)
+        cfg = repo / "config.toml"
+        _write_job(cfg, "a")
+        err = RunLockHeldError(repo / ".jj" / "repoactive.lock", "pid=999")
+        with patch("repoactive.cli.run_all", side_effect=err):
+            result = runner.invoke(app, ["run", "--repo", str(repo), "--config", str(cfg)])
+        assert result.exit_code == LOCK_HELD_EXIT_CODE
+        assert "Error: another repoactive run is in progress" in result.output
 
     def test_passes_jobs_and_tags(self, tmp_path: Path) -> None:
         repo = _make_repo(tmp_path)
