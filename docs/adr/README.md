@@ -36,3 +36,8 @@ it.
   sandbox commands, but does strip the platform API token from their
   environment as cheap defence-in-depth (a live credential, unlike repo
   contents, skips the MR review gate).
+- [0007 — Colocate job workspaces so commands get a working git repository](0007-colocate-job-workspaces-for-git-aware-commands.md)
+  — Accepted. `jj workspace add` does not colocate (jj#5252), so repoactive
+  manually wires up a git worktree in each job workspace. This is for the
+  job command's benefit (uv dynamic versioning, `git ls-files`, …), not
+  repoactive's own operations; remove it if jj#5252 is fixed.
