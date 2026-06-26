@@ -25,3 +25,8 @@ it.
   generator's fields (tags, `depends_on`, `cooldown_period`, …) overridably.
   A dual `Repoactive-Job` trailer gives the generator a meaningful
   `cooldown_period` over the whole fan-out.
+- [0005 — The local repository view is the source of truth (no fetch)](0005-local-repository-is-the-source-of-truth.md)
+  — Accepted. `repoactive` never fetches; rebasing, cooldown, and
+  unmerged-branch detection all read the local `trunk()`. Keeping the clone
+  current is the caller's responsibility, and skipping it silently breaks
+  cooldown throttling.
