@@ -1732,6 +1732,32 @@ class TestRunAll:
     @patch("repoactive.runner.run_job")
     @patch(
         "repoactive.runner.run_generator",
+        return_value=[{"name": "child", "command": "c", "title": "Child", "depends_on": ["z"]}],
+    )
+    def test_emitted_child_runs_after_existing_dependency(
+        self, mock_run_generator: MagicMock, mock_run_job: MagicMock, mock_jj: MagicMock
+    ) -> None:
+        # The generator emits a child depending on an ordinary job ``z`` that has
+        # not run yet, so the re-sort must order the child after ``z``.
+        config = Config.model_validate(
+            {
+                "platform": [{"url": "https://gitlab.com", "type": "gitlab", "token_env": "T"}],
+                "jobs": [
+                    {"name": "gen", "command": "discover", "title": "Gen", "emits_jobs": True},
+                    {"name": "z", "command": "c", "title": "Z"},
+                ],
+            }
+        )
+        mock_run_job.return_value = _result(_job("z"), revsets=["repoactive/z"])
+
+        run_all(config=config, repo_path=REPO)
+
+        order = [c.kwargs["job"].name for c in mock_run_job.call_args_list]
+        assert order.index("z") < order.index("child")
+
+    @patch("repoactive.runner.run_job")
+    @patch(
+        "repoactive.runner.run_generator",
         return_value=[{"name": "child", "command": "c", "title": "Child"}],
     )
     def test_emitted_child_bookmark_is_tracked(

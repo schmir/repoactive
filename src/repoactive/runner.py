@@ -639,6 +639,10 @@ def _run_one_job(  # noqa: PLR0913
     resolved_job = job.resolve(config.job_defaults)
     parents = _compute_parents(resolved_job, summary.results)
     logger.debug("[%s] computed parents: %s", job.name, parents)
+    # Checked before the emits_jobs branch on purpose: a generator on cooldown
+    # emits nothing, throttling its whole fan-out as a unit (the dual trailer
+    # records a recent child landing as the generator's). See
+    # docs/adr/0004-job-generators.md.
     if _on_cooldown(resolved_job, repo_path):
         print(f"==> [{job.name}] on cooldown ({resolved_job.cooldown_period}), skipped")
         summary.cooldown.add(job.name)
@@ -746,6 +750,54 @@ def _prepare_repo(*, config: Config, repo_path: Path) -> Generator[JJ]:
         typer.secho(restore_hint, fg=typer.colors.CYAN, bold=True)
 
 
+def _run_jobs(  # noqa: PLR0913
+    *,
+    ordered_jobs: list[Job],
+    config: Config,
+    repo: JJ,
+    repo_path: Path,
+    summary: RunSummary,
+    plan: UpdatePlan,
+) -> None:
+    """Run ``ordered_jobs`` in topological order, expanding generators in place.
+
+    ``ordered_jobs`` is topologically sorted, so the first job not yet in
+    ``done`` always has its dependencies satisfied: every job ahead of it in the
+    order is already done (were one not, *it* would be the first not-done job).
+    A generator's emitted jobs are appended and the list re-sorted so each runs
+    after its dependencies (the generator included); the next iteration picks
+    them up once their turn comes. See docs/adr/0004-job-generators.md.
+
+    Results and remote operations are recorded in ``summary``/``plan`` in place.
+    """
+    # Names of jobs that failed or were skipped - their dependents are blocked.
+    blocked: set[str] = set()
+    done: set[str] = set()
+    while True:
+        pending = [j for j in ordered_jobs if j.name not in done]
+        if not pending:
+            break
+        job = pending[0]
+        done.add(job.name)
+        emitted = _run_one_job(
+            job=job,
+            config=config,
+            repo_path=repo_path,
+            summary=summary,
+            blocked=blocked,
+            plan=plan,
+            run_names={j.name for j in ordered_jobs},
+        )
+        if emitted:
+            # Track the new jobs' bookmarks so a branch an earlier run already
+            # pushed is reused rather than recreated, then splice them in and
+            # re-sort so they run after their dependencies.
+            repo.bookmark_track(
+                *sorted(j.resolve(config.job_defaults).branch_name() for j in emitted)
+            )
+            ordered_jobs = _topological_sort(ordered_jobs + emitted)
+
+
 def run_all(  # noqa: PLR0913
     *,
     config: Config,
@@ -781,44 +833,20 @@ def run_all(  # noqa: PLR0913
             )
         )
         summary = RunSummary()
-        # Names of jobs that failed or were skipped - their dependents are blocked.
-        blocked: set[str] = set()
         # Remote operations collected during the run. They are applied (in
         # topological order) once every job has run, unless this is a local-only run
         # - then the plan is built but never applied.
         plan = UpdatePlan()
 
         print(f"Running {len(ordered_jobs)} job(s)...")
-        # ordered_jobs grows as generators emit jobs; ``done`` skips jobs already
-        # processed after a re-sort. A generator's emitted jobs are spliced in and
-        # the list re-sorted so each runs after its dependencies (the generator
-        # included). See docs/adr/0004-job-generators.md.
-        done: set[str] = set()
-        idx = 0
-        while idx < len(ordered_jobs):
-            job = ordered_jobs[idx]
-            idx += 1
-            if job.name in done:
-                continue
-            done.add(job.name)
-            emitted = _run_one_job(
-                job=job,
-                config=config,
-                repo_path=repo_path,
-                summary=summary,
-                blocked=blocked,
-                plan=plan,
-                run_names={j.name for j in ordered_jobs},
-            )
-            if emitted:
-                # Track the new jobs' bookmarks so a branch an earlier run already
-                # pushed is reused rather than recreated, then splice them in and
-                # re-sort so they run after their dependencies.
-                repo.bookmark_track(
-                    *sorted(j.resolve(config.job_defaults).branch_name() for j in emitted)
-                )
-                ordered_jobs = _topological_sort(ordered_jobs + emitted)
-                idx = 0
+        _run_jobs(
+            ordered_jobs=ordered_jobs,
+            config=config,
+            repo=repo,
+            repo_path=repo_path,
+            summary=summary,
+            plan=plan,
+        )
 
         # A local run stops here: the plan is built but deliberately not applied, so
         # nothing is pushed and no MR is created.
