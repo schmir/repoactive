@@ -43,16 +43,17 @@ need to write is the script that produces the change.
 
 `repoactive` works entirely from the **local** repository view and never
 fetches from the remote on its own. Rebasing onto `trunk()`, cooldown
-throttling, and the unmerged-branch refresh all read the local `trunk()` / base
-branches, so a merge that happened on the remote is invisible until the local
-clone advances past it.
+throttling, and the unmerged-branch refresh all read the local `trunk()` /
+base branches, so a merge that happened on the remote is invisible until the
+local clone advances past it.
 
-**Fetch before each run.** Run `jj git fetch` (or `git fetch --prune`) in the
-same cron job or CI pipeline that invokes `repoactive`, before it. If you do
-not, jobs rebase onto a stale base and — most importantly —
+**Fetch before each run.** Run `jj git fetch` (or `git fetch --prune`) in
+the same cron job or CI pipeline that invokes `repoactive`, before it. If
+you do not, jobs rebase onto a stale base and — most importantly —
 [`cooldown_period`](#throttling-jobs-with-cooldown_period) never engages,
-because the commit that would trigger it has not reached the local base branch.
-See [ADR 0005](docs/adr/0005-local-repository-is-the-source-of-truth.md).
+because the commit that would trigger it has not reached the local base
+branch. See
+[ADR 0005](docs/adr/0005-local-repository-is-the-source-of-truth.md).
 
 ## Use cases
 
@@ -165,6 +166,14 @@ The branch for each job is always `branch_prefix + job.name`, where
 `branch_prefix` is the job's own value if set, otherwise
 `job-defaults.branch_prefix`. Secrets are kept out of the config file by
 referencing environment variable names rather than inline values.
+
+The token named by `token_env` is **stripped from the environment job
+commands run in**, so a script cannot read the credential `repoactive` uses
+to push and create MRs. A job that needs its own credential must be given a
+separate one. `repoactive` otherwise trusts job commands — they run
+arbitrary code against the working tree — so the trust boundary is the
+config that defines them; see
+[ADR 0006](docs/adr/0006-job-commands-are-trusted.md).
 
 When `depends_on` is set, `repoactive` starts the job's script from a
 working tree that has all listed dependency branches merged together, rather
@@ -379,9 +388,9 @@ commit trailer reaching the base branch, MRs for throttled jobs must be
 merged with a merge commit or rebase - a **squash merge discards the commit
 message** and with it the trailer, so the cooldown would never trigger.
 
-The trailer must also be present in the _local_ base branch when the job runs:
-`repoactive` does not fetch, so a clone that has not pulled the merge will not
-see the cooldown and will re-run the job. See
+The trailer must also be present in the _local_ base branch when the job
+runs: `repoactive` does not fetch, so a clone that has not pulled the merge
+will not see the cooldown and will re-run the job. See
 [Keeping the local clone current](#keeping-the-local-clone-current).
 
 ## Limiting job runtime with `timeout`

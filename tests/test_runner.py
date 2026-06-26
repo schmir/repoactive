@@ -664,6 +664,41 @@ class TestRunCommand:
 
         assert result.output == "�"  # U+FFFD REPLACEMENT CHARACTER
 
+    def test_secret_env_stripped_from_command(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A platform token in the environment must not be visible to a job
+        # command (see docs/adr/0006). PATH and other vars still pass through.
+        monkeypatch.setenv("GITHUB_TOKEN", "supersecret")
+        job = Job(
+            name="foo",
+            command="echo token=[${GITHUB_TOKEN:-unset}] path=[${PATH:+present}]",
+            title="t",
+            branch_prefix="repoactive/",
+            commit_title_prefix="",
+        )
+        result = _run_command(job, tmp_path, secret_env=frozenset({"GITHUB_TOKEN"}))
+
+        assert "token=[unset]" in result.output
+        assert "supersecret" not in result.output
+        assert "path=[present]" in result.output
+
+    def test_secret_env_default_passes_environment_through(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # With no secrets to strip, the inherited environment is preserved.
+        monkeypatch.setenv("REPOACTIVE_TEST_VAR", "visible")
+        job = Job(
+            name="foo",
+            command="echo [${REPOACTIVE_TEST_VAR:-unset}]",
+            title="t",
+            branch_prefix="repoactive/",
+            commit_title_prefix="",
+        )
+        result = _run_command(job, tmp_path)
+
+        assert result.output == "[visible]"
+
 
 class TestRunJob:
     @patch("repoactive.runner.JJ")

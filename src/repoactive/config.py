@@ -319,6 +319,15 @@ class Config(BaseModel):
         """All branches a job uses as base_branch"""
         return {job.base_branch for job in self._resolved_jobs() if job.base_branch}
 
+    def token_env_names(self) -> set[str]:
+        """Names of the env vars holding platform API tokens.
+
+        These are stripped from the environment a job command runs in so a
+        command cannot read the platform credential (see runner._run_command and
+        docs/adr/0006-job-commands-are-trusted.md).
+        """
+        return {p.token_env for p in self.platforms}
+
 
 def _deep_merge(*, base: dict, override: dict) -> dict:
     result = dict(base)

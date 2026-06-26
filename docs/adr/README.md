@@ -30,3 +30,9 @@ it.
   unmerged-branch detection all read the local `trunk()`. Keeping the clone
   current is the caller's responsibility, and skipping it silently breaks
   cooldown throttling.
+- [0006 — Job commands are trusted](0006-job-commands-are-trusted.md) —
+  Accepted. A job's `command` runs arbitrary code against the working tree,
+  so the trust boundary is the config, not the command. repoactive does not
+  sandbox commands, but does strip the platform API token from their
+  environment as cheap defence-in-depth (a live credential, unlike repo
+  contents, skips the MR review gate).
