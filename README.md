@@ -329,6 +329,18 @@ Key points:
   throttles the whole fan-out: it is skipped until enough time has passed
   since the most recent emitted job landed.
 
+> **The generator's cooldown is a floor for its jobs.** An emitted job is
+> only re-run when the generator re-emits it, and the generator is gated by
+> the same landed commits (via the shared trailer). So overriding an emitted
+> job's `cooldown_period` only matters when you make it **longer** than the
+> generator's — then the job stays throttled even after the generator has
+> run again. Making it **shorter** has no effect: while the generator is on
+> its own cooldown the job is never re-emitted, and by the time the
+> generator runs again the job's shorter window has long since elapsed
+> (nothing landed for that job during the generator's cooldown). To upgrade
+> an individual dependency more often than the batch, lower the generator's
+> `cooldown_period`, not the emitted job's.
+
 Emitted jobs may not themselves be generators (no recursion), may not reuse
 an existing job's name, and may only `depends_on` jobs that are part of the
 same run. See [ADR 0004](docs/adr/0004-job-generators.md) for the full
