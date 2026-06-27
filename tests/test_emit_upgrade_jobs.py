@@ -51,18 +51,17 @@ def test_job_name_normalizes_invalid_characters() -> None:
     assert mod.job_name("ruamel.yaml") == "upgrade-ruamel-yaml"
 
 
-def test_render_jobs_produces_valid_repoactive_jobs() -> None:
-    fragment = mod.render_jobs(["pydantic", "python-gitlab"])
-    parsed = tomllib.loads(fragment)
+def test_jobs_document_produces_valid_repoactive_jobs() -> None:
+    document = mod.jobs_document(["pydantic", "python-gitlab"])
 
-    jobs = [Job.model_validate(j) for j in parsed["job"]]
+    jobs = [Job.model_validate(j) for j in document["job"]]
     assert [j.name for j in jobs] == ["upgrade-pydantic", "upgrade-python-gitlab"]
     assert jobs[0].command == "uv lock -P pydantic"
     assert jobs[0].title == "build: upgrade pydantic"
 
 
-def test_render_jobs_empty_for_no_dependencies() -> None:
-    assert mod.render_jobs([]) == ""
+def test_jobs_document_empty_for_no_dependencies() -> None:
+    assert mod.jobs_document([]) == {"job": []}
 
 
 def test_main_writes_fragment_to_jobs_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

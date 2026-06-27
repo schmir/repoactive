@@ -1,4 +1,7 @@
-#!/usr/bin/env -S uv run python
+#!/usr/bin/env -S uv run --script
+# /// script
+# dependencies = ["tomli-w"]
+# ///
 """repoactive generator: emit one dependency-upgrade job per project dependency.
 
 Reads ``pyproject.toml`` from the current directory and, for every dependency D
@@ -30,6 +33,8 @@ import sys
 import tomllib
 from pathlib import Path
 
+import tomli_w
+
 # Leading distribution-name token of a PEP 508 requirement string (everything
 # before the version specifier, extras, or environment marker).
 _NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
@@ -60,22 +65,18 @@ def job_name(dependency: str) -> str:
     return f"upgrade-{slug}"
 
 
-def _toml_str(value: str) -> str:
-    """Render ``value`` as a TOML basic string, escaping backslash and quote."""
-    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
-    return f'"{escaped}"'
-
-
-def render_jobs(names: list[str]) -> str:
-    """Render a TOML fragment with one ``[[job]]`` per dependency name."""
-    blocks = [
-        "[[job]]\n"
-        f"name = {_toml_str(job_name(name))}\n"
-        f"command = {_toml_str(f'uv lock -P {name}')}\n"
-        f"title = {_toml_str(f'build: upgrade {name}')}\n"
-        for name in names
-    ]
-    return "\n".join(blocks)
+def jobs_document(names: list[str]) -> dict:
+    """Build the TOML document mapping with one ``[[job]]`` per dependency name."""
+    return {
+        "job": [
+            {
+                "name": job_name(name),
+                "command": f"uv lock -P {name}",
+                "title": f"build: upgrade {name}",
+            }
+            for name in names
+        ]
+    }
 
 
 def main() -> int:
@@ -89,7 +90,8 @@ def main() -> int:
         return 1
     pyproject = tomllib.loads(Path("pyproject.toml").read_text())
     names = dependency_names(pyproject)
-    (Path(jobs_dir) / "upgrade-deps.toml").write_text(render_jobs(names))
+    with (Path(jobs_dir) / "upgrade-deps.toml").open("wb") as fh:
+        tomli_w.dump(jobs_document(names), fh)
     print(f"emitted {len(names)} upgrade job(s): {', '.join(names) or '(none)'}")
     return 0
 
