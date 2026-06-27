@@ -12,11 +12,13 @@ from repoactive.config import Config, Job, JobDefaults, MissingJobNameError
 from repoactive.runner import (
     REPOACTIVE_JOBS_DIR_ENV,
     CommandError,
+    CommandResult,
     GeneratedJobError,
     JobResult,
     RunMode,
     RunSummary,
     UnknownJobsError,
+    _build_commit_message,
     _build_generated_jobs,
     _compute_parents,
     _load_job_specs,
@@ -516,6 +518,29 @@ class TestRunOneJob:
             )
         assert summary.failed == {"a": err}
         assert blocked == {"a"}
+
+
+class TestBuildCommitMessage:
+    def test_title_and_trailer_only_when_no_output(self) -> None:
+        msg = _build_commit_message(_job("a"), CommandResult(output="", elapsed=1.0))
+        assert msg == "Change a\n\nRepoactive-Job: a"
+
+    def test_includes_description_and_indented_output(self) -> None:
+        job = _job("a", description="Desc", commit_title_prefix="[bot] ")
+        msg = _build_commit_message(job, CommandResult(output="line1\nline2", elapsed=1.0))
+        assert msg == (
+            "[bot] Change a\n\nDesc\n\n  $ cmd-a\n  line1\n  line2\n\nRepoactive-Job: a"
+        )
+
+    def test_output_omitted_when_disabled(self) -> None:
+        job = _job("a").model_copy(update={"output_in_commit": False})
+        msg = _build_commit_message(job, CommandResult(output="line1", elapsed=1.0))
+        assert msg == "Change a\n\nRepoactive-Job: a"
+
+    def test_generated_job_adds_second_trailer(self) -> None:
+        job = _job("a").model_copy(update={"generated_by": "gen"})
+        msg = _build_commit_message(job, CommandResult(output="", elapsed=1.0))
+        assert msg == "Change a\n\nRepoactive-Job: a\nRepoactive-Job: gen"
 
 
 class TestComputeParents:

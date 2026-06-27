@@ -279,6 +279,26 @@ def _handle_empty(  # noqa: PLR0913
     )
 
 
+def _build_commit_message(job: Job, command_result: CommandResult) -> str:
+    """The commit message recorded for a job's change.
+
+    The title, an optional description, the command output (when
+    ``output_in_commit`` is set), and finally the ``Repoactive-Job``
+    trailer(s)."""
+    message = f"{job.commit_title_prefix}{job.title}"
+    if job.description:
+        message += f"\n\n{job.description}"
+    if job.output_in_commit and command_result.output:
+        indented = "\n".join(
+            f"  {line}" for line in f"$ {job.command}\n{command_result.output}".splitlines()
+        )
+        message += f"\n\n{indented}"
+    # Trailer must be the final paragraph so jj/git recognise it as a trailer;
+    # it lets later runs detect when this job last landed (see cooldown handling).
+    message += "\n\n" + "\n".join(job.commit_trailers())
+    return message
+
+
 def _publish_job(
     *,
     job: Job,
@@ -288,18 +308,7 @@ def _publish_job(
 ) -> JobResult:
     stat = ws.diff_stat()
     ws.bookmark_set(bookmark)
-    commit_message = f"{job.commit_title_prefix}{job.title}"
-    if job.description:
-        commit_message += f"\n\n{job.description}"
-    if job.output_in_commit and command_result.output:
-        indented = "\n".join(
-            f"  {line}" for line in f"$ {job.command}\n{command_result.output}".splitlines()
-        )
-        commit_message += f"\n\n{indented}"
-    # Trailer must be the final paragraph so jj/git recognise it as a trailer;
-    # it lets later runs detect when this job last landed (see cooldown handling).
-    commit_message += "\n\n" + "\n".join(job.commit_trailers())
-    ws.describe(commit_message)
+    ws.describe(_build_commit_message(job, command_result))
     change_id = ws.change_id()
 
     print(f"==> [{job.name}] committed [{change_id}] ({command_result.elapsed:.1f}s)")
