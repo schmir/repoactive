@@ -60,8 +60,10 @@ _INHERITED_FIELDS = (
 class RunMode(StrEnum):
     """How far a run publishes its results past the local jj repository.
 
-    The modes form a ladder: ``PUSH`` does everything ``LOCAL`` does and also
-    pushes bookmarks; ``PUBLISH`` additionally creates or updates MRs/PRs.
+    The modes form a ladder:
+    - local: only changes the local jj repository
+    - push: additionally pushes bookmarks/branches to the remote
+    - publish: additionally updates or creates MRs/PRs.
     """
 
     local = "local"
