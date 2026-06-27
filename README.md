@@ -473,6 +473,14 @@ it was in before the run. The hint is omitted for
 `--mode push`/`--mode publish` runs, since restoring local state would not
 undo a branch already pushed or an MR already created.
 
+While a job's command runs in an interactive terminal, repoactive shows a
+live, scrolling block of its most recent output lines. The block stays on
+screen once the command finishes, with the job's status line printed below
+it. It defaults to 8 lines; set the `REPOACTIVE_PROGRESS_LINES` environment
+variable to change the count (or to `0` to disable the live block). When
+output is not a terminal (piped or in CI) the block is disabled and the
+command's output is left untouched.
+
 ## Inspecting repoactive commits
 
 ```

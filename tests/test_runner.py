@@ -1,8 +1,8 @@
+import io
 import os
 import signal
-import subprocess
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -66,11 +66,36 @@ def _result(job: Job, *, revsets: list[str], produced: bool = True) -> JobResult
 
 
 def _mock_popen(mock_popen: MagicMock, *, output: str = "", returncode: int = 0) -> MagicMock:
-    """Configure a patched subprocess.Popen to behave like a finished command."""
+    """Configure a patched subprocess.Popen to behave like a finished command.
+
+    _run_command streams proc.stdout line by line, so stdout is an iterator over
+    the output lines (keeping their newlines, as a real text-mode pipe yields).
+    """
     proc = mock_popen.return_value
-    proc.communicate.return_value = (output, None)
+    # A real text-mode pipe iterates line by line and supports close(); StringIO
+    # gives both, so _run_command's streaming read works against the mock.
+    proc.stdout = io.StringIO(output)
     proc.returncode = returncode
+    proc.wait.return_value = returncode
     return proc
+
+
+class _ImmediateTimer:
+    """A threading.Timer stand-in that fires its callback the moment it starts.
+
+    Lets a unit test exercise _run_command's timeout watchdog synchronously
+    instead of waiting for a real deadline.
+    """
+
+    def __init__(self, interval: float, function: Callable[[], None]) -> None:
+        self.interval = interval
+        self._function = function
+
+    def start(self) -> None:
+        self._function()
+
+    def cancel(self) -> None:
+        pass
 
 
 def _mock_jj(mock_jj_cls: MagicMock) -> MagicMock:
@@ -896,13 +921,14 @@ class TestRunJob:
         mock_jj.abandon.assert_called_once_with()
         mock_jj.bookmark_set.assert_not_called()
 
+    @patch("repoactive.runner.threading.Timer")
     @patch("repoactive.runner.JJ")
     @patch("repoactive.runner.subprocess.Popen")
-    def test_passes_timeout_to_subprocess(
-        self, mock_sub: MagicMock, mock_jj_cls: MagicMock
+    def test_arms_timeout_watchdog(
+        self, mock_sub: MagicMock, mock_jj_cls: MagicMock, mock_timer: MagicMock
     ) -> None:
         mock_jj = _mock_jj(mock_jj_cls)
-        proc = _mock_popen(mock_sub)
+        _mock_popen(mock_sub)
         mock_jj.bookmark_exists.return_value = False
         mock_jj.is_empty.return_value = False
         job = Job(
@@ -917,8 +943,10 @@ class TestRunJob:
         run_job(job=job, parents=["trunk()"], repo_path=REPO)
 
         assert mock_sub.call_args.kwargs["start_new_session"] is True
-        assert proc.communicate.call_args.kwargs["timeout"] == 30 * 60
+        # The watchdog is armed with the job's timeout in seconds.
+        assert mock_timer.call_args.args[0] == 30 * 60
 
+    @patch("repoactive.runner.threading.Timer", _ImmediateTimer)
     @patch("repoactive.runner.os.getpgid", return_value=4242)
     @patch("repoactive.runner.os.killpg")
     @patch("repoactive.runner.JJ")
@@ -931,12 +959,10 @@ class TestRunJob:
         mock_getpgid: MagicMock,
     ) -> None:
         mock_jj = _mock_jj(mock_jj_cls)
-        proc = _mock_popen(mock_sub)
-        # First communicate (with timeout) raises; the post-kill one drains output.
-        proc.communicate.side_effect = [
-            subprocess.TimeoutExpired("cmd", 1800),
-            ("partial\n", None),
-        ]
+        # _ImmediateTimer fires the watchdog as soon as it starts; poll() returning
+        # None means the command is still "running", so the group gets killed.
+        proc = _mock_popen(mock_sub, output="partial\n")
+        proc.poll.return_value = None
         mock_jj.bookmark_exists.return_value = False
         job = Job(
             name="foo",
@@ -953,17 +979,21 @@ class TestRunJob:
         mock_jj.abandon.assert_called_once_with()
         mock_jj.bookmark_set.assert_not_called()
 
+    @patch("repoactive.runner.threading.Timer")
     @patch("repoactive.runner.JJ")
     @patch("repoactive.runner.subprocess.Popen")
-    def test_no_timeout_passes_none(self, mock_sub: MagicMock, mock_jj_cls: MagicMock) -> None:
+    def test_no_timeout_skips_watchdog(
+        self, mock_sub: MagicMock, mock_jj_cls: MagicMock, mock_timer: MagicMock
+    ) -> None:
         mock_jj = _mock_jj(mock_jj_cls)
-        proc = _mock_popen(mock_sub)
+        _mock_popen(mock_sub)
         mock_jj.bookmark_exists.return_value = False
         mock_jj.is_empty.return_value = False
 
+        # _job has no timeout, so no watchdog timer is armed.
         run_job(job=_job("foo"), parents=["trunk()"], repo_path=REPO)
 
-        assert proc.communicate.call_args.kwargs["timeout"] is None
+        mock_timer.assert_not_called()
 
     @patch("repoactive.runner.JJ")
     @patch("repoactive.runner.subprocess.Popen")

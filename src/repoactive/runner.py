@@ -5,6 +5,7 @@ import shutil
 import signal
 import subprocess
 import tempfile
+import threading
 import time
 import tomllib
 from collections.abc import Generator
@@ -27,6 +28,7 @@ from repoactive.config import (
 from repoactive.jj import JJ, workspace_name
 from repoactive.lock import run_lock
 from repoactive.platforms.base import MRParams, Platform
+from repoactive.progress import ProgressView, progress_lines
 from repoactive.updates import (
     BookmarkPush,
     JobUpdate,
@@ -226,25 +228,59 @@ def _run_command(
         start_new_session=True,
         env=_command_env(extra_env=extra_env, secret_env=secret_env),
     )
+
+    # The blocking read below cannot be interrupted by a timeout, so a watchdog
+    # thread kills the process group once the deadline passes; that closes stdout
+    # and ends the read loop. The poll() guard avoids flagging a false timeout
+    # when the command happens to finish just as the timer fires. A job with no
+    # timeout (timeout_seconds() is None) runs without a watchdog.
+    timed_out = threading.Event()
+
+    def _on_timeout() -> None:
+        if proc.poll() is None:
+            timed_out.set()
+            _kill_process_group(proc)
+
+    timeout = job.timeout_seconds()
+    timer = threading.Timer(timeout, _on_timeout) if timeout is not None else None
+    if timer is not None:
+        timer.start()
+
+    # Stream the merged stdout/stderr line by line: keep the full output (needed
+    # for the commit message and the success result) while feeding a live tail of
+    # the last few lines (see repoactive.progress).
+    collected: list[str] = []
+    view = ProgressView(header=f"==> [{job.name}] running…", lines=progress_lines())
     try:
-        output, _ = proc.communicate(timeout=job.timeout_seconds())
-    except subprocess.TimeoutExpired:
-        _kill_process_group(proc)
-        # communicate again to reap the killed process and drain its output.
-        output, _ = proc.communicate()
-        output = output or ""
+        assert proc.stdout is not None
+        with view:
+            for line in proc.stdout:
+                collected.append(line)
+                view.feed(line)
+        proc.wait()
+    finally:
+        if timer is not None:
+            timer.cancel()
+        if proc.stdout is not None:
+            proc.stdout.close()
+
+    elapsed = time.monotonic() - start
+    # On failure report the full output, not just the live tail: in a terminal the
+    # live block only showed the last few lines, and piped/CI runs showed nothing,
+    # so the complete output is what makes a failure diagnosable.
+    detail = "".join(collected).strip()
+    if timed_out.is_set():
         raise CommandError(
-            f"command timed out after {job.timeout}" + (f":\n{output}" if output else ""),
-            elapsed=time.monotonic() - start,
-        ) from None
+            f"command timed out after {job.timeout}" + (f":\n{detail}" if detail else ""),
+            elapsed=elapsed,
+        )
     if proc.returncode != 0:
-        output = output or ""
         raise CommandError(
             f"command failed with exit code {proc.returncode}"
-            + (f":\n{output}" if output else ""),
-            elapsed=time.monotonic() - start,
+            + (f":\n{detail}" if detail else ""),
+            elapsed=elapsed,
         )
-    return CommandResult(output=output.strip(), elapsed=time.monotonic() - start)
+    return CommandResult(output="".join(collected).strip(), elapsed=elapsed)
 
 
 def _discard_empty_job(  # noqa: PLR0913

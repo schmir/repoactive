@@ -771,6 +771,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "pygithub" },
     { name = "python-gitlab" },
+    { name = "rich" },
     { name = "typer" },
 ]
 
@@ -788,6 +789,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.13.4,<3.0.0" },
     { name = "pygithub", specifier = ">=2.9.1,<3.0.0" },
     { name = "python-gitlab", specifier = ">=8.4.0,<9.0.0" },
+    { name = "rich", specifier = ">=15.0.0,<16.0.0" },
     { name = "typer", specifier = ">=0.26.7,<0.27.0" },
 ]
 
