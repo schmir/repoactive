@@ -247,7 +247,7 @@ def _run_command(
     return CommandResult(output=output.strip(), elapsed=time.monotonic() - start)
 
 
-def _handle_empty(  # noqa: PLR0913
+def _discard_empty_job(  # noqa: PLR0913
     *,
     job: Job,
     bookmark: str,
@@ -256,6 +256,14 @@ def _handle_empty(  # noqa: PLR0913
     command_result: CommandResult,
     bookmark_existed: bool,
 ) -> JobResult:
+    """Clean up after a job whose command produced no diff.
+
+    Abandons the empty change so it leaves no commit behind. If the job's
+    bookmark already existed (from an earlier run that did produce a diff), it
+    is now stale, so the bookmark is deleted locally and a deletion is recorded
+    for the apply phase to push. Returns a JobResult with produced_output=False,
+    carrying the original parents forward so dependents still have a base.
+    """
     ws.abandon()
     update: JobUpdate | None = None
     if bookmark_existed:
@@ -299,13 +307,21 @@ def _build_commit_message(job: Job, command_result: CommandResult) -> str:
     return message
 
 
-def _publish_job(
+def _commit_job(
     *,
     job: Job,
     bookmark: str,
     ws: JJ,
     command_result: CommandResult,
 ) -> JobResult:
+    """Commit the diff a job's command produced and stage its remote updates.
+
+    Points the job's bookmark at the change and writes its commit message. The
+    push and (when the job wants one) the MR are not carried out here; they are
+    recorded on the returned JobResult for the apply phase. Returns a JobResult
+    with produced_output=True, whose effective_revsets is the bookmark so
+    dependents build on this change.
+    """
     stat = ws.diff_stat()
     ws.bookmark_set(bookmark)
     ws.describe(_build_commit_message(job, command_result))
@@ -389,7 +405,7 @@ def run_job(
         )
         if ws.is_empty():
             logger.debug("[%s] working copy is empty, no diff produced", job.name)
-            return _handle_empty(
+            return _discard_empty_job(
                 job=job,
                 bookmark=bookmark,
                 parents=parents,
@@ -397,7 +413,7 @@ def run_job(
                 command_result=command_result,
                 bookmark_existed=bookmark_existed,
             )
-        return _publish_job(
+        return _commit_job(
             job=job,
             bookmark=bookmark,
             ws=ws,
