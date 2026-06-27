@@ -39,6 +39,13 @@ need to write is the script that produces the change.
    `--mode push` or `--mode publish`, the reset branch is pushed without
    opening or updating an MR.
 
+> **jj commits the whole working tree.** Because `repoactive` uses jj, every
+> new file your script creates inside the working directory is added to the
+> commit unless it is git-ignored. There is no way to select which
+> working-tree changes become part of the commit — they all will. Keep
+> `.gitignore` up to date so build artifacts, caches, and other stray files
+> your script produces do not end up in the diff.
+
 ### Keeping the local clone current
 
 `repoactive` works entirely from the **local** repository view and never
