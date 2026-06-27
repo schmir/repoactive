@@ -24,7 +24,7 @@ from repoactive.config import (
     _merge_jobs,
     expand_config_paths,
 )
-from repoactive.jj import JJ, JOB_TRAILER_KEY, workspace_name
+from repoactive.jj import JJ, workspace_name
 from repoactive.lock import run_lock
 from repoactive.platforms.base import MRParams, Platform
 from repoactive.updates import (
@@ -298,12 +298,7 @@ def _publish_job(
         commit_message += f"\n\n{indented}"
     # Trailer must be the final paragraph so jj/git recognise it as a trailer;
     # it lets later runs detect when this job last landed (see cooldown handling).
-    # A job produced by a generator records a second trailer with the generator's
-    # name, giving the generator a cooldown over the whole fan-out (ADR 0004).
-    trailers = [f"{JOB_TRAILER_KEY}: {job.name}"]
-    if job.generated_by:
-        trailers.append(f"{JOB_TRAILER_KEY}: {job.generated_by}")
-    commit_message += "\n\n" + "\n".join(trailers)
+    commit_message += "\n\n" + "\n".join(job.commit_trailers())
     ws.describe(commit_message)
     change_id = ws.change_id()
 

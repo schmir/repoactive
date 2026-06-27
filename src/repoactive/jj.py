@@ -9,11 +9,9 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-logger = logging.getLogger(__name__)
+from repoactive.constants import JOB_TRAILER_KEY
 
-# Trailer key recorded on every repoactive commit so later runs can tell which
-# job produced a commit (see JJ.has_recent_job_commit and runner._publish_job).
-JOB_TRAILER_KEY = "Repoactive-Job"
+logger = logging.getLogger(__name__)
 
 # Prefix for the temporary workspaces repoactive creates for each job. It is not
 # configurable so that stale workspaces (left behind by a killed run) can always

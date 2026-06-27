@@ -17,6 +17,8 @@ from pydantic import (
     model_validator,
 )
 
+from repoactive.constants import JOB_TRAILER_KEY
+
 logger = logging.getLogger(__name__)
 
 _DURATION_RE = re.compile(r"^(\d+)([smhdw])$")
@@ -244,6 +246,17 @@ class Job(BaseModel):
 
     def timeout_seconds(self) -> float | None:
         return parse_duration(self.timeout).total_seconds() if self.timeout is not None else None
+
+    def commit_trailers(self) -> list[str]:
+        """The ``Repoactive-Job`` trailer lines recorded on this job's commit.
+
+        A job produced by a generator records a second trailer with the
+        generator's name, giving the generator a cooldown over the whole
+        fan-out (ADR 0004)."""
+        lines = [f"{JOB_TRAILER_KEY}: {self.name}"]
+        if self.generated_by:
+            lines.append(f"{JOB_TRAILER_KEY}: {self.generated_by}")
+        return lines
 
     def resolve(self, defaults: JobDefaults) -> Job:
         return self.model_copy(

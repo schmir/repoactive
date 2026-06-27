@@ -14,6 +14,7 @@ from repoactive.config import (
     load_config,
     parse_duration,
 )
+from repoactive.constants import JOB_TRAILER_KEY
 
 
 def _platform(**kwargs: object) -> dict[str, object]:
@@ -83,6 +84,19 @@ class TestBranchName:
     def test_custom_prefix(self) -> None:
         job = Job(name="bar", command="cmd", title="Bar", branch_prefix="bot/")
         assert job.branch_name() == "bot/bar"
+
+
+class TestCommitTrailers:
+    def test_single_trailer_for_plain_job(self) -> None:
+        job = Job(name="foo", command="cmd", title="Foo")
+        assert job.commit_trailers() == [f"{JOB_TRAILER_KEY}: foo"]
+
+    def test_second_trailer_for_generated_job(self) -> None:
+        job = Job(name="foo", command="cmd", title="Foo", generated_by="gen")
+        assert job.commit_trailers() == [
+            f"{JOB_TRAILER_KEY}: foo",
+            f"{JOB_TRAILER_KEY}: gen",
+        ]
 
 
 class TestBookmarkNames:
