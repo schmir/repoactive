@@ -79,7 +79,8 @@ for how the defaults are discovered and how to split the config across
 several files.
 
 Every key in `[job-defaults]` supplies the default for the matching per-job
-key; any job may override it by setting the same key in its `[[job]]` block.
+key; any job may override it by setting the same key in its `[job.<name>]`
+block.
 
 ```toml
 [job-defaults]
@@ -101,9 +102,9 @@ cooldown_period = "7d"
 # (default: "2m"). See "Limiting job runtime with timeout" below.
 timeout = "1h"
 
-[[job]]
-# Unique identifier - branch name is always <branch_prefix><name>
-name = "regenerate-api-client"
+# The table key is the job's unique name; the branch is always
+# <branch_prefix><name>.
+[job.regenerate-api-client]
 # Script run in the repo working directory; non-zero exit = failure
 command = "python scripts/regen_api.py"
 # MR/PR title
@@ -142,13 +143,11 @@ cooldown_period = "7d"
 # cooldown_period.
 timeout = "30m"
 
-[[job]]
-name = "sync-license-headers"
+[job.sync-license-headers]
 command = "./scripts/add_license_headers.sh"
 title = "sync license headers"
 
-[[job]]
-name = "integration-tests-update"
+[job.integration-tests-update]
 command = "./scripts/update_integration_tests.py"
 title = "tests: update integration tests"
 # Optional: run this job on top of the merged output of the listed jobs
@@ -266,8 +265,8 @@ by an explicit run, and letting it drift out of date helps no one.)
 
 ## Disabling jobs
 
-Set `disabled = true` on a `[[job]]` to keep it in the config but leave it
-out of normal runs; it is exactly sugar for `tags = ["disabled"]` (so the
+Set `disabled = true` on a `[job.<name>]` to keep it in the config but leave
+it out of normal runs; it is exactly sugar for `tags = ["disabled"]` (so the
 two are mutually exclusive). The flag only affects the bare
 `repoactive run`:
 
@@ -288,8 +287,7 @@ in one place — add or remove `weekly` jobs by editing the config, not the
 crontab:
 
 ```toml
-[[job]]
-name = "uv-lock-upgrade"
+[job.uv-lock-upgrade]
 command = "uv lock --upgrade"
 title = "build: upgrade all dependencies"
 # Not in the bare `repoactive run`; runs only via `--tag weekly`.
@@ -329,15 +327,14 @@ repository locked.
 
 Sometimes the useful set of jobs depends on the repository's contents — one
 job per package in a monorepo, one per entry in a manifest — and you don't
-want to hand-maintain them. A **generator** is an ordinary `[[job]]` with
-`emits_jobs = true`. Instead of producing a diff, its command writes one or
-more `*.toml` job fragments into the directory named by the
+want to hand-maintain them. A **generator** is an ordinary `[job.<name>]`
+with `emits_jobs = true`. Instead of producing a diff, its command writes
+one or more `*.toml` job fragments into the directory named by the
 `REPOACTIVE_JOBS_DIR` environment variable, and the jobs it emits run in the
 same invocation.
 
 ```toml
-[[job]]
-name = "per-package"
+[job.per-package]
 command = "./scripts/emit_upgrade_jobs.sh"
 title = "discover package upgrade jobs"
 emits_jobs = true
@@ -346,12 +343,11 @@ tags = ["weekly"]
 cooldown_period = "7d"
 ```
 
-The command writes fragments using the normal `[[job]]` syntax, e.g.
+The command writes fragments using the normal `[job.<name>]` syntax, e.g.
 
 ```toml
 # $REPOACTIVE_JOBS_DIR/pkg-a.toml
-[[job]]
-name = "upgrade-pkg-a"
+[job.upgrade-pkg-a]
 command = "uv lock --upgrade --package pkg-a"
 title = "build: upgrade pkg-a"
 ```

@@ -41,3 +41,9 @@ it.
   manually wires up a git worktree in each job workspace. This is for the
   job command's benefit (uv dynamic versioning, `git ls-files`, …), not
   repoactive's own operations; remove it if jj#5252 is fixed.
+- [0008 — Configure jobs as a name-keyed table](0008-jobs-keyed-by-name.md)
+  — Accepted. Jobs are a `[job.<name>]` table keyed by name, not a `[[job]]`
+  array with a `name` field. The name is a job's identity (branch, trailer,
+  `depends_on`, merge key), so the key enforces uniqueness structurally and
+  drops boilerplate. A breaking change; the old array form is rejected with
+  a migration hint.

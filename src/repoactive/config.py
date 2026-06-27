@@ -94,11 +94,33 @@ class CircularDependencyError(ValueError):
         super().__init__(f"Circular dependency involving '{name}'")
 
 
-class MissingJobNameError(ValueError):
-    """Raised when a [[job]] entry has no 'name' field."""
+class JobNameInBodyError(ValueError):
+    """Raised when a [job.<name>] table also sets a 'name' field.
+
+    The job's name is the table key; repeating it in the body is redundant and
+    could disagree with the key."""
+
+    def __init__(self, name: str) -> None:
+        super().__init__(
+            f"job {name!r} must not set a 'name' field; the name is the table key ([job.{name}])"
+        )
+
+
+class JobNotTableError(ValueError):
+    """Raised when a [job.<name>] entry is not a table."""
+
+    def __init__(self, name: str) -> None:
+        super().__init__(f"job {name!r} must be a table ([job.{name}])")
+
+
+class JobsNotTableError(ValueError):
+    """Raised when 'job' is not a table keyed by name (e.g. the old array form)."""
 
     def __init__(self) -> None:
-        super().__init__("Each [[job]] entry must have a 'name' field")
+        super().__init__(
+            "jobs must be a table keyed by name ([job.<name>]); the [[job]] array form "
+            "with a 'name' field is no longer supported"
+        )
 
 
 class ConfigError(Exception):
@@ -289,6 +311,26 @@ class Config(BaseModel):
     job_defaults: JobDefaults = Field(alias="job-defaults", default_factory=JobDefaults)
     jobs: list[Job] = Field(default_factory=list, alias="job")
 
+    @field_validator("jobs", mode="before")
+    @classmethod
+    def _jobs_from_mapping(cls, value: object) -> object:
+        """Coerce the ``[job.<name>]`` table into the list pydantic expects.
+
+        TOML stores jobs as a table keyed by name; the name comes from the key
+        and is injected into each job. A non-mapping value (e.g. an already-built
+        ``list[Job]`` passed programmatically) passes through unchanged."""
+        if not isinstance(value, dict):
+            return value
+        jobs: list[dict] = []
+        for key, body in value.items():
+            name = str(key)
+            if not isinstance(body, dict):
+                raise JobNotTableError(name)
+            if "name" in body:
+                raise JobNameInBodyError(name)
+            jobs.append({**body, "name": name})
+        return jobs
+
     @model_validator(mode="after")
     def validate_depends_on(self) -> Config:
         names = {j.name for j in self.jobs}
@@ -342,6 +384,17 @@ class Config(BaseModel):
         return {p.token_env for p in self.platforms}
 
 
+def jobs_table(value: object) -> dict:
+    """Return ``value`` as a job table, rejecting the old ``[[job]]`` array form.
+
+    TOML parses ``[job.<name>]`` tables into a dict keyed by name; an array of
+    tables (the format used before) parses into a list, which is no longer
+    accepted."""
+    if not isinstance(value, dict):
+        raise JobsNotTableError
+    return value
+
+
 def _deep_merge(*, base: dict, override: dict) -> dict:
     result = dict(base)
     for key, value in override.items():
@@ -352,20 +405,18 @@ def _deep_merge(*, base: dict, override: dict) -> dict:
     return result
 
 
-def _merge_jobs(*, base: list[dict], override: list[dict]) -> list[dict]:
-    """Merge two job lists by name: order is preserved, override fields win, new names appended."""
-    job_by_name: dict[str, dict] = {}
-    result: list[dict] = []
-    for job in base + override:
-        name = job.get("name")
-        if name is None:
-            raise MissingJobNameError
+def _merge_jobs(*, base: dict, override: dict) -> dict:
+    """Merge two job tables keyed by name.
 
-        if name in job_by_name:
-            job_by_name[name].update(job)
+    Order is preserved (base names first, new override names appended) and
+    override fields win field-by-field, the same semantics as the per-source
+    table merge."""
+    result: dict[str, dict] = {name: dict(body) for name, body in base.items()}
+    for name, body in override.items():
+        if name in result:
+            result[name].update(body)
         else:
-            job_by_name[name] = dict(job)
-            result.append(job_by_name[name])
+            result[name] = dict(body)
     return result
 
 
@@ -459,7 +510,9 @@ def load_config(paths: list[Path]) -> Config:
     for source in sources:
         data = source.data
         try:
-            jobs = _merge_jobs(base=merged.get("job", []), override=data.get("job", []))
+            jobs = _merge_jobs(
+                base=merged.get("job", {}), override=jobs_table(data.get("job", {}))
+            )
             platforms = _merge_platforms(
                 base=merged.get("platform", []), override=data.get("platform", [])
             )

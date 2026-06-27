@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from repoactive.config import Config, Job, JobDefaults, MissingJobNameError
+from repoactive.config import Config, Job, JobDefaults
 from repoactive.runner import (
     REPOACTIVE_JOBS_DIR_ENV,
     CommandError,
@@ -1150,8 +1150,8 @@ def _gen(
 class TestBuildGeneratedJobs:
     def test_inherits_tags_depends_on_and_records_generator(self) -> None:
         gen = _gen(tags=["weekly"])
-        spec = {"name": "child", "command": "c", "title": "Child"}
-        [job] = _build_generated_jobs(generator=gen, specs=[spec], run_names={"gen"})
+        specs = {"child": {"command": "c", "title": "Child"}}
+        [job] = _build_generated_jobs(generator=gen, specs=specs, run_names={"gen"})
         assert job.tags == ["weekly"]
         assert job.depends_on == ["gen"]
         assert job.generated_by == "gen"
@@ -1160,7 +1160,7 @@ class TestBuildGeneratedJobs:
         # A plain generator carries the implicit 'enabled' tag; children do too.
         [job] = _build_generated_jobs(
             generator=_gen(),
-            specs=[{"name": "child", "command": "c", "title": "Child"}],
+            specs={"child": {"command": "c", "title": "Child"}},
             run_names={"gen"},
         )
         assert job.tags == ["enabled"]
@@ -1168,7 +1168,7 @@ class TestBuildGeneratedJobs:
     def test_spec_tags_override_inheritance(self) -> None:
         [job] = _build_generated_jobs(
             generator=_gen(tags=["weekly"]),
-            specs=[{"name": "child", "command": "c", "title": "Child", "tags": ["daily"]}],
+            specs={"child": {"command": "c", "title": "Child", "tags": ["daily"]}},
             run_names={"gen"},
         )
         assert job.tags == ["daily"]
@@ -1178,7 +1178,7 @@ class TestBuildGeneratedJobs:
         # sets disabled does not also inherit the generator's tags.
         [job] = _build_generated_jobs(
             generator=_gen(tags=["weekly"]),
-            specs=[{"name": "child", "command": "c", "title": "Child", "disabled": True}],
+            specs={"child": {"command": "c", "title": "Child", "disabled": True}},
             run_names={"gen"},
         )
         assert job.tags == []
@@ -1187,7 +1187,7 @@ class TestBuildGeneratedJobs:
     def test_inherits_cooldown_period(self) -> None:
         [job] = _build_generated_jobs(
             generator=_gen(cooldown_period="7d"),
-            specs=[{"name": "child", "command": "c", "title": "Child"}],
+            specs={"child": {"command": "c", "title": "Child"}},
             run_names={"gen"},
         )
         assert job.cooldown_period == "7d"
@@ -1195,16 +1195,16 @@ class TestBuildGeneratedJobs:
     def test_spec_cooldown_overrides_inheritance(self) -> None:
         [job] = _build_generated_jobs(
             generator=_gen(cooldown_period="7d"),
-            specs=[{"name": "child", "command": "c", "title": "Child", "cooldown_period": "1d"}],
+            specs={"child": {"command": "c", "title": "Child", "cooldown_period": "1d"}},
             run_names={"gen"},
         )
         assert job.cooldown_period == "1d"
 
     def test_sibling_depends_on_allowed(self) -> None:
-        specs = [
-            {"name": "a", "command": "c", "title": "A"},
-            {"name": "b", "command": "c", "title": "B", "depends_on": ["a"]},
-        ]
+        specs = {
+            "a": {"command": "c", "title": "A"},
+            "b": {"command": "c", "title": "B", "depends_on": ["a"]},
+        }
         jobs = _build_generated_jobs(generator=_gen(), specs=specs, run_names={"gen"})
         assert jobs[1].depends_on == ["a"]
 
@@ -1212,7 +1212,7 @@ class TestBuildGeneratedJobs:
         with pytest.raises(GeneratedJobError, match="collides"):
             _build_generated_jobs(
                 generator=_gen(),
-                specs=[{"name": "taken", "command": "c", "title": "T"}],
+                specs={"taken": {"command": "c", "title": "T"}},
                 run_names={"gen", "taken"},
             )
 
@@ -1220,7 +1220,7 @@ class TestBuildGeneratedJobs:
         with pytest.raises(GeneratedJobError, match="no recursion"):
             _build_generated_jobs(
                 generator=_gen(),
-                specs=[{"name": "child", "command": "c", "title": "T", "emits_jobs": True}],
+                specs={"child": {"command": "c", "title": "T", "emits_jobs": True}},
                 run_names={"gen"},
             )
 
@@ -1228,7 +1228,7 @@ class TestBuildGeneratedJobs:
         with pytest.raises(GeneratedJobError, match="not in this run"):
             _build_generated_jobs(
                 generator=_gen(),
-                specs=[{"name": "child", "command": "c", "title": "T", "depends_on": ["ghost"]}],
+                specs={"child": {"command": "c", "title": "T", "depends_on": ["ghost"]}},
                 run_names={"gen"},
             )
 
@@ -1236,32 +1236,24 @@ class TestBuildGeneratedJobs:
         with pytest.raises(GeneratedJobError, match="invalid"):
             _build_generated_jobs(
                 generator=_gen(),
-                specs=[{"name": "child", "command": "c", "title": "T", "bogus": 1}],
-                run_names={"gen"},
-            )
-
-    def test_missing_name_raises(self) -> None:
-        with pytest.raises(MissingJobNameError):
-            _build_generated_jobs(
-                generator=_gen(),
-                specs=[{"command": "c", "title": "T"}],
+                specs={"child": {"command": "c", "title": "T", "bogus": 1}},
                 run_names={"gen"},
             )
 
 
 class TestLoadJobSpecs:
     def test_merges_sorted_toml_fragments(self, tmp_path: Path) -> None:
-        (tmp_path / "01.toml").write_text('[[job]]\nname = "a"\ncommand = "c"\ntitle = "A"\n')
-        (tmp_path / "02.toml").write_text('[[job]]\nname = "b"\ncommand = "c"\ntitle = "B"\n')
+        (tmp_path / "01.toml").write_text('[job.a]\ncommand = "c"\ntitle = "A"\n')
+        (tmp_path / "02.toml").write_text('[job.b]\ncommand = "c"\ntitle = "B"\n')
         specs = _load_job_specs(tmp_path)
-        assert [s["name"] for s in specs] == ["a", "b"]
+        assert list(specs) == ["a", "b"]
 
     def test_empty_directory_yields_nothing(self, tmp_path: Path) -> None:
-        assert _load_job_specs(tmp_path) == []
+        assert _load_job_specs(tmp_path) == {}
 
 
 class TestRunGenerator:
-    @patch("repoactive.runner._load_job_specs", return_value=[{"name": "x"}])
+    @patch("repoactive.runner._load_job_specs", return_value={"x": {}})
     @patch("repoactive.runner._run_command")
     @patch("repoactive.runner.JJ")
     def test_runs_command_with_jobs_dir_and_abandons(
@@ -1276,7 +1268,7 @@ class TestRunGenerator:
         mock_jj.abandon.assert_called_once_with()
         extra_env = mock_run_command.call_args.kwargs["extra_env"]
         assert REPOACTIVE_JOBS_DIR_ENV in extra_env
-        assert specs == [{"name": "x"}]
+        assert specs == {"x": {}}
 
     @patch("repoactive.runner._run_command", side_effect=CommandError("boom", elapsed=1.0))
     @patch("repoactive.runner.JJ")
@@ -1788,7 +1780,7 @@ class TestRunAll:
     @patch("repoactive.runner.run_job")
     @patch(
         "repoactive.runner.run_generator",
-        return_value=[{"name": "child", "command": "c", "title": "Child"}],
+        return_value={"child": {"command": "c", "title": "Child"}},
     )
     def test_generator_emits_and_runs_child(
         self, mock_run_generator: MagicMock, mock_run_job: MagicMock, mock_jj: MagicMock
@@ -1807,7 +1799,7 @@ class TestRunAll:
     @patch("repoactive.runner.run_job")
     @patch(
         "repoactive.runner.run_generator",
-        return_value=[{"name": "child", "command": "c", "title": "Child", "depends_on": ["z"]}],
+        return_value={"child": {"command": "c", "title": "Child", "depends_on": ["z"]}},
     )
     def test_emitted_child_runs_after_existing_dependency(
         self, mock_run_generator: MagicMock, mock_run_job: MagicMock, mock_jj: MagicMock
@@ -1833,7 +1825,7 @@ class TestRunAll:
     @patch("repoactive.runner.run_job")
     @patch(
         "repoactive.runner.run_generator",
-        return_value=[{"name": "child", "command": "c", "title": "Child"}],
+        return_value={"child": {"command": "c", "title": "Child"}},
     )
     def test_emitted_child_bookmark_is_tracked(
         self, mock_run_generator: MagicMock, mock_run_job: MagicMock, mock_jj: MagicMock

@@ -8,15 +8,14 @@ Reads ``pyproject.toml`` from the current directory and, for every dependency D
 in ``[project.dependencies]``, emits a job named ``upgrade-D`` whose command is
 ``uv lock -P D`` (bump only that one dependency in the lockfile).
 
-repoactive runs this as a generator (a ``[[job]]`` with ``emits_jobs = true``):
-it points the ``REPOACTIVE_JOBS_DIR`` environment variable at a directory this
-script writes ``*.toml`` job fragments into, and runs the emitted jobs in the
-same invocation. See docs/adr/0004-job-generators.md.
+repoactive runs this as a generator (a ``[job.<name>]`` with ``emits_jobs =
+true``): it points the ``REPOACTIVE_JOBS_DIR`` environment variable at a
+directory this script writes ``*.toml`` job fragments into, and runs the emitted
+jobs in the same invocation. See docs/adr/0004-job-generators.md.
 
 Register it by adding to your repoactive config::
 
-    [[job]]
-    name = "upgrade-deps"
+    [job.upgrade-deps]
     command = "./scripts/emit-upgrade-jobs.py"
     title = "discover per-dependency upgrade jobs"
     emits_jobs = true
@@ -66,16 +65,15 @@ def job_name(dependency: str) -> str:
 
 
 def jobs_document(names: list[str]) -> dict:
-    """Build the TOML document mapping with one ``[[job]]`` per dependency name."""
+    """Build the TOML document mapping with one ``[job.<name>]`` per dependency."""
     return {
-        "job": [
-            {
-                "name": job_name(name),
+        "job": {
+            job_name(name): {
                 "command": f"uv lock -P {name}",
                 "title": f"build: upgrade {name}",
             }
             for name in names
-        ]
+        }
     }
 
 
@@ -84,7 +82,7 @@ def main() -> int:
     if not jobs_dir:
         print(
             "REPOACTIVE_JOBS_DIR is not set; run this as a repoactive generator "
-            "(a [[job]] with emits_jobs = true).",
+            "(a [job.<name>] with emits_jobs = true).",
             file=sys.stderr,
         )
         return 1

@@ -312,7 +312,7 @@ class TestLoadConfig:
         f = tmp_path / ".repoactive.toml"
         f.write_text(
             '[[platform]]\nurl = "https://github.com"\ntype = "github"\ntoken_env = "GH_TOKEN"\n'
-            '[[job]]\nname = "x"\ncommand = "echo"\ntitle = "X"\n'
+            '[job.x]\ncommand = "echo"\ntitle = "X"\n'
         )
         cfg = load_config([f])
         assert cfg.platforms[0].url == "https://github.com"
@@ -384,10 +384,10 @@ class TestLoadConfig:
         base = tmp_path / "base.toml"
         base.write_text(
             '[[platform]]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
-            '[[job]]\nname = "a"\ncommand = "cmd-a"\ntitle = "A"\n'
+            '[job.a]\ncommand = "cmd-a"\ntitle = "A"\n'
         )
         override = tmp_path / "override.toml"
-        override.write_text('[[job]]\nname = "b"\ncommand = "cmd-b"\ntitle = "B"\n')
+        override.write_text('[job.b]\ncommand = "cmd-b"\ntitle = "B"\n')
         cfg = load_config([base, override])
         assert [j.name for j in cfg.jobs] == ["a", "b"]
 
@@ -395,10 +395,10 @@ class TestLoadConfig:
         base = tmp_path / "base.toml"
         base.write_text(
             '[[platform]]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
-            '[[job]]\nname = "a"\ncommand = "old-cmd"\ntitle = "Old"\n'
+            '[job.a]\ncommand = "old-cmd"\ntitle = "Old"\n'
         )
         override = tmp_path / "override.toml"
-        override.write_text('[[job]]\nname = "a"\ncommand = "new-cmd"\ntitle = "New"\n')
+        override.write_text('[job.a]\ncommand = "new-cmd"\ntitle = "New"\n')
         cfg = load_config([base, override])
         assert len(cfg.jobs) == 1
         assert cfg.jobs[0].command == "new-cmd"
@@ -408,10 +408,10 @@ class TestLoadConfig:
         base = tmp_path / "base.toml"
         base.write_text(
             '[[platform]]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
-            '[[job]]\nname = "a"\ncommand = "cmd"\ntitle = "A"\ndraft = false\n'
+            '[job.a]\ncommand = "cmd"\ntitle = "A"\ndraft = false\n'
         )
         override = tmp_path / "override.toml"
-        override.write_text('[[job]]\nname = "a"\ncommand = "cmd"\ntitle = "A"\ndraft = true\n')
+        override.write_text('[job.a]\ncommand = "cmd"\ntitle = "A"\ndraft = true\n')
         cfg = load_config([base, override])
         assert cfg.jobs[0].draft is True
 
@@ -435,11 +435,11 @@ class TestLoadConfig:
         base = tmp_path / "base.toml"
         base.write_text(
             '[[platform]]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
-            '[[job]]\nname = "a"\ncommand = "cmd"\ntitle = "A"\n'
+            '[job.a]\ncommand = "cmd"\ntitle = "A"\n'
         )
         override = tmp_path / "override.toml"
         override.write_text(
-            '[[job]]\nname = "b"\ncommand = "cmd"\ntitle = "B"\ndepends_on = ["nonexistent"]\n'
+            '[job.b]\ncommand = "cmd"\ntitle = "B"\ndepends_on = ["nonexistent"]\n'
         )
         with pytest.raises(ConfigError, match="unknown jobs"):
             load_config([base, override])
@@ -454,26 +454,35 @@ class TestLoadConfig:
         base = tmp_path / "base.toml"
         base.write_text(
             '[[platform]]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
-            '[[job]]\nname = "a"\ncommand = "cmd"\ntitle = "A"\n'
+            '[job.a]\ncommand = "cmd"\ntitle = "A"\n'
         )
         override = tmp_path / "override.toml"
-        override.write_text(
-            '[[job]]\nname = "b"\ncommand = "cmd"\ntitle = "B"\ntimeout = "nope"\n'
-        )
+        override.write_text('[job.b]\ncommand = "cmd"\ntitle = "B"\ntimeout = "nope"\n')
         # the error points at override.toml, the file that introduced the bad value
         with pytest.raises(ConfigError, match=r"override\.toml") as exc_info:
             load_config([base, override])
         assert "base.toml" not in str(exc_info.value)
         assert "invalid duration" in str(exc_info.value)
 
-    def test_missing_job_name_names_file(self, tmp_path: Path) -> None:
-        f = tmp_path / "nameless.toml"
+    def test_name_in_job_body_rejected(self, tmp_path: Path) -> None:
+        f = tmp_path / "redundant.toml"
         f.write_text(
             '[[platform]]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
-            '[[job]]\ncommand = "cmd"\ntitle = "A"\n'
+            '[job.a]\nname = "a"\ncommand = "cmd"\ntitle = "A"\n'
         )
-        with pytest.raises(ConfigError, match=str(f)):
+        with pytest.raises(ConfigError, match=str(f)) as exc_info:
             load_config([f])
+        assert "must not set a 'name' field" in str(exc_info.value)
+
+    def test_old_job_array_form_rejected_with_migration_hint(self, tmp_path: Path) -> None:
+        f = tmp_path / "legacy.toml"
+        f.write_text(
+            '[[platform]]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
+            '[[job]]\nname = "a"\ncommand = "cmd"\ntitle = "A"\n'
+        )
+        with pytest.raises(ConfigError, match=str(f)) as exc_info:
+            load_config([f])
+        assert "[[job]] array form" in str(exc_info.value)
 
     def test_directory_reads_toml_files_sorted(self, tmp_path: Path) -> None:
         conf_dir = tmp_path / "conf.d"
@@ -482,7 +491,7 @@ class TestLoadConfig:
         (conf_dir / "01-base.toml").write_text(
             '[[platform]]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
             '[job-defaults]\nbranch_prefix = "first/"\n'
-            '[[job]]\nname = "a"\ncommand = "cmd"\ntitle = "A"\n'
+            '[job.a]\ncommand = "cmd"\ntitle = "A"\n'
         )
         cfg = load_config([conf_dir])
         # 02-override.toml is applied after 01-base.toml because entries are sorted
@@ -494,7 +503,7 @@ class TestLoadConfig:
         conf_dir.mkdir()
         (conf_dir / "a.toml").write_text(
             '[[platform]]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
-            '[[job]]\nname = "x"\ncommand = "cmd"\ntitle = "X"\n'
+            '[job.x]\ncommand = "cmd"\ntitle = "X"\n'
         )
         (conf_dir / "README.md").write_text("not a config\n")
         cfg = load_config([conf_dir])
@@ -506,7 +515,7 @@ class TestLoadConfig:
         (conf_dir / "nested.toml").mkdir()
         (conf_dir / "a.toml").write_text(
             '[[platform]]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
-            '[[job]]\nname = "x"\ncommand = "cmd"\ntitle = "X"\n'
+            '[job.x]\ncommand = "cmd"\ntitle = "X"\n'
         )
         cfg = load_config([conf_dir])
         assert [j.name for j in cfg.jobs] == ["x"]

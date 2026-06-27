@@ -34,7 +34,7 @@ This must fit two existing, load-bearing properties of repoactive:
 ## Decision
 
 Add a boolean `emits_jobs` field to the existing `Job` model. A generator is
-an ordinary `[[job]]` — so tag/name selection is unchanged — with three
+an ordinary `[job.<name>]` — so tag/name selection is unchanged — with three
 differences in behavior:
 
 1. **It contributes no diff.** A generator never commits, never pushes a

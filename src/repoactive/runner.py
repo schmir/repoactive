@@ -20,9 +20,9 @@ from repoactive.config import (
     DEFAULT_TAG,
     Config,
     Job,
-    MissingJobNameError,
     _merge_jobs,
     expand_config_paths,
+    jobs_table,
 )
 from repoactive.jj import JJ, workspace_name
 from repoactive.lock import run_lock
@@ -465,24 +465,25 @@ def run_job(
         )
 
 
-def _load_job_specs(jobs_dir: Path) -> list[dict]:
+def _load_job_specs(jobs_dir: Path) -> dict[str, dict]:
     """Parse the ``*.toml`` fragments a generator wrote into ``jobs_dir``.
 
-    Files are read in sorted order and their ``[[job]]`` entries merged by name
-    (later files win), the same machinery used for the ``.repoactive.d``
-    directory. Returns the raw job-spec dicts, before inheritance/validation.
+    Files are read in sorted order and their ``[job.<name>]`` tables merged by
+    name (later files win), the same machinery used for the ``.repoactive.d``
+    directory. Returns the raw job-spec table keyed by name, before
+    inheritance/validation.
     """
-    specs: list[dict] = []
+    specs: dict[str, dict] = {}
     for path in expand_config_paths([jobs_dir]):
         data = tomllib.loads(path.read_text())
-        specs = _merge_jobs(base=specs, override=data.get("job", []))
+        specs = _merge_jobs(base=specs, override=jobs_table(data.get("job", {})))
     return specs
 
 
 def run_generator(
     *, job: Job, parents: list[str], repo_path: Path, secret_env: frozenset[str] = frozenset()
-) -> list[dict]:
-    """Run a generator job and return the raw job specs it emitted.
+) -> dict[str, dict]:
+    """Run a generator job and return the raw job specs it emitted, keyed by name.
 
     The command runs in a fresh workspace on top of ``parents`` with
     ``REPOACTIVE_JOBS_DIR`` pointing at an empty directory; it writes ``*.toml``
@@ -517,17 +518,14 @@ def run_generator(
     return specs
 
 
-def _build_generated_job(*, generator: Job, spec: dict, run_names: set[str]) -> Job:
+def _build_generated_job(*, generator: Job, name: str, spec: dict, run_names: set[str]) -> Job:
     """Build one emitted ``Job`` from its raw spec, applying inheritance.
 
-    The job inherits the (resolved) generator's tags, ``depends_on`` and the
-    ``_INHERITED_FIELDS`` unless the spec overrides them, and records the
-    generator in ``generated_by``. Raises GeneratedJobError on a missing name, a
-    name colliding with an existing job, a nested generator, or a job that fails
-    validation."""
-    name = spec.get("name")
-    if not name:
-        raise MissingJobNameError
+    ``name`` is the spec's table key. The job inherits the (resolved) generator's
+    tags, ``depends_on`` and the ``_INHERITED_FIELDS`` unless the spec overrides
+    them, and records the generator in ``generated_by``. Raises GeneratedJobError
+    on a name colliding with an existing job, a nested generator, or a job that
+    fails validation."""
     if name in run_names:
         raise GeneratedJobError(
             generator.name, f"emitted job {name!r} collides with an existing job"
@@ -536,7 +534,7 @@ def _build_generated_job(*, generator: Job, spec: dict, run_names: set[str]) -> 
         raise GeneratedJobError(
             generator.name, f"emitted job {name!r} may not itself be a generator (no recursion)"
         )
-    merged = dict(spec)
+    merged = {**spec, "name": name}
     if "tags" not in merged and "disabled" not in merged:
         merged["tags"] = sorted(generator.effective_tags())
     if "depends_on" not in merged:
@@ -550,7 +548,9 @@ def _build_generated_job(*, generator: Job, spec: dict, run_names: set[str]) -> 
         raise GeneratedJobError(generator.name, f"emitted job {name!r} is invalid: {e}") from e
 
 
-def _build_generated_jobs(*, generator: Job, specs: list[dict], run_names: set[str]) -> list[Job]:
+def _build_generated_jobs(
+    *, generator: Job, specs: dict[str, dict], run_names: set[str]
+) -> list[Job]:
     """Turn a generator's raw specs into validated ``Job`` objects.
 
     Validates each spec (see ``_build_generated_job``) and then that every
@@ -558,7 +558,8 @@ def _build_generated_jobs(*, generator: Job, specs: list[dict], run_names: set[s
     emitted job). ``generator`` must be resolved (its inherited fields filled in).
     """
     emitted = [
-        _build_generated_job(generator=generator, spec=spec, run_names=run_names) for spec in specs
+        _build_generated_job(generator=generator, name=name, spec=spec, run_names=run_names)
+        for name, spec in specs.items()
     ]
     allowed = run_names | {j.name for j in emitted}
     for j in emitted:

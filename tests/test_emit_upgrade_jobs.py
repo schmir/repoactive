@@ -54,14 +54,14 @@ def test_job_name_normalizes_invalid_characters() -> None:
 def test_jobs_document_produces_valid_repoactive_jobs() -> None:
     document = mod.jobs_document(["pydantic", "python-gitlab"])
 
-    jobs = [Job.model_validate(j) for j in document["job"]]
+    jobs = [Job.model_validate({**body, "name": name}) for name, body in document["job"].items()]
     assert [j.name for j in jobs] == ["upgrade-pydantic", "upgrade-python-gitlab"]
     assert jobs[0].command == "uv lock -P pydantic"
     assert jobs[0].title == "build: upgrade pydantic"
 
 
 def test_jobs_document_empty_for_no_dependencies() -> None:
-    assert mod.jobs_document([]) == {"job": []}
+    assert mod.jobs_document([]) == {"job": {}}
 
 
 def test_main_writes_fragment_to_jobs_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -78,7 +78,7 @@ def test_main_writes_fragment_to_jobs_dir(tmp_path: Path, monkeypatch: pytest.Mo
     assert mod.main() == 0
 
     parsed = tomllib.loads((jobs_dir / "upgrade-deps.toml").read_text())
-    assert [j["name"] for j in parsed["job"]] == ["upgrade-pydantic", "upgrade-typer"]
+    assert list(parsed["job"]) == ["upgrade-pydantic", "upgrade-typer"]
 
 
 def test_main_fails_without_jobs_dir(monkeypatch: pytest.MonkeyPatch) -> None:

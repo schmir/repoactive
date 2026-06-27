@@ -15,7 +15,7 @@ runner = CliRunner()
 
 
 def _write_job(path: Path, name: str) -> None:
-    path.write_text(f'[[job]]\nname = "{name}"\ncommand = "echo"\ntitle = "{name}"\n')
+    path.write_text(f'[job.{name}]\ncommand = "echo"\ntitle = "{name}"\n')
 
 
 def _make_repo(tmp_path: Path) -> Path:
@@ -57,7 +57,7 @@ class TestValidateConfigShowsLocations:
 
     def test_invalid_config_reports_error_and_names_file(self, tmp_path: Path) -> None:
         cfg = tmp_path / "config.toml"
-        cfg.write_text('[[job]]\nname = "a"\nbogus = true\n')
+        cfg.write_text("[job.a]\nbogus = true\n")
         result = runner.invoke(app, ["validate-config", "--config", str(cfg)])
         assert result.exit_code == 1
         assert f"Invalid config in {cfg}:" in result.output
