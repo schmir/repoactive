@@ -28,6 +28,7 @@ from repoactive.jj import (
 from repoactive.lock import RunLockHeldError
 from repoactive.platforms import get_platform
 from repoactive.runner import RunMode, run_all
+from repoactive.ui import print_undo_hint
 
 # Exit code used when another repoactive run already holds the repository lock,
 # kept distinct from the generic failure code (1) so a scheduler can tell
@@ -77,13 +78,16 @@ def _check_repo(repo: Path) -> None:
     except NotColocatedGitRepoError:
         JJ(repo).git_init_colocate()
         abs_repo = repo.resolve()
-        typer.secho(
-            f"\n!! {abs_repo} was a plain git repository; ran 'jj git init --colocate' to make "
-            f"it a colocated jj repository.\n"
-            f"!! To undo, remove the jj data: rm -rf {abs_repo / '.jj'}\n",
+        print_undo_hint(
+            title="To undo",
+            body=(
+                f"{abs_repo} was a plain git repository; ran 'jj git init --colocate' "
+                f"to make it a colocated jj repository.\n"
+                f"To undo, remove the jj data:"
+            ),
+            command=f"rm -rf {abs_repo / '.jj'}",
+            style="yellow",
             err=True,
-            fg=typer.colors.YELLOW,
-            bold=True,
         )
     except NotAColocatedRepoError as e:
         _error(str(e))

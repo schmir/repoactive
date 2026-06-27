@@ -14,7 +14,6 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 
-import typer
 from pydantic import ValidationError
 
 from repoactive.config import (
@@ -29,6 +28,7 @@ from repoactive.jj import JJ, workspace_name
 from repoactive.lock import run_lock
 from repoactive.platforms.base import MRParams, Platform
 from repoactive.progress import ProgressView, progress_lines
+from repoactive.ui import print_undo_hint
 from repoactive.updates import (
     BookmarkPush,
     JobUpdate,
@@ -799,14 +799,15 @@ def _prepare_repo(*, config: Config, repo_path: Path) -> Generator[JJ]:
         # local repository - a pushed branch or a created MR is not affected - so the
         # hint says so explicitly. Printed at the end (not the start) so it is the last
         # thing on screen after a run that can produce a lot of output.
-        restore_hint = (
-            "\n"
-            "!! To undo the changes made to the local repository by this run\n"
-            "!! (this does not affect any pushed branches or created MRs):\n"
-            f"!!     jj --repository {repo_path.resolve()} op restore {op_id}"
-            "\n"
+        print_undo_hint(
+            title="To undo this run",
+            body=(
+                "This undoes the changes made to the local repository by this run.\n"
+                "It does not affect any pushed branches or created MRs."
+            ),
+            command=f"jj --repository {repo_path.resolve()} op restore {op_id}",
+            style="cyan",
         )
-        typer.secho(restore_hint, fg=typer.colors.CYAN, bold=True)
 
 
 def _run_jobs(  # noqa: PLR0913
