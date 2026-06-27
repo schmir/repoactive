@@ -152,7 +152,6 @@ def run(  # noqa: PLR0913
     if debug:
         logging.basicConfig(level=logging.DEBUG)
     _check_jj()
-    _check_repo(repo)
     try:
         cfg = load_config(_resolve_config(config, repo))
     except ConfigNotFoundError as e:
@@ -161,6 +160,7 @@ def run(  # noqa: PLR0913
     except ConfigError as e:
         _error(f"Invalid config {e}")
         raise typer.Exit(code=1) from e
+    _check_repo(repo)
     platform = get_platform(cfg, repo) if mode is RunMode.publish else None
     try:
         summary = run_all(

@@ -175,6 +175,15 @@ class TestRun:
         assert "jj git init --colocate" in result.output
         assert "To undo" in result.output
 
+    def test_plain_git_repo_without_config_is_not_colocated(self, tmp_path: Path) -> None:
+        repo = tmp_path
+        (repo / ".git").mkdir()
+        jj = MagicMock()
+        with patch("repoactive.cli.JJ", return_value=jj):
+            result = runner.invoke(app, ["run", "--repo", str(repo)])
+        assert result.exit_code == 1
+        jj.git_init_colocate.assert_not_called()
+
     def test_missing_config_exits_nonzero(self, tmp_path: Path) -> None:
         repo = _make_repo(tmp_path)
         result = runner.invoke(app, ["run", "--repo", str(repo)])
