@@ -18,6 +18,7 @@ from repoactive.runner import (
     RunMode,
     RunSummary,
     UnknownJobsError,
+    _boxquote,
     _build_commit_message,
     _build_generated_jobs,
     _compute_parents,
@@ -545,6 +546,25 @@ class TestRunOneJob:
         assert blocked == {"a"}
 
 
+class TestBoxquote:
+    def test_with_title(self) -> None:
+        assert _boxquote("line1\nline2", title="date") == (
+            ",----[ date ]\n| line1\n| line2\n`----"
+        )
+
+    def test_without_title(self) -> None:
+        assert _boxquote("line1\nline2") == ",----\n| line1\n| line2\n`----"
+
+    def test_single_line(self) -> None:
+        assert _boxquote("only", title="cmd") == ",----[ cmd ]\n| only\n`----"
+
+    def test_empty_message(self) -> None:
+        assert _boxquote("", title="cmd") == ",----[ cmd ]\n\n`----"
+
+    def test_preserves_blank_lines(self) -> None:
+        assert _boxquote("a\n\nb") == ",----\n| a\n| \n| b\n`----"
+
+
 class TestBuildCommitMessage:
     def test_title_and_trailer_only_when_no_output(self) -> None:
         msg = _build_commit_message(_job("a"), CommandResult(output="", elapsed=1.0))
@@ -554,7 +574,7 @@ class TestBuildCommitMessage:
         job = _job("a", description="Desc", commit_title_prefix="[bot] ")
         msg = _build_commit_message(job, CommandResult(output="line1\nline2", elapsed=1.0))
         assert msg == (
-            "[bot] Change a\n\nDesc\n\n  $ cmd-a\n  line1\n  line2\n\nRepoactive-Job: a"
+            "[bot] Change a\n\nDesc\n\n,----[ cmd-a ]\n| line1\n| line2\n`----\n\nRepoactive-Job: a"
         )
 
     def test_output_omitted_when_disabled(self) -> None:
@@ -800,7 +820,7 @@ class TestRunJob:
         run_job(job=job, parents=["trunk()"], repo_path=REPO)
 
         mock_jj.describe.assert_called_once_with(
-            "Change foo\n\n  $ cmd-foo\n  did stuff\n\nRepoactive-Job: foo"
+            "Change foo\n\n,----[ cmd-foo ]\n| did stuff\n`----\n\nRepoactive-Job: foo"
         )
 
     @patch("repoactive.runner.JJ")

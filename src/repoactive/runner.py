@@ -323,20 +323,28 @@ def _discard_empty_job(  # noqa: PLR0913
     )
 
 
+def _boxquote(msg: str, title: str = "") -> str:
+    """Render ``msg`` inside a boxquote.el-style box.
+
+    The first line is ``,----[ title ]`` (or just ``,----`` when ``title`` is
+    empty), each line of ``msg`` is prefixed with ``| ``, and the box closes
+    with ``` `---- ```."""
+    top = f",----[ {title} ]" if title else ",----"
+    body = "\n".join(f"| {line}" for line in msg.splitlines())
+    return f"{top}\n{body}\n`----"
+
+
 def _build_commit_message(job: Job, command_result: CommandResult) -> str:
     """The commit message recorded for a job's change.
 
-    The title, an optional description, the command output (when
-    ``output_in_commit`` is set), and finally the ``Repoactive-Job``
-    trailer(s)."""
+    The title, an optional description, the command output rendered in a
+    boxquote.el-style box (when ``output_in_commit`` is set), and finally the
+    ``Repoactive-Job`` trailer(s)."""
     message = f"{job.commit_title_prefix}{job.title}"
     if job.description:
         message += f"\n\n{job.description}"
     if job.output_in_commit and command_result.output:
-        indented = "\n".join(
-            f"  {line}" for line in f"$ {job.command}\n{command_result.output}".splitlines()
-        )
-        message += f"\n\n{indented}"
+        message += f"\n\n{_boxquote(command_result.output, title=job.command)}"
     # Trailer must be the final paragraph so jj/git recognise it as a trailer;
     # it lets later runs detect when this job last landed (see cooldown handling).
     message += "\n\n" + "\n".join(job.commit_trailers())
