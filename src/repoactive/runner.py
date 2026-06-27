@@ -163,8 +163,7 @@ def _topological_sort(jobs: list[Job]) -> list[Job]:
 
 def _compute_parents(job: Job, results: dict[str, JobResult]) -> list[str]:
     if not job.depends_on:
-        base = job.base_branch or "trunk()"
-        return [base]
+        return [job.base_branch or "trunk()"]
 
     parents: list[str] = []
     seen: set[str] = set()
@@ -186,18 +185,20 @@ def _kill_process_group(proc: subprocess.Popen[str]) -> None:
         os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
 
 
-def _command_env(extra: dict[str, str] | None, secret_env: frozenset[str]) -> dict[str, str]:
+def _command_env(
+    *, extra_env: dict[str, str] | None, secret_env: frozenset[str]
+) -> dict[str, str]:
     """The environment a job command runs in.
 
     Starts from the inherited environment (so the command still sees PATH etc.),
     drops the platform token variables (``secret_env``) so a command cannot read
-    the credential repoactive uses to push/create MRs, then layers on ``extra``
+    the credential repoactive uses to push/create MRs, then layers on ``extra_env``
     (e.g. REPOACTIVE_JOBS_DIR for a generator). See
     docs/adr/0006-job-commands-are-trusted.md.
     """
     env = {k: v for k, v in os.environ.items() if k not in secret_env}
-    if extra:
-        env.update(extra)
+    if extra_env:
+        env.update(extra_env)
     return env
 
 
@@ -206,7 +207,7 @@ def _run_command(
     cwd: Path,
     *,
     secret_env: frozenset[str] = frozenset(),
-    env: dict[str, str] | None = None,
+    extra_env: dict[str, str] | None = None,
 ) -> CommandResult:
     start = time.monotonic()
     # start_new_session puts the command in its own process group so a timeout
@@ -223,7 +224,7 @@ def _run_command(
         encoding="utf-8",
         errors="replace",
         start_new_session=True,
-        env=_command_env(env, secret_env),
+        env=_command_env(extra_env=extra_env, secret_env=secret_env),
     )
     try:
         output, _ = proc.communicate(timeout=job.timeout_seconds())
@@ -439,7 +440,7 @@ def run_generator(
                     job,
                     ws.cwd,
                     secret_env=secret_env,
-                    env={REPOACTIVE_JOBS_DIR_ENV: str(jobs_dir)},
+                    extra_env={REPOACTIVE_JOBS_DIR_ENV: str(jobs_dir)},
                 )
             except CommandError:
                 ws.abandon()

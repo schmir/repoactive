@@ -1199,8 +1199,8 @@ class TestRunGenerator:
         mock_jj.new.assert_called_once_with("trunk()")
         # The working copy is abandoned: a generator never produces a diff.
         mock_jj.abandon.assert_called_once_with()
-        env = mock_run_command.call_args.kwargs["env"]
-        assert REPOACTIVE_JOBS_DIR_ENV in env
+        extra_env = mock_run_command.call_args.kwargs["extra_env"]
+        assert REPOACTIVE_JOBS_DIR_ENV in extra_env
         assert specs == [{"name": "x"}]
 
     @patch("repoactive.runner._run_command", side_effect=CommandError("boom", elapsed=1.0))
