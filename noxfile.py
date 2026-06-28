@@ -22,14 +22,17 @@ def validate_config(session: nox.Session) -> None:
     session.run("repoactive", "validate-config", "-c", ".repoactive.toml")
 
     readme = Path("README.md").read_text()
-    match = re.search(r"```toml\n(.*?)```", readme, re.DOTALL)
-    if not match:
-        session.error("No toml block found in README.md")
+    # Validate the comprehensive reference example (the [job-defaults] block),
+    # not whichever short snippet happens to appear first in the README.
+    blocks = re.findall(r"```toml\n(.*?)```", readme, re.DOTALL)
+    match = next((b for b in blocks if "[job-defaults]" in b), None)
+    if match is None:
+        session.error("No [job-defaults] toml block found in README.md")
         return
     with tempfile.NamedTemporaryFile(
         mode="w", prefix="readme-example-config-", suffix=".toml", delete=False
     ) as f:
-        f.write(match.group(1))
+        f.write(match)
         tmpfile = f.name
     session.run("repoactive", "validate-config", "-c", tmpfile)
 

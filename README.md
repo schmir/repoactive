@@ -8,6 +8,87 @@ the corresponding merge requests up to date. You write the scripts that
 produce the code changes; `repoactive` handles the rest - branches, commits,
 and (with `--mode publish`) the full MR lifecycle.
 
+## Contents
+
+- [Installation](#installation)
+- [Quick start](#quick-start)
+- [How it works](#how-it-works)
+- [Use cases](#use-cases)
+- [Usage](#usage)
+- [Inspecting repoactive commits](#inspecting-repoactive-commits)
+- [Validating configuration](#validating-configuration)
+- [Configuration](#configuration)
+- [Selecting jobs with tags](#selecting-jobs-with-tags)
+- [Disabling jobs](#disabling-jobs)
+- [Throttling jobs with `cooldown_period`](#throttling-jobs-with-cooldown_period)
+- [Limiting job runtime with `timeout`](#limiting-job-runtime-with-timeout)
+- [Generating jobs dynamically](#generating-jobs-dynamically)
+- [Requirements](#requirements)
+
+## Installation
+
+`repoactive` is published on [PyPI](https://pypi.org/project/repoactive/).
+Install it as a standalone command-line tool with
+[uv](https://docs.astral.sh/uv/) or [pipx](https://pipx.pypa.io/):
+
+```bash
+uv tool install repoactive
+# or
+pipx install repoactive
+```
+
+`repoactive` drives the [jj (Jujutsu)](https://github.com/jj-vcs/jj) CLI, so
+a `jj` binary must be on your `PATH`. Publishing merge requests additionally
+needs a GitHub or GitLab API token in the environment. See
+[Requirements](#requirements) for the complete list.
+
+## Quick start
+
+1. **Point repoactive at a git repository.** Any local git checkout works;
+   if it is not already a colocated jj repository, repoactive runs
+   `jj git init --colocate` for you on the first run (and prints how to undo
+   that). If you have not used jj before, set the identity it records on
+   commits once: `jj config set --user user.name "My Name"` and
+   `jj config set --user user.email "me@example.com"`.
+
+2. **Add a minimal `.repoactive.toml`** in the repository root with a single
+   job. This one keeps `uv`'s lock file current:
+
+   ```toml
+   [job.uv-lock-upgrade]
+   command = "uv lock --upgrade"
+   title = "build: upgrade dependencies"
+   ```
+
+3. **Check the config** without running anything:
+
+   ```bash
+   repoactive validate-config
+   ```
+
+4. **Run the job locally.** In the default `local` mode nothing is pushed
+   and no MR is created — repoactive just records the diff your script
+   produced on the branch `repoactive/uv-lock-upgrade` and prints a
+   `jj op restore` command to undo the run:
+
+   ```bash
+   repoactive run
+   ```
+
+5. **Publish it.** Put the API token your platform uses in the environment
+   (`GITHUB_TOKEN` for GitHub.com, `GITLAB_TOKEN` for GitLab.com by
+   default), fetch the latest base branch, then let repoactive push the
+   branch and open — or update — the merge request:
+
+   ```bash
+   jj git fetch          # repoactive never fetches on its own
+   repoactive run --mode publish
+   ```
+
+   From here, re-running `repoactive run --mode publish` on a schedule keeps
+   that MR in sync with both your script's output and the base branch. The
+   rest of this document covers the full configuration and command surface.
+
 ## How it works
 
 You configure one or more **jobs**, each with a script (any shell command or
@@ -70,6 +151,150 @@ branch. See
   repositories
 - Automating any periodic code transformation that should go through a
   review process
+
+## Usage
+
+```bash
+# Print the installed version and exit
+repoactive --version
+```
+
+```
+repoactive run [OPTIONS] [JOBS]...
+```
+
+Run all configured jobs (or a named subset - dependencies are
+auto-included):
+
+```bash
+# Apply all jobs locally (no push, no MR creation)
+repoactive run
+
+# Apply specific jobs locally
+repoactive run regenerate-api-client sync-license-headers
+
+# Run every job carrying a given tag (see "Selecting jobs with tags")
+repoactive run --tag weekly
+
+# Push branches to the remote without creating MRs
+repoactive run --mode push
+
+# Push branches and create or update merge requests
+repoactive run --mode publish
+
+# Enable debug logging
+repoactive run --debug
+```
+
+| Option                          | Short | Description                                                                                                                  |
+| ------------------------------- | ----- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `--config PATH`                 | `-c`  | Config file or directory of `*.toml` files; repeat to merge. Default: `.repoactive.d/` and `.repoactive.toml` under `--repo` |
+| `--repo PATH`                   | `-r`  | jj repository path (default: `.`)                                                                                            |
+| `--mode [local\|push\|publish]` | `-m`  | How far to publish: `local` (default) applies only locally, `push` also pushes branches, `publish` also creates/updates MRs  |
+| `--tag TAG`                     | `-t`  | Run jobs carrying any of these tags (repeatable). With no tags/jobs the default run targets the `enabled` tag                |
+| `--debug`                       | `-d`  | Enable debug logging                                                                                                         |
+
+A local `run` (the default `--mode local`) captures the jj operation id
+beforehand and prints a `jj op restore <id>` command (both before and after
+the run, since a run can produce a lot of output). Run it to roll the
+repository - commits, bookmarks and colocated git refs - back to the state
+it was in before the run. The hint is omitted for
+`--mode push`/`--mode publish` runs, since restoring local state would not
+undo a branch already pushed or an MR already created.
+
+While a job's command runs in an interactive terminal, repoactive shows a
+live, scrolling block of its most recent output lines. The block stays on
+screen once the command finishes, with the job's status line printed below
+it. It defaults to 8 lines; set the `REPOACTIVE_PROGRESS_LINES` environment
+variable to change the count (or to `0` to disable the live block). When
+output is not a terminal (piped or in CI) the block is disabled and the
+command's output is left untouched.
+
+## Inspecting repoactive commits
+
+```
+repoactive recent-commits [OPTIONS] [JOBS]...
+```
+
+List commits produced by repoactive, filtered by a time window and
+optionally by job name or merge status:
+
+```bash
+# Show all repoactive commits from the last 2 weeks (default window)
+repoactive recent-commits --repo /path/to/repo
+
+# Narrow to a specific window
+repoactive recent-commits --within 30d --repo /path/to/repo
+
+# Filter by one or more job names
+repoactive recent-commits --within 7d uv-lock-upgrade prek-autoupdate
+
+# Only commits that have landed in trunk
+repoactive recent-commits --status merged
+
+# Only commits still on open branches
+repoactive recent-commits --status unmerged
+```
+
+| Option                             | Short | Description                                            |
+| ---------------------------------- | ----- | ------------------------------------------------------ |
+| `--within`                         |       | How far back to look (default: `2w`; e.g. `7d`, `24h`) |
+| `--repo PATH`                      | `-r`  | jj repository path (default: `.`)                      |
+| `--status [all\|merged\|unmerged]` | `-s`  | Filter by merge status into trunk (default: `all`)     |
+
+### jj revset aliases
+
+To query repoactive commits directly in jj, add these aliases to your
+repository config (`jj config set --repo`) or your global config
+(`jj config set --user`):
+
+```toml
+[revset-aliases]
+'repoactive()' = 'description(regex:"(?m)^Repoactive-Job: ")'
+'repoactive_merged()' = 'repoactive() & ::trunk()'
+'repoactive_unmerged()' = 'repoactive() & ~(::trunk())'
+```
+
+Then use them directly in jj:
+
+```bash
+jj log -r 'repoactive()'
+jj log -r 'repoactive_unmerged()'
+jj log -r 'repoactive() & committer_date(after:"2025-01-01")'
+jj log -r 'repoactive() & description(regex:"(?m)^Repoactive-Job: uv-lock-upgrade$")'
+```
+
+## Validating configuration
+
+```
+repoactive validate-config [OPTIONS]
+```
+
+Check that a config file is syntactically and semantically valid without
+running any jobs:
+
+```bash
+# Validate the discovered defaults (.repoactive.d/ and .repoactive.toml)
+repoactive validate-config
+
+# Validate a specific config file or directory
+repoactive validate-config --config myconfig.toml
+
+# Validate a merged config (same merging rules as `run`)
+repoactive validate-config --config base.toml --config override.toml
+```
+
+On success the command prints `Config OK: N job(s) defined.` and exits with
+code 0. On failure it prints the validation error to stderr and exits with
+code 1.
+
+Validation checks include unknown keys, missing required fields, invalid
+`depends_on` references, and circular job dependencies.
+
+| Option          | Short | Description                                                                                                                  |
+| --------------- | ----- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `--config PATH` | `-c`  | Config file or directory of `*.toml` files; repeat to merge. Default: `.repoactive.d/` and `.repoactive.toml` under `--repo` |
+| `--repo PATH`   | `-r`  | jj repository path (default: `.`)                                                                                            |
 
 ## Configuration
 
@@ -323,6 +548,41 @@ The lock is an advisory `flock` on `.jj/repoactive.lock`; the OS releases it
 automatically if a run is killed, so a crashed run never leaves the
 repository locked.
 
+## Throttling jobs with `cooldown_period`
+
+Every commit `repoactive` creates carries a `Repoactive-Job: <name>` trailer
+identifying the job that produced it. When a job sets `cooldown_period`,
+`repoactive` looks at the base branch for a commit with that job's trailer
+and a committer date inside the window before running. If one is found the
+job is on cooldown and is skipped for this run (dependents proceed as if it
+produced no changes); otherwise the job runs normally. This keeps recurring
+jobs - for example a dependency upgrade - from landing more often than the
+configured interval.
+
+The signal is the trailer on the base branch, so the cooldown only starts
+once a change has _landed_. An open, unmerged MR does not trigger it (the
+existing MR keeps being updated as usual). Because the check relies on the
+commit trailer reaching the base branch, MRs for throttled jobs must be
+merged with a merge commit or rebase - a **squash merge discards the commit
+message** and with it the trailer, so the cooldown would never trigger.
+
+The trailer must also be present in the _local_ base branch when the job
+runs: `repoactive` does not fetch, so a clone that has not pulled the merge
+will not see the cooldown and will re-run the job. See
+[Keeping the local clone current](#keeping-the-local-clone-current).
+
+## Limiting job runtime with `timeout`
+
+A job's `command` can hang or run away. Setting `timeout` caps how long the
+command may run; when the limit is reached `repoactive` kills the command's
+whole process group - the shell and any child processes it spawned - and the
+job fails (its workspace is abandoned, no branch or MR is created). The
+command runs in its own session/process group to make this possible. The
+value uses the same `<number><unit>` format as `cooldown_period` (e.g.
+`"30m"`, `"2h"`). `timeout` may be set per job or in `job-defaults`; a
+per-job value overrides the default. The built-in default is `"2m"`; set
+`timeout` to a larger value in `job-defaults` for longer-running commands.
+
 ## Generating jobs dynamically
 
 Sometimes the useful set of jobs depends on the repository's contents — one
@@ -391,189 +651,19 @@ an existing job's name, and may only `depends_on` jobs that are part of the
 same run. See [ADR 0004](docs/adr/0004-job-generators.md) for the full
 design.
 
-## Throttling jobs with `cooldown_period`
-
-Every commit `repoactive` creates carries a `Repoactive-Job: <name>` trailer
-identifying the job that produced it. When a job sets `cooldown_period`,
-`repoactive` looks at the base branch for a commit with that job's trailer
-and a committer date inside the window before running. If one is found the
-job is on cooldown and is skipped for this run (dependents proceed as if it
-produced no changes); otherwise the job runs normally. This keeps recurring
-jobs - for example a dependency upgrade - from landing more often than the
-configured interval.
-
-The signal is the trailer on the base branch, so the cooldown only starts
-once a change has _landed_. An open, unmerged MR does not trigger it (the
-existing MR keeps being updated as usual). Because the check relies on the
-commit trailer reaching the base branch, MRs for throttled jobs must be
-merged with a merge commit or rebase - a **squash merge discards the commit
-message** and with it the trailer, so the cooldown would never trigger.
-
-The trailer must also be present in the _local_ base branch when the job
-runs: `repoactive` does not fetch, so a clone that has not pulled the merge
-will not see the cooldown and will re-run the job. See
-[Keeping the local clone current](#keeping-the-local-clone-current).
-
-## Limiting job runtime with `timeout`
-
-A job's `command` can hang or run away. Setting `timeout` caps how long the
-command may run; when the limit is reached `repoactive` kills the command's
-whole process group - the shell and any child processes it spawned - and the
-job fails (its workspace is abandoned, no branch or MR is created). The
-command runs in its own session/process group to make this possible. The
-value uses the same `<number><unit>` format as `cooldown_period` (e.g.
-`"30m"`, `"2h"`). `timeout` may be set per job or in `job-defaults`; a
-per-job value overrides the default. The built-in default is `"2m"`; set
-`timeout` to a larger value in `job-defaults` for longer-running commands.
-
-## Usage
-
-```bash
-# Print the installed version and exit
-repoactive --version
-```
-
-```
-repoactive run [OPTIONS] [JOBS]...
-```
-
-Run all configured jobs (or a named subset - dependencies are
-auto-included):
-
-```bash
-# Apply all jobs locally (no push, no MR creation)
-repoactive run
-
-# Apply specific jobs locally
-repoactive run regenerate-api-client sync-license-headers
-
-# Run every job carrying a given tag (see "Selecting jobs with tags")
-repoactive run --tag weekly
-
-# Push branches to the remote without creating MRs
-repoactive run --mode push
-
-# Push branches and create or update merge requests
-repoactive run --mode publish
-
-# Enable debug logging
-repoactive run --debug
-```
-
-| Option                          | Short | Description                                                                                                                  |
-| ------------------------------- | ----- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `--config PATH`                 | `-c`  | Config file or directory of `*.toml` files; repeat to merge. Default: `.repoactive.d/` and `.repoactive.toml` under `--repo` |
-| `--repo PATH`                   | `-r`  | jj repository path (default: `.`)                                                                                            |
-| `--mode [local\|push\|publish]` | `-m`  | How far to publish: `local` (default) applies only locally, `push` also pushes branches, `publish` also creates/updates MRs  |
-| `--tag TAG`                     | `-t`  | Run jobs carrying any of these tags (repeatable). With no tags/jobs the default run targets the `enabled` tag                |
-| `--debug`                       | `-d`  | Enable debug logging                                                                                                         |
-
-A local `run` (the default `--mode local`) captures the jj operation id
-beforehand and prints a `jj op restore <id>` command (both before and after
-the run, since a run can produce a lot of output). Run it to roll the
-repository - commits, bookmarks and colocated git refs - back to the state
-it was in before the run. The hint is omitted for
-`--mode push`/`--mode publish` runs, since restoring local state would not
-undo a branch already pushed or an MR already created.
-
-While a job's command runs in an interactive terminal, repoactive shows a
-live, scrolling block of its most recent output lines. The block stays on
-screen once the command finishes, with the job's status line printed below
-it. It defaults to 8 lines; set the `REPOACTIVE_PROGRESS_LINES` environment
-variable to change the count (or to `0` to disable the live block). When
-output is not a terminal (piped or in CI) the block is disabled and the
-command's output is left untouched.
-
-## Inspecting repoactive commits
-
-```
-repoactive recent-commits [OPTIONS] [JOBS]...
-```
-
-List commits produced by repoactive, filtered by a time window and
-optionally by job name or merge status:
-
-```bash
-# Show all repoactive commits from the last 2 weeks (default window)
-repoactive recent-commits --repo /path/to/repo
-
-# Narrow to a specific window
-repoactive recent-commits --within 30d --repo /path/to/repo
-
-# Filter by one or more job names
-repoactive recent-commits --within 7d uv-lock-upgrade prek-autoupdate
-
-# Only commits that have landed in trunk
-repoactive recent-commits --status merged
-
-# Only commits still on open branches
-repoactive recent-commits --status unmerged
-```
-
-| Option                             | Short | Description                                            |
-| ---------------------------------- | ----- | ------------------------------------------------------ |
-| `--within`                         |       | How far back to look (default: `2w`; e.g. `7d`, `24h`) |
-| `--repo PATH`                      | `-r`  | jj repository path (default: `.`)                      |
-| `--status [all\|merged\|unmerged]` | `-s`  | Filter by merge status into trunk (default: `all`)     |
-
-### jj revset aliases
-
-To query repoactive commits directly in jj, add these aliases to your
-repository config (`jj config set --repo`) or your global config
-(`jj config set --user`):
-
-```toml
-[revset-aliases]
-'repoactive()' = 'description(regex:"(?m)^Repoactive-Job: ")'
-'repoactive_merged()' = 'repoactive() & ::trunk()'
-'repoactive_unmerged()' = 'repoactive() & ~(::trunk())'
-```
-
-Then use them directly in jj:
-
-```bash
-jj log -r 'repoactive()'
-jj log -r 'repoactive_unmerged()'
-jj log -r 'repoactive() & committer_date(after:"2025-01-01")'
-jj log -r 'repoactive() & description(regex:"(?m)^Repoactive-Job: uv-lock-upgrade$")'
-```
-
-## Validating configuration
-
-```
-repoactive validate-config [OPTIONS]
-```
-
-Check that a config file is syntactically and semantically valid without
-running any jobs:
-
-```bash
-# Validate the discovered defaults (.repoactive.d/ and .repoactive.toml)
-repoactive validate-config
-
-# Validate a specific config file or directory
-repoactive validate-config --config myconfig.toml
-
-# Validate a merged config (same merging rules as `run`)
-repoactive validate-config --config base.toml --config override.toml
-```
-
-On success the command prints `Config OK: N job(s) defined.` and exits with
-code 0. On failure it prints the validation error to stderr and exits with
-code 1.
-
-Validation checks include unknown keys, missing required fields, invalid
-`depends_on` references, and circular job dependencies.
-
-| Option          | Short | Description                                                                                                                  |
-| --------------- | ----- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `--config PATH` | `-c`  | Config file or directory of `*.toml` files; repeat to merge. Default: `.repoactive.d/` and `.repoactive.toml` under `--repo` |
-| `--repo PATH`   | `-r`  | jj repository path (default: `.`)                                                                                            |
-
 ## Requirements
 
 - Python 3.11 or later
 - [jj (Jujutsu)](https://github.com/jj-vcs/jj) - `repoactive` uses jj to
   manage branches and commits in the target repository
+- A configured jj user name and email - jj records them as the commit
+  author. Set them once with:
+
+  ```bash
+  jj config set --user user.name "My Name"
+  jj config set --user user.email "me@example.com"
+  ```
+
 - A GitLab or GitHub API token exposed via the environment variable named in
-  `platform.token_env`
+  `platform.token_env` (default: `GITHUB_TOKEN` for GitHub.com,
+  `GITLAB_TOKEN` for GitLab.com)
