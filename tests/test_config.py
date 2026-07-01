@@ -7,6 +7,7 @@ from repoactive.config import (
     Config,
     ConfigError,
     ConfigNotFoundError,
+    CreateMR,
     InvalidDurationError,
     Job,
     JobDefaults,
@@ -97,6 +98,32 @@ class TestCommitTrailers:
             f"{JOB_TRAILER_KEY}: foo",
             f"{JOB_TRAILER_KEY}: gen",
         ]
+
+
+class TestCreateMrValidation:
+    @staticmethod
+    def _job_with(*, create_mr: object) -> Job:
+        return Job.model_validate(
+            {"name": "x", "command": "cmd", "title": "T", "create_mr": create_mr}
+        )
+
+    def test_default_is_always(self) -> None:
+        assert Job(name="x", command="cmd", title="T").create_mr is CreateMR.always
+
+    # The boolean TOML form predates the enum and stays supported.
+    def test_true_means_always(self) -> None:
+        assert self._job_with(create_mr=True).create_mr is CreateMR.always
+
+    def test_false_means_never(self) -> None:
+        assert self._job_with(create_mr=False).create_mr is CreateMR.never
+
+    @pytest.mark.parametrize("value", list(CreateMR))
+    def test_enum_values_accepted(self, value: CreateMR) -> None:
+        assert self._job_with(create_mr=str(value)).create_mr is value
+
+    def test_other_string_rejected(self) -> None:
+        with pytest.raises(ValueError, match="create_mr"):
+            self._job_with(create_mr="sometimes")
 
 
 class TestBookmarkNames:

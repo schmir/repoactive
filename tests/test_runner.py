@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from repoactive.config import Config, Job, JobDefaults
+from repoactive.config import Config, CreateMR, Job, JobDefaults
 from repoactive.runner import (
     REPOACTIVE_JOBS_DIR_ENV,
     CommandError,
@@ -28,6 +28,7 @@ from repoactive.runner import (
     _run_one_job,
     _select_jobs,
     _select_run_jobs,
+    _suppress_superseded_mrs,
     _topological_sort,
     apply_plan,
     run_all,
@@ -47,6 +48,7 @@ def _job(  # noqa: PLR0913
     branch_prefix: str = "repoactive/",
     mr_title_prefix: str = "",
     commit_title_prefix: str = "",
+    create_mr: CreateMR = CreateMR.always,
 ) -> Job:
     return Job(
         name=name,
@@ -59,6 +61,7 @@ def _job(  # noqa: PLR0913
         branch_prefix=branch_prefix,
         mr_title_prefix=mr_title_prefix,
         commit_title_prefix=commit_title_prefix,
+        create_mr=create_mr,
     )
 
 
@@ -123,6 +126,7 @@ def _config(*jobs: Job) -> Config:
                     "depends_on": j.depends_on,
                     "disabled": j.disabled,
                     "tags": j.tags,
+                    "create_mr": j.create_mr,
                 }
                 for j in jobs
             ],
@@ -1054,7 +1058,7 @@ class TestRunJob:
 
     @patch("repoactive.runner.JJ")
     @patch("repoactive.runner.subprocess.Popen")
-    def test_create_mr_false_records_no_mr(
+    def test_create_mr_never_records_no_mr(
         self, mock_sub: MagicMock, mock_jj_cls: MagicMock
     ) -> None:
         mock_jj = _mock_jj(mock_jj_cls)
@@ -1065,7 +1069,7 @@ class TestRunJob:
             name="foo",
             command="cmd",
             title="Foo",
-            create_mr=False,
+            create_mr=CreateMR.never,
             branch_prefix="repoactive/",
             commit_title_prefix="",
         )
@@ -1427,6 +1431,156 @@ class TestApplyPlan:
         assert urls == {}
 
 
+class TestSuppressSupersededMRs:
+    """Resolving create_mr = "unless-superseded" against the run's plan."""
+
+    @staticmethod
+    def _results(*results: JobResult) -> dict[str, JobResult]:
+        """Key results by job name, preserving (topological) run order."""
+        return {r.job.name: r for r in results}
+
+    @staticmethod
+    def _surviving(plan: UpdatePlan) -> list[str]:
+        return [u.job_name for u in plan.updates if u.mr is not None]
+
+    def test_dependent_mr_supersedes(self, capsys: pytest.CaptureFixture[str]) -> None:
+        a = _job("a", create_mr=CreateMR.unless_superseded)
+        b = _job("b", depends_on=["a"])
+        plan = UpdatePlan(updates=[_mr_update("a"), _mr_update("b", depends_on=["a"])])
+
+        _suppress_superseded_mrs(
+            plan=plan,
+            results=self._results(
+                _result(a, revsets=["repoactive/a"]),
+                _result(b, revsets=["repoactive/b"]),
+            ),
+        )
+
+        assert self._surviving(plan) == ["b"]
+        # Only the MR is dropped; the branch push survives.
+        assert plan.updates[0].push == BookmarkPush(bookmark="repoactive/a")
+        assert "==> [a] MR superseded by [b]" in capsys.readouterr().out
+
+    def test_no_dependent_keeps_mr(self) -> None:
+        a = _job("a", create_mr=CreateMR.unless_superseded)
+        plan = UpdatePlan(updates=[_mr_update("a")])
+
+        _suppress_superseded_mrs(
+            plan=plan, results=self._results(_result(a, revsets=["repoactive/a"]))
+        )
+
+        assert self._surviving(plan) == ["a"]
+
+    def test_empty_dependent_does_not_supersede(self) -> None:
+        # b ran but produced nothing: a is the effective leaf and keeps its MR.
+        a = _job("a", create_mr=CreateMR.unless_superseded)
+        b = _job("b", depends_on=["a"])
+        plan = UpdatePlan(updates=[_mr_update("a")])
+
+        _suppress_superseded_mrs(
+            plan=plan,
+            results=self._results(
+                _result(a, revsets=["repoactive/a"]),
+                _result(b, revsets=["repoactive/a"], produced=False),
+            ),
+        )
+
+        assert self._surviving(plan) == ["a"]
+
+    def test_dependent_without_mr_does_not_supersede(self) -> None:
+        # b produced a diff but has create_mr=false: no MR contains a's changes,
+        # so a keeps its own.
+        a = _job("a", create_mr=CreateMR.unless_superseded)
+        b = _job("b", depends_on=["a"], create_mr=CreateMR.never)
+        plan = UpdatePlan(updates=[_mr_update("a"), _push_update("b")])
+
+        _suppress_superseded_mrs(
+            plan=plan,
+            results=self._results(
+                _result(a, revsets=["repoactive/a"]),
+                _result(b, revsets=["repoactive/b"]),
+            ),
+        )
+
+        assert self._surviving(plan) == ["a"]
+
+    def test_cover_passes_through_empty_middle_job(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # a <- b (empty) <- c: c's change was built directly on a's branch, so
+        # c's MR contains a's changes and supersedes a.
+        a = _job("a", create_mr=CreateMR.unless_superseded)
+        b = _job("b", depends_on=["a"])
+        c = _job("c", depends_on=["b"])
+        plan = UpdatePlan(updates=[_mr_update("a"), _mr_update("c", depends_on=["b"])])
+
+        _suppress_superseded_mrs(
+            plan=plan,
+            results=self._results(
+                _result(a, revsets=["repoactive/a"]),
+                _result(b, revsets=["repoactive/a"], produced=False),
+                _result(c, revsets=["repoactive/c"]),
+            ),
+        )
+
+        assert self._surviving(plan) == ["c"]
+        assert "==> [a] MR superseded by [c]" in capsys.readouterr().out
+
+    def test_chain_keeps_only_topmost_mr(self, capsys: pytest.CaptureFixture[str]) -> None:
+        # All three produced a diff: only c's MR survives, and the messages name
+        # c (the MR actually created), not the suppressed b in between.
+        a = _job("a", create_mr=CreateMR.unless_superseded)
+        b = _job("b", depends_on=["a"], create_mr=CreateMR.unless_superseded)
+        c = _job("c", depends_on=["b"], create_mr=CreateMR.unless_superseded)
+        plan = UpdatePlan(
+            updates=[
+                _mr_update("a"),
+                _mr_update("b", depends_on=["a"]),
+                _mr_update("c", depends_on=["b"]),
+            ]
+        )
+
+        _suppress_superseded_mrs(
+            plan=plan,
+            results=self._results(
+                _result(a, revsets=["repoactive/a"]),
+                _result(b, revsets=["repoactive/b"]),
+                _result(c, revsets=["repoactive/c"]),
+            ),
+        )
+
+        assert self._surviving(plan) == ["c"]
+        out = capsys.readouterr().out
+        assert "==> [a] MR superseded by [c]" in out
+        assert "==> [b] MR superseded by [c]" in out
+
+    def test_plain_dependent_mr_is_unconditional(self, capsys: pytest.CaptureFixture[str]) -> None:
+        # b has plain create_mr=true: it keeps its MR even though c covers it,
+        # and b (the nearest surviving MR) is what supersedes a.
+        a = _job("a", create_mr=CreateMR.unless_superseded)
+        b = _job("b", depends_on=["a"])
+        c = _job("c", depends_on=["b"], create_mr=CreateMR.unless_superseded)
+        plan = UpdatePlan(
+            updates=[
+                _mr_update("a"),
+                _mr_update("b", depends_on=["a"]),
+                _mr_update("c", depends_on=["b"]),
+            ]
+        )
+
+        _suppress_superseded_mrs(
+            plan=plan,
+            results=self._results(
+                _result(a, revsets=["repoactive/a"]),
+                _result(b, revsets=["repoactive/b"]),
+                _result(c, revsets=["repoactive/c"]),
+            ),
+        )
+
+        assert self._surviving(plan) == ["b", "c"]
+        assert "==> [a] MR superseded by [b]" in capsys.readouterr().out
+
+
 class TestRunAll:
     @pytest.fixture(autouse=True)
     def mock_jj(self) -> Iterator[MagicMock]:
@@ -1473,6 +1627,32 @@ class TestRunAll:
         platform.ensure_mr.assert_called_once()
         # The MR URL is written back into the summary by the apply phase.
         assert summary.results["a"].mr_url == "https://example.com/mr/a"
+
+    @patch("repoactive.runner.run_job")
+    def test_unless_superseded_mr_dropped_from_plan(
+        self, mock_run_job: MagicMock, mock_jj: MagicMock
+    ) -> None:
+        a = _job("a", create_mr=CreateMR.unless_superseded)
+        b = _job("b", depends_on=["a"])
+        result_a = _result(a, revsets=["repoactive/a"])
+        result_a.update = _mr_update("a")
+        result_b = _result(b, revsets=["repoactive/b"])
+        result_b.update = _mr_update("b", depends_on=["a"])
+        mock_run_job.side_effect = [result_a, result_b]
+        platform = MagicMock()
+        platform.ensure_mr.return_value = "https://example.com/mr/b"
+
+        summary = run_all(
+            config=_config(a, b), repo_path=REPO, platform=platform, mode=RunMode.publish
+        )
+
+        # b's MR supersedes a's: only b's is created, but a's branch is still pushed.
+        mock_jj.return_value.git_push_bookmarks.assert_called_once_with(
+            "repoactive/a", "repoactive/b"
+        )
+        platform.ensure_mr.assert_called_once()
+        assert summary.results["a"].mr_url is None
+        assert summary.results["b"].mr_url == "https://example.com/mr/b"
 
     @patch("repoactive.runner.run_job")
     def test_failed_job_skips_dependents(self, mock_run_job: MagicMock) -> None:

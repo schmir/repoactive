@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.1 - 2026-07-02
+
+- `create_mr = "unless-superseded"` is now supported: such a job skips its
+  MR/PR when a dependent job's MR from the same run already contains its
+  changes, so a dependency chain yields a single MR on the topmost job that
+  produced a diff, falling back to the job below when the jobs above came up
+  empty (ADR 0009).
+
 ## 0.1.0 - 2026-06-27
 
 - Jobs are now configured as a `[job.<name>]` table keyed by name instead of

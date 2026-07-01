@@ -343,7 +343,9 @@ base_branch = "main"
 # Optional: open the MR/PR as a draft (default: false)
 draft = false
 # Optional: create an MR/PR for this job (default: true). Set to false to
-# push the branch without opening an MR/PR.
+# push the branch without opening an MR/PR, or to "unless-superseded" to skip
+# the MR/PR when a dependent job's MR from the same run already contains this
+# job's changes (see the notes on depends_on below).
 create_mr = true
 # Optional: append the job's command and its output to the commit message
 # (default: true). Set to false to keep the commit message clean.
@@ -411,6 +413,18 @@ working tree that has all listed dependency branches merged together, rather
 than from the plain base branch. The resulting MR branch will therefore
 include both the dependency jobs and the new job on top. Links to the parent
 MRs are automatically added to the MR description.
+
+Because a dependent's MR already contains its dependencies' changes, a
+dependency chain normally opens one MR per job that produced a diff. Setting
+`create_mr = "unless-superseded"` on the earlier jobs collapses that: such a
+job skips its MR whenever a dependent job produced an MR in the same run, so
+the chain yields a single MR on the topmost job that actually changed
+something — falling back to the job below it when the jobs above came up
+empty. The branch is still pushed either way. Only the current run counts: a
+dependent that is empty, failed, on cooldown, or not selected does not
+suppress anything. See
+[ADR 0009](docs/adr/0009-unless-superseded-mr-creation.md) for details and
+limitations.
 
 ### Config file locations
 

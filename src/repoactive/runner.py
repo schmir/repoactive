@@ -19,6 +19,7 @@ from pydantic import ValidationError
 from repoactive.config import (
     DEFAULT_TAG,
     Config,
+    CreateMR,
     Job,
     _merge_jobs,
     expand_config_paths,
@@ -383,7 +384,7 @@ def _commit_job(
     # apply_plan only acts on it when a platform is configured). apply_plan fills
     # in the platform default branch.
     mr: MRUpdate | None = None
-    if job.create_mr:
+    if job.create_mr is not CreateMR.never:
         mr = MRUpdate(
             source_branch=bookmark,
             target_branch=job.base_branch,
@@ -867,6 +868,39 @@ def _run_jobs(  # noqa: PLR0913
             ordered_jobs = _topological_sort(ordered_jobs + emitted)
 
 
+def _suppress_superseded_mrs(*, plan: UpdatePlan, results: dict[str, JobResult]) -> None:
+    """Drop the MR of every ``create_mr = "unless-superseded"`` job whose changes
+    a dependent's MR already contains.
+
+    A dependent's change is stacked on its dependencies' branches
+    (``_compute_parents``), so a dependent's MR diff already includes this job's
+    changes. ``results`` is in run order (topological), so walking it in reverse
+    decides each job before its dependencies: a job whose MR survives covers its
+    dependencies, and a covered job passes its cover down (even when it records
+    no MR itself, e.g. an empty job the stack built through). Only MRs recorded
+    in this run's plan count — a dependent that is empty, failed, on cooldown,
+    or not selected does not supersede.
+    See docs/adr/0009-unless-superseded-mr-creation.md.
+    """
+    updates = {u.job_name: u for u in plan.updates}
+    # Job name -> the dependent whose surviving MR contains this job's changes.
+    covered_by: dict[str, str] = {}
+    for name in reversed(list(results)):
+        job = results[name].job
+        update = updates.get(name)
+        has_mr = False
+        if update is not None and update.mr is not None:
+            if job.create_mr is CreateMR.unless_superseded and name in covered_by:
+                update.mr = None
+                print(f"==> [{name}] MR superseded by [{covered_by[name]}]")
+            else:
+                has_mr = True
+        cover = name if has_mr else covered_by.get(name)
+        if cover is not None:
+            for dep in job.depends_on:
+                covered_by.setdefault(dep, cover)
+
+
 def run_all(  # noqa: PLR0913
     *,
     config: Config,
@@ -916,6 +950,10 @@ def run_all(  # noqa: PLR0913
             summary=summary,
             plan=plan,
         )
+
+        # Resolve "unless-superseded" now that every job has run: a job's MR is
+        # dropped from the plan when a dependent's MR in this run contains it.
+        _suppress_superseded_mrs(plan=plan, results=summary.results)
 
         # A local run stops here: the plan is built but deliberately not applied, so
         # nothing is pushed and no MR is created.

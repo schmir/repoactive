@@ -5,12 +5,14 @@ import re
 import tomllib
 from dataclasses import dataclass
 from datetime import timedelta
+from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Literal
 
 from pydantic import (
     AfterValidator,
     BaseModel,
+    BeforeValidator,
     ConfigDict,
     Field,
     ValidationError,
@@ -154,6 +156,29 @@ class PlatformConfig(BaseModel):
     token_env: str
 
 
+class CreateMR(StrEnum):
+    """When a job creates its MR/PR.
+
+    ``always`` and ``never`` are written as ``true``/``false`` in TOML (the
+    original boolean form, kept for backwards compatibility);
+    ``unless-superseded`` skips the MR when a dependent job produced an MR in
+    the same run (that MR is stacked on this job's branch, so it already
+    contains this job's changes).
+    See docs/adr/0009-unless-superseded-mr-creation.md.
+    """
+
+    never = "never"
+    always = "always"
+    unless_superseded = "unless-superseded"
+
+
+def _coerce_create_mr(value: object) -> object:
+    """Map the boolean TOML form onto the enum (true -> always, false -> never)."""
+    if isinstance(value, bool):
+        return CreateMR.always if value else CreateMR.never
+    return value
+
+
 def _validate_branch_prefix(value: str) -> str:
     if not _BRANCH_PREFIX_RE.match(value):
         raise InvalidBranchPrefixError(value)
@@ -167,6 +192,10 @@ def _validate_duration(value: str) -> str:
 
 _BranchPrefix = Annotated[str, AfterValidator(_validate_branch_prefix)]
 _Duration = Annotated[str, AfterValidator(_validate_duration)]
+# json_schema_input_type keeps booleans valid in the published JSON schema.
+_CreateMR = Annotated[
+    CreateMR, BeforeValidator(_coerce_create_mr, json_schema_input_type=bool | CreateMR)
+]
 
 
 class JobDefaults(BaseModel):
@@ -190,7 +219,7 @@ class Job(BaseModel):
     description: str | None = None
     base_branch: str | None = None
     draft: bool = False
-    create_mr: bool = True
+    create_mr: _CreateMR = CreateMR.always
     disabled: bool = False
     tags: list[str] = Field(default_factory=list)
     depends_on: list[str] = Field(default_factory=list)

@@ -47,3 +47,8 @@ it.
   `depends_on`, merge key), so the key enforces uniqueness structurally and
   drops boilerplate. A breaking change; the old array form is rejected with
   a migration hint.
+- [0009 — `create_mr = "unless-superseded"` collapses a dependency chain into one MR](0009-unless-superseded-mr-creation.md)
+  — Accepted. A job with this value skips its MR when a dependent's MR from
+  the same run already contains its changes (dependents are stacked on their
+  dependencies), so a chain yields a single MR on the topmost non-empty job.
+  Per-run only: MRs from earlier runs neither supersede nor get closed.
