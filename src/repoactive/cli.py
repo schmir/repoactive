@@ -67,7 +67,7 @@ def _check_jj() -> None:
         raise typer.Exit(code=1) from e
 
 
-def _check_repo(repo: Path) -> None:
+def _ensure_colocated_repo(repo: Path) -> None:
     """Ensure ``repo`` is a colocated jj repository root, else exit with a clear error.
 
     A plain git repository (``.git`` but no ``.jj``) is converted in place by
@@ -160,7 +160,7 @@ def run(  # noqa: PLR0913
     except ConfigError as e:
         _error(f"Invalid config {e}")
         raise typer.Exit(code=1) from e
-    _check_repo(repo)
+    _ensure_colocated_repo(repo)
     platform = get_platform(cfg, repo) if mode is RunMode.publish else None
     try:
         summary = run_all(
@@ -256,7 +256,7 @@ def recent_commits(
     filter by whether the commit has landed in trunk.
     """
     _check_jj()
-    _check_repo(repo)
+    _ensure_colocated_repo(repo)
     try:
         delta = parse_duration(within)
     except ValueError as e:
