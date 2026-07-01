@@ -39,6 +39,16 @@ app = typer.Typer(no_args_is_help=True)
 
 _DEFAULT_REPO = Path()
 
+_ConfigOption = Annotated[
+    list[Path] | None,
+    typer.Option(
+        "--config",
+        "-c",
+        help="Config file or directory of *.toml files; repeat to merge, later files win.",
+    ),
+]
+_RepoOption = Annotated[Path, typer.Option("--repo", "-r", help="Path to the jj repository.")]
+
 
 class MergeStatus(StrEnum):
     """Filter for ``recent-commits`` by whether a commit has landed in trunk."""
@@ -114,17 +124,8 @@ def callback(
 
 @app.command()
 def run(  # noqa: PLR0913
-    config: Annotated[
-        list[Path] | None,
-        typer.Option(
-            "--config",
-            "-c",
-            help="Config file or directory of *.toml files; repeat to merge, later files win.",
-        ),
-    ] = None,
-    repo: Annotated[
-        Path, typer.Option("--repo", "-r", help="Path to the jj repository.")
-    ] = _DEFAULT_REPO,
+    config: _ConfigOption = None,
+    repo: _RepoOption = _DEFAULT_REPO,
     mode: Annotated[
         RunMode,
         typer.Option(
@@ -180,17 +181,8 @@ def run(  # noqa: PLR0913
 
 @app.command("validate-config")
 def validate_config(
-    config: Annotated[
-        list[Path] | None,
-        typer.Option(
-            "--config",
-            "-c",
-            help="Config file or directory of *.toml files; repeat to merge, later files win.",
-        ),
-    ] = None,
-    repo: Annotated[
-        Path, typer.Option("--repo", "-r", help="Path to the jj repository.")
-    ] = _DEFAULT_REPO,
+    config: _ConfigOption = None,
+    repo: _RepoOption = _DEFAULT_REPO,
 ) -> None:
     """Validate configuration and exit.
 
@@ -205,9 +197,6 @@ def validate_config(
         for file in files:
             typer.echo(f"  {file}")
         cfg = load_config(paths)
-    except ConfigError as e:
-        _error(f"Invalid config {e}")
-        raise typer.Exit(code=1) from e
     except Exception as e:
         _error(f"Invalid config {e}")
         raise typer.Exit(code=1) from e
@@ -236,9 +225,7 @@ def recent_commits(
             help="How far back to look, e.g. '7d', '2w', '24h'. Same format as cooldown_period.",
         ),
     ] = "2w",
-    repo: Annotated[
-        Path, typer.Option("--repo", "-r", help="Path to the jj repository.")
-    ] = _DEFAULT_REPO,
+    repo: _RepoOption = _DEFAULT_REPO,
     merge_status: Annotated[
         MergeStatus,
         typer.Option("--status", "-s", help="Filter by merge status into trunk."),
