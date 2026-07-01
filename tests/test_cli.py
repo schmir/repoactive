@@ -169,7 +169,14 @@ class TestRun:
             patch("repoactive.cli.JJ", return_value=jj),
             patch("repoactive.cli.run_all", return_value=RunSummary()),
         ):
-            result = runner.invoke(app, ["run", "--repo", str(repo), "--config", str(cfg)])
+            # The hint is a rich panel whose prose wraps to the console width
+            # (rich reads COLUMNS); pin it wide so the asserted phrase is not
+            # split across lines when the test runs in a narrow terminal.
+            result = runner.invoke(
+                app,
+                ["run", "--repo", str(repo), "--config", str(cfg)],
+                env={"COLUMNS": "200"},
+            )
         assert result.exit_code == 0
         jj.git_init_colocate.assert_called_once()
         assert "jj git init --colocate" in result.output
