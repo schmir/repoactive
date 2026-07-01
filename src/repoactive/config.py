@@ -533,7 +533,10 @@ def load_config(paths: list[Path]) -> Config:
             merged["job"] = jobs
             merged["platform"] = platforms
             merged.pop("$schema", None)
-            Config.model_validate(merged)  # ensure it's valid after each merge
+            # Validate the cumulative merge so errors are attributed to this
+            # source; forward references to later sources are rejected by
+            # design (docs/adr/0010-validate-config-after-each-source.md).
+            Config.model_validate(merged)
         except (ValueError, ValidationError) as e:
             raise ConfigError(source.label, e) from e
     config = Config.model_validate(merged)

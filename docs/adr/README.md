@@ -52,3 +52,8 @@ it.
   the same run already contains its changes (dependents are stacked on their
   dependencies), so a chain yields a single MR on the topmost non-empty job.
   Per-run only: MRs from earlier runs neither supersede nor get closed.
+- [0010 — Validate the merged config after each source](0010-validate-config-after-each-source.md)
+  — Accepted. `load_config` validates the cumulative merge after every
+  source, so errors are attributed to the file that introduced them and a
+  fragment may only reference jobs defined by earlier-sorted sources —
+  forward cross-file `depends_on` is rejected by design.
