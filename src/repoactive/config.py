@@ -6,9 +6,10 @@ import tomllib
 from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import (
+    AfterValidator,
     BaseModel,
     ConfigDict,
     Field,
@@ -153,34 +154,31 @@ class PlatformConfig(BaseModel):
     token_env: str
 
 
-def _validate_branch_prefix(value: str) -> None:
+def _validate_branch_prefix(value: str) -> str:
     if not _BRANCH_PREFIX_RE.match(value):
         raise InvalidBranchPrefixError(value)
+    return value
+
+
+def _validate_duration(value: str) -> str:
+    parse_duration(value)
+    return value
+
+
+_BranchPrefix = Annotated[str, AfterValidator(_validate_branch_prefix)]
+_Duration = Annotated[str, AfterValidator(_validate_duration)]
 
 
 class JobDefaults(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    branch_prefix: str = "repoactive/"
+    branch_prefix: _BranchPrefix = "repoactive/"
     mr_title_prefix: str = "[repoactive] "
     commit_title_prefix: str = "[repoactive] "
     labels: list[str] = Field(default_factory=list)
     base_branch: str | None = None
-    cooldown_period: str | None = None
-    timeout: str | None = "2m"
-
-    @field_validator("branch_prefix")
-    @classmethod
-    def _check_branch_prefix(cls, value: str) -> str:
-        _validate_branch_prefix(value)
-        return value
-
-    @field_validator("cooldown_period", "timeout")
-    @classmethod
-    def _check_duration(cls, value: str | None) -> str | None:
-        if value is not None:
-            parse_duration(value)
-        return value
+    cooldown_period: _Duration | None = None
+    timeout: _Duration | None = "2m"
 
 
 class Job(BaseModel):
@@ -208,32 +206,18 @@ class Job(BaseModel):
     generated_by: str | None = None
 
     # the following fields will be resolved from the defaults
-    branch_prefix: str | None = None
+    branch_prefix: _BranchPrefix | None = None
     mr_title_prefix: str | None = None
     commit_title_prefix: str | None = None
     labels: list[str] = Field(default_factory=list)
-    cooldown_period: str | None = None
-    timeout: str | None = None
+    cooldown_period: _Duration | None = None
+    timeout: _Duration | None = None
 
     @field_validator("name")
     @classmethod
     def _check_name(cls, value: str) -> str:
         if not _JOB_NAME_RE.match(value):
             raise InvalidJobNameError(value)
-        return value
-
-    @field_validator("branch_prefix")
-    @classmethod
-    def _check_branch_prefix(cls, value: str | None) -> str | None:
-        if value is not None:
-            _validate_branch_prefix(value)
-        return value
-
-    @field_validator("cooldown_period", "timeout")
-    @classmethod
-    def _check_duration(cls, value: str | None) -> str | None:
-        if value is not None:
-            parse_duration(value)
         return value
 
     @field_validator("tags")
