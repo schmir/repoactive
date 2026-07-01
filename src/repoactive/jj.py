@@ -134,29 +134,49 @@ class JJ:
     def __init__(self, cwd: Path) -> None:
         self.cwd = cwd
 
-    def _run(self, *args: str) -> str:
-        logger.debug("jj %s (cwd=%s)", " ".join(args), self.cwd)
+    def _exec(
+        self,
+        program: str,
+        args: tuple[str, ...],
+        *,
+        global_args: tuple[str, ...] = (),
+        cwd: Path | None = None,
+    ) -> str:
+        """Run ``program`` with ``args``, raising CommandFailedError on a non-zero exit.
+
+        ``global_args`` are inserted between the program and ``args`` but kept out
+        of logs and error messages, which show only the caller's ``args``."""
+        run_cwd = cwd or self.cwd
+        logger.debug("%s %s (cwd=%s)", program, " ".join(args), run_cwd)
         start = time.monotonic()
         try:
             result = subprocess.run(
-                ["jj", "--no-pager", "--color=never", *args],
-                cwd=self.cwd,
+                [program, *global_args, *args],
+                cwd=run_cwd,
                 capture_output=True,
                 text=True,
                 check=True,
             )
         except subprocess.CalledProcessError as e:
             logger.debug(
-                "jj %s failed (rc=%s):\n%s", " ".join(args), e.returncode, e.stderr.strip()
+                "%s %s failed (rc=%s):\n%s",
+                program,
+                " ".join(args),
+                e.returncode,
+                e.stderr.strip(),
             )
-            raise CommandFailedError("jj", args, e.stderr) from e
+            raise CommandFailedError(program, args, e.stderr) from e
         logger.debug(
-            "jj %s -> %d bytes in %.3fs",
+            "%s %s -> %d bytes in %.3fs",
+            program,
             " ".join(args),
             len(result.stdout),
             time.monotonic() - start,
         )
         return result.stdout
+
+    def _run(self, *args: str) -> str:
+        return self._exec("jj", args, global_args=("--no-pager", "--color=never"))
 
     def op_id(self) -> str:
         """The current operation id.
@@ -351,22 +371,7 @@ class JJ:
         raise RemoteNotFoundError(remote)
 
     def _git(self, *args: str, cwd: Path | None = None) -> str:
-        run_cwd = cwd or self.cwd
-        logger.debug("git %s (cwd=%s)", " ".join(args), run_cwd)
-        try:
-            result = subprocess.run(
-                ["git", *args],
-                cwd=run_cwd,
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-        except subprocess.CalledProcessError as e:
-            logger.debug(
-                "git %s failed (rc=%s):\n%s", " ".join(args), e.returncode, e.stderr.strip()
-            )
-            raise CommandFailedError("git", args, e.stderr) from e
-        return result.stdout
+        return self._exec("git", args, cwd=cwd)
 
     def is_colocated(self) -> bool:
         return (self.cwd / ".git").exists()
