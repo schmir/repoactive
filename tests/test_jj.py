@@ -1,3 +1,4 @@
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from subprocess import CalledProcessError
 from unittest.mock import MagicMock, call, patch
@@ -14,6 +15,7 @@ from repoactive.jj import (
     NotAJJRepoError,
     NotColocatedGitRepoError,
     RemoteNotFoundError,
+    _jj_timestamp,
     require_colocated_repo,
     require_jj_on_path,
     workspace_name,
@@ -405,3 +407,18 @@ class TestUnmergedJobNames:
         args = mock_run.call_args[0][0]
         assert "log" in args
         assert "~(::trunk())" in args
+
+
+class TestJjTimestamp:
+    def test_strips_microseconds(self) -> None:
+        dt = datetime(2024, 3, 15, 10, 30, 45, 123456, tzinfo=UTC)
+        assert _jj_timestamp(dt) == "2024-03-15T10:30:45+00:00"
+
+    def test_zero_microseconds_unchanged(self) -> None:
+        dt = datetime(2024, 3, 15, 10, 30, 45, 0, tzinfo=UTC)
+        assert _jj_timestamp(dt) == "2024-03-15T10:30:45+00:00"
+
+    def test_preserves_timezone(self) -> None:
+        tz = timezone(timedelta(hours=2))
+        dt = datetime(2024, 6, 1, 12, 0, 0, 999999, tzinfo=tz)
+        assert _jj_timestamp(dt) == "2024-06-01T12:00:00+02:00"

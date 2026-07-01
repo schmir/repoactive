@@ -26,6 +26,14 @@ GIT_ROOT_COMMIT_ID = "0" * 40
 JJ_INSTALL_URL = "https://docs.jj-vcs.dev/latest/install-and-setup/#installation-and-setup"
 
 
+def _jj_timestamp(dt: datetime) -> str:
+    """Format ``dt`` for a jj date filter expression.
+
+    jj's date parser rejects fractional seconds, so microseconds are dropped.
+    """
+    return dt.replace(microsecond=0).isoformat()
+
+
 def workspace_name(job_name: str) -> str:
     """Workspace name repoactive uses for a job's temporary workspace."""
     return f"{WORKSPACE_PREFIX}{job_name}"
@@ -263,8 +271,7 @@ class JJ:
         Pass ``revset="::trunk()"`` for merged commits only,
         ``revset="~(::trunk())"`` for unmerged only.
         """
-        since_iso = since.replace(microsecond=0).isoformat()
-        revset = f'{revset} & committer_date(after:"{since_iso}")'
+        revset = f'{revset} & committer_date(after:"{_jj_timestamp(since)}")'
         # \x1f (ASCII Unit Separator) can't appear in commit subjects, job names, or timestamps,
         # so it's safe as a field delimiter. jj templates use the escape form; Python splits on the
         # actual byte.
@@ -337,9 +344,7 @@ class JJ:
         final paragraph of the description, so a stray matching line in the body
         is correctly ignored.
         """
-        # jj's date parser rejects fractional seconds, so drop microseconds.
-        since_iso = since.replace(microsecond=0).isoformat()
-        revset = f'::{base} & committer_date(after:"{since_iso}")'
+        revset = f'::{base} & committer_date(after:"{_jj_timestamp(since)}")'
         template = f"""
         if (trailers.any(|t| t.key() == "{JOB_TRAILER_KEY}" && t.value() == "{job_name}"),
              "x",
