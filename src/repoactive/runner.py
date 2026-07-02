@@ -254,13 +254,13 @@ def _run_command(
     # Stream the merged stdout/stderr line by line: keep the full output (needed
     # for the commit message and the success result) while feeding a live tail of
     # the last few lines (see repoactive.progress).
-    collected: list[str] = []
+    output_lines: list[str] = []
     view = ProgressView(header=f"==> [{job.name}] running…", lines=progress_lines())
     try:
         assert proc.stdout is not None
         with view:
             for line in proc.stdout:
-                collected.append(line)
+                output_lines.append(line)
                 view.feed(line)
         proc.wait()
     finally:
@@ -273,7 +273,7 @@ def _run_command(
     # On failure report the full output, not just the live tail: in a terminal the
     # live block only showed the last few lines, and piped/CI runs showed nothing,
     # so the complete output is what makes a failure diagnosable.
-    detail = "".join(collected).strip()
+    detail = "".join(output_lines).strip()
     if timed_out.is_set():
         raise CommandError(
             f"command timed out after {job.timeout}" + (f":\n{detail}" if detail else ""),
@@ -285,7 +285,7 @@ def _run_command(
             + (f":\n{detail}" if detail else ""),
             elapsed=elapsed,
         )
-    return CommandResult(output="".join(collected).strip(), elapsed=elapsed)
+    return CommandResult(output="".join(output_lines).strip(), elapsed=elapsed)
 
 
 def _discard_empty_job(  # noqa: PLR0913
