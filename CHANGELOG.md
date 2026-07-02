@@ -7,6 +7,21 @@
   changes, so a dependency chain yields a single MR on the topmost job that
   produced a diff, falling back to the job below when the jobs above came up
   empty (ADR 0009).
+- Anticipated failures — a mistyped job name, no platform matching the git
+  remote, an unset or rejected platform token, an inaccessible repository,
+  or a failing jj/git invocation — are now reported as a clean error line
+  instead of a traceback.
+- An existing MR/PR is now retargeted when a job's `base_branch` changes;
+  previously GitLab silently kept the MR on the old target branch and GitHub
+  opened a duplicate PR next to the stale one.
+- A failing MR create/update is now reported cleanly instead of crashing the
+  run: the failure is recorded for the job, the remaining MR updates are
+  listed as not attempted (the next run re-attempts them; branches are
+  pushed regardless), and the run report still prints before the non-zero
+  exit.
+- A dependency cycle among generator-emitted jobs is now rejected with a
+  clear error naming the generator, instead of crashing the run.
+- `--debug` is now also available on `validate-config` and `recent-commits`.
 
 ## 0.1.0 - 2026-06-27
 
