@@ -34,6 +34,7 @@ from repoactive.platforms import (
 )
 from repoactive.platforms.base import PlatformError
 from repoactive.runner import RunMode, UnknownJobsError, run_all
+from repoactive.settings import SettingsError, load_settings
 from repoactive.ui import print_undo_hint
 
 # Exit code used when another repoactive run already holds the repository lock,
@@ -132,6 +133,13 @@ def callback(
     ] = False,
 ) -> None:
     """Script-driven code changes with automated merge requests."""
+    # Validate the REPOACTIVE_* environment before any command runs, so a
+    # misconfigured variable fails immediately instead of mid-run.
+    try:
+        load_settings()
+    except SettingsError as e:
+        _error(str(e))
+        raise typer.Exit(code=1) from e
 
 
 @app.command()

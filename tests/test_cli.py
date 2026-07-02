@@ -56,6 +56,15 @@ class TestVersion:
         assert result.stdout.strip() == version("repoactive")
 
 
+class TestEnvironmentValidation:
+    def test_invalid_repoactive_ui_fails_before_any_command(self, tmp_path: Path) -> None:
+        result = runner.invoke(
+            app, ["validate-config", "--repo", str(tmp_path)], env={"REPOACTIVE_UI": "bogus"}
+        )
+        assert result.exit_code == 1
+        assert "REPOACTIVE_UI" in result.output
+
+
 class TestValidateConfigShowsLocations:
     def test_lists_single_config_file(self, tmp_path: Path) -> None:
         cfg = tmp_path / "config.toml"
@@ -247,11 +256,12 @@ class TestRun:
         ):
             # The hint is a rich panel whose prose wraps to the console width
             # (rich reads COLUMNS); pin it wide so the asserted phrase is not
-            # split across lines when the test runs in a narrow terminal.
+            # split across lines when the test runs in a narrow terminal. Force
+            # the panel on in case the surrounding environment turned it off.
             result = runner.invoke(
                 app,
                 ["run", "--repo", str(repo), "--config", str(cfg)],
-                env={"COLUMNS": "200"},
+                env={"COLUMNS": "200", "REPOACTIVE_UI": "interactive"},
             )
         assert result.exit_code == 0
         jj.git_init_colocate.assert_called_once()

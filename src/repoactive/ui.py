@@ -15,6 +15,8 @@ from rich.console import Console, Group
 from rich.panel import Panel
 from rich.text import Text
 
+from repoactive.settings import load_settings
+
 # Lazily bound to sys.stdout/sys.stderr at print time, so test runners that
 # redirect those streams still capture the output.
 console = Console()
@@ -26,7 +28,10 @@ def print_undo_hint(*, title: str, body: str, command: str, style: str, err: boo
 
     ``title`` labels the panel border, ``style`` colours the border and command,
     and ``err`` routes the output to stderr (matching ``typer.secho(..., err=...)``).
+    Suppressed entirely when ``REPOACTIVE_UI`` is set to ``noninteractive``.
     """
+    if load_settings().ui == "noninteractive":
+        return
     target = err_console if err else console
     content = Group(Text(body), Text(""), Text(command, style="bold"))
     target.print(Panel(content, title=title, title_align="left", border_style=style, expand=False))

@@ -200,7 +200,10 @@ the run, since a run can produce a lot of output). Run it to roll the
 repository - commits, bookmarks and colocated git refs - back to the state
 it was in before the run. The hint is omitted for
 `--mode push`/`--mode publish` runs, since restoring local state would not
-undo a branch already pushed or an MR already created.
+undo a branch already pushed or an MR already created. Set the
+`REPOACTIVE_UI` environment variable to `noninteractive` to suppress the
+hint panel, e.g. for unattended CI runs (leave it unset where a human may be
+watching — say, a CI container you can log in to).
 
 While a job's command runs in an interactive terminal, repoactive shows a
 live, scrolling block of its most recent output lines. The block stays on

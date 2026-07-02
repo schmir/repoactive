@@ -1617,6 +1617,11 @@ class TestSuppressSupersededMRs:
 
 class TestRunAll:
     @pytest.fixture(autouse=True)
+    def force_interactive(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Force the undo-hint panel on, in case the surrounding env disabled it."""
+        monkeypatch.setenv("REPOACTIVE_UI", "interactive")
+
+    @pytest.fixture(autouse=True)
     def mock_jj(self) -> Iterator[MagicMock]:
         """Stub the JJ class run_all constructs (unmerged_job_names + cooldown query).
 
@@ -2102,6 +2107,11 @@ class TestRunAll:
 
 
 class TestPrepareRepo:
+    @pytest.fixture(autouse=True)
+    def force_interactive(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Force the undo-hint panel on, in case the surrounding env disabled it."""
+        monkeypatch.setenv("REPOACTIVE_UI", "interactive")
+
     @pytest.fixture
     def mock_jj(self) -> Iterator[MagicMock]:
         with patch("repoactive.runner.JJ") as cls:
