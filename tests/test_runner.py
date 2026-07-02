@@ -30,11 +30,11 @@ from repoactive.runner import (
     _select_jobs,
     _select_run_jobs,
     _suppress_superseded_mrs,
-    _topological_sort,
     apply_plan,
     run_all,
     run_generator,
     run_job,
+    topological_sort,
 )
 from repoactive.updates import BookmarkPush, JobUpdate, MRUpdate, UpdatePlan
 
@@ -141,11 +141,11 @@ REPO = Path("/repo")
 class TestTopologicalSort:
     def test_no_deps_preserves_order(self) -> None:
         jobs = [_job("a"), _job("b"), _job("c")]
-        assert [j.name for j in _topological_sort(jobs)] == ["a", "b", "c"]
+        assert [j.name for j in topological_sort(jobs)] == ["a", "b", "c"]
 
     def test_linear_chain(self) -> None:
         a, b, c = _job("a"), _job("b", depends_on=["a"]), _job("c", depends_on=["b"])
-        result = [c.name for c in _topological_sort([c, b, a])]
+        result = [c.name for c in topological_sort([c, b, a])]
         assert result.index("a") < result.index("b") < result.index("c")
 
     def test_diamond(self) -> None:
@@ -153,7 +153,7 @@ class TestTopologicalSort:
         b = _job("b", depends_on=["a"])
         c = _job("c", depends_on=["a"])
         d = _job("d", depends_on=["b", "c"])
-        names = [x.name for x in _topological_sort([d, b, c, a])]
+        names = [x.name for x in topological_sort([d, b, c, a])]
         assert names.index("a") < names.index("b")
         assert names.index("a") < names.index("c")
         assert names.index("b") < names.index("d")

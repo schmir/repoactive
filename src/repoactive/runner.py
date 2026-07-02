@@ -151,7 +151,12 @@ class RunSummary:
         )
 
 
-def _topological_sort(jobs: list[Job]) -> list[Job]:
+def topological_sort(jobs: list[Job]) -> list[Job]:
+    """Order ``jobs`` so every job comes after its dependencies.
+
+    Jobs without an ordering constraint keep their relative input order. All
+    ``depends_on`` targets must be present in ``jobs``.
+    """
     by_name = {j.name: j for j in jobs}
     visited: set[str] = set()
     result: list[Job] = []
@@ -640,7 +645,7 @@ def _select_jobs(
     waiting for the job's next run."""
     requested_tags = requested_tags or set()
     refresh_names = refresh_names or set()
-    jobs = _topological_sort(jobs)
+    jobs = topological_sort(jobs)
 
     unknown = requested_names - {j.name for j in jobs}
     if unknown:
@@ -883,7 +888,7 @@ def _run_jobs(  # noqa: PLR0913
             repo.bookmark_track(
                 *sorted(j.resolve(config.job_defaults).branch_name() for j in emitted)
             )
-            ordered_jobs = _topological_sort(ordered_jobs + emitted)
+            ordered_jobs = topological_sort(ordered_jobs + emitted)
 
 
 def _suppress_superseded_mrs(*, plan: UpdatePlan, results: dict[str, JobResult]) -> None:

@@ -304,6 +304,72 @@ Validation checks include unknown keys, missing required fields, invalid
 | `--config PATH` | `-c`  | Config file or directory of `*.toml` files; repeat to merge. Default: `.repoactive.d/` and `.repoactive.toml` under `--repo` |
 | `--repo PATH`   | `-r`  | jj repository path (default: `.`)                                                                                            |
 
+## Listing jobs
+
+```
+repoactive info jobs [OPTIONS]
+```
+
+Show all configured jobs (including disabled ones) as a dependency tree, in
+topological order: each job is nested under its `depends_on` targets (once
+per parent, so a job with several dependencies appears several times), and
+jobs without dependencies are roots. Each line also shows the job's title
+and effective tags in aligned columns:
+
+```bash
+repoactive info jobs
+```
+
+```
+build           Build the project   enabled
+├── test        Run the test suite  nightly
+│   └── deploy  Deploy to staging   nightly, risky
+└── docs        Build the docs      enabled
+    └── deploy  Deploy to staging   nightly, risky
+```
+
+| Option          | Short | Description                                                                                                                  |
+| --------------- | ----- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `--config PATH` | `-c`  | Config file or directory of `*.toml` files; repeat to merge. Default: `.repoactive.d/` and `.repoactive.toml` under `--repo` |
+| `--repo PATH`   | `-r`  | jj repository path (default: `.`)                                                                                            |
+
+## Listing tags
+
+```
+repoactive info tags [OPTIONS]
+```
+
+Group the configured jobs by tag and print each tag with the jobs carrying
+it. Jobs are grouped by their effective tags — the tags driving job
+selection: a job's explicit `tags`, or the implicit `enabled`/`disabled` tag
+when it has none. Within each tag, jobs are shown as a dependency tree in
+topological order: a job is nested under its `depends_on` targets carrying
+the same tag (once per parent, so a job with several dependencies appears
+several times), while a job whose dependencies all carry other tags stays at
+the root. Each line also shows the job's title and effective tags in aligned
+columns:
+
+```bash
+# List tags from the discovered defaults (.repoactive.d/ and .repoactive.toml)
+repoactive info tags
+
+# List tags from a specific config file or directory
+repoactive info tags --config myconfig.toml
+```
+
+```
+enabled:
+  uv-lock-upgrade      Upgrade uv.lock         enabled
+  └── prek-autoupdate  Autoupdate prek hooks   enabled
+nightly:
+  benchmark            Run nightly benchmarks  nightly
+```
+
+| Option          | Short | Description                                                                                                                  |
+| --------------- | ----- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `--config PATH` | `-c`  | Config file or directory of `*.toml` files; repeat to merge. Default: `.repoactive.d/` and `.repoactive.toml` under `--repo` |
+| `--repo PATH`   | `-r`  | jj repository path (default: `.`)                                                                                            |
+
 ## Configuration
 
 `repoactive` is configured via `.repoactive.toml` in the repository root (or

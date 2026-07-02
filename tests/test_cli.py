@@ -124,6 +124,147 @@ class TestValidateConfigShowsLocations:
         assert f"Invalid config in {missing}:" in result.output
 
 
+class TestInfoJobs:
+    def test_shows_all_jobs_as_dependency_tree(self, tmp_path: Path) -> None:
+        # 'deploy' is defined before its dependencies and 'off' is disabled;
+        # the tree must nest by depends_on and include every job, with title
+        # and effective tags in aligned columns.
+        cfg = tmp_path / "config.toml"
+        cfg.write_text(
+            "[job.deploy]\n"
+            'command = "echo"\n'
+            'title = "Deploy to staging"\n'
+            'tags = ["nightly", "risky"]\n'
+            'depends_on = ["test", "docs"]\n'
+            "[job.test]\n"
+            'command = "echo"\n'
+            'title = "Run the test suite"\n'
+            'tags = ["nightly"]\n'
+            'depends_on = ["build"]\n'
+            "[job.docs]\n"
+            'command = "echo"\n'
+            'title = "Build the docs"\n'
+            'depends_on = ["build"]\n'
+            "[job.build]\n"
+            'command = "echo"\n'
+            'title = "Build the project"\n'
+            "[job.off]\n"
+            'command = "echo"\n'
+            'title = "Disabled job"\n'
+            "disabled = true\n"
+        )
+        result = runner.invoke(app, ["info", "jobs", "--config", str(cfg)])
+        assert result.exit_code == 0
+        assert result.stdout == (
+            "build           Build the project   enabled\n"
+            "├── test        Run the test suite  nightly\n"
+            "│   └── deploy  Deploy to staging   nightly, risky\n"
+            "└── docs        Build the docs      enabled\n"
+            "    └── deploy  Deploy to staging   nightly, risky\n"
+            "off             Disabled job        disabled\n"
+        )
+
+    def test_invalid_config_reports_error(self, tmp_path: Path) -> None:
+        cfg = tmp_path / "config.toml"
+        cfg.write_text("[job.a]\nbogus = true\n")
+        result = runner.invoke(app, ["info", "jobs", "--config", str(cfg)])
+        assert result.exit_code == 1
+        assert f"Invalid config in {cfg}:" in result.output
+
+    def test_missing_config_reports_error(self, tmp_path: Path) -> None:
+        result = runner.invoke(app, ["info", "jobs", "--repo", str(tmp_path)])
+        assert result.exit_code == 1
+        assert "no configuration found" in result.output
+
+
+class TestInfoTags:
+    def test_groups_jobs_by_tag_as_dependency_tree(self, tmp_path: Path) -> None:
+        # nightly-b depends on nightly-a but is defined first; it must be
+        # nested under nightly-a, not listed in config or name order.
+        cfg = tmp_path / "config.toml"
+        cfg.write_text(
+            "[job.plain]\n"
+            'command = "echo"\n'
+            'title = "plain"\n'
+            "[job.nightly-b]\n"
+            'command = "echo"\n'
+            'title = "nightly-b"\n'
+            'tags = ["nightly"]\n'
+            'depends_on = ["nightly-a"]\n'
+            "[job.nightly-a]\n"
+            'command = "echo"\n'
+            'title = "nightly-a"\n'
+            'tags = ["nightly", "risky"]\n'
+            "[job.off]\n"
+            'command = "echo"\n'
+            'title = "off"\n'
+            "disabled = true\n"
+        )
+        result = runner.invoke(app, ["info", "tags", "--config", str(cfg)])
+        assert result.exit_code == 0
+        assert result.stdout == (
+            "disabled:\n"
+            "  off            off        disabled\n"
+            "enabled:\n"
+            "  plain          plain      enabled\n"
+            "nightly:\n"
+            "  nightly-a      nightly-a  nightly, risky\n"
+            "  └── nightly-b  nightly-b  nightly\n"
+            "risky:\n"
+            "  nightly-a      nightly-a  nightly, risky\n"
+        )
+
+    def test_diamond_dependency_shows_job_under_each_parent(self, tmp_path: Path) -> None:
+        cfg = tmp_path / "config.toml"
+        for name, deps in (("a", []), ("b", ["a"]), ("c", ["a"]), ("d", ["b", "c"])):
+            with cfg.open("a") as f:
+                f.write(f'[job.{name}]\ncommand = "echo"\ntitle = "{name}"\n')
+                if deps:
+                    f.write(f"depends_on = {json.dumps(deps)}\n")
+        result = runner.invoke(app, ["info", "tags", "--config", str(cfg)])
+        assert result.exit_code == 0
+        assert result.stdout == (
+            "enabled:\n"
+            "  a          a  enabled\n"
+            "  ├── b      b  enabled\n"
+            "  │   └── d  d  enabled\n"
+            "  └── c      c  enabled\n"
+            "      └── d  d  enabled\n"
+        )
+
+    def test_cross_tag_dependency_does_not_break_sorting(self, tmp_path: Path) -> None:
+        # 'child' carries a tag its dependency does not; the sort runs over all
+        # jobs, so this must not fail on the missing dependency within the tag.
+        cfg = tmp_path / "config.toml"
+        cfg.write_text(
+            "[job.child]\n"
+            'command = "echo"\n'
+            'title = "child"\n'
+            'tags = ["nightly"]\n'
+            'depends_on = ["parent"]\n'
+            "[job.parent]\n"
+            'command = "echo"\n'
+            'title = "parent"\n'
+        )
+        result = runner.invoke(app, ["info", "tags", "--config", str(cfg)])
+        assert result.exit_code == 0
+        assert result.stdout == (
+            "enabled:\n  parent  parent  enabled\nnightly:\n  child   child   nightly\n"
+        )
+
+    def test_invalid_config_reports_error(self, tmp_path: Path) -> None:
+        cfg = tmp_path / "config.toml"
+        cfg.write_text("[job.a]\nbogus = true\n")
+        result = runner.invoke(app, ["info", "tags", "--config", str(cfg)])
+        assert result.exit_code == 1
+        assert f"Invalid config in {cfg}:" in result.output
+
+    def test_missing_config_reports_error(self, tmp_path: Path) -> None:
+        result = runner.invoke(app, ["info", "tags", "--repo", str(tmp_path)])
+        assert result.exit_code == 1
+        assert "no configuration found" in result.output
+
+
 class TestRun:
     def test_runs_jobs_and_succeeds(self, tmp_path: Path) -> None:
         repo = _make_repo(tmp_path)

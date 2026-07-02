@@ -12,6 +12,7 @@ from repoactive.config import (
     Config,
     ConfigError,
     ConfigNotFoundError,
+    Job,
     default_config_paths,
     expand_config_paths,
     load_config,
@@ -33,7 +34,7 @@ from repoactive.platforms import (
     get_platform,
 )
 from repoactive.platforms.base import PlatformError
-from repoactive.runner import RunMode, UnknownJobsError, run_all
+from repoactive.runner import RunMode, UnknownJobsError, run_all, topological_sort
 from repoactive.settings import SettingsError, load_settings
 from repoactive.ui import print_undo_hint
 
@@ -43,6 +44,8 @@ from repoactive.ui import print_undo_hint
 LOCK_HELD_EXIT_CODE = 2
 
 app = typer.Typer(no_args_is_help=True)
+info_app = typer.Typer(no_args_is_help=True)
+app.add_typer(info_app, name="info", help="Show information about the configured jobs.")
 
 _DEFAULT_REPO = Path()
 
@@ -77,6 +80,18 @@ class MergeStatus(StrEnum):
 def _resolve_config(config_paths: list[Path] | None, repo: Path) -> list[Path]:
     """Use the given config paths, or discover defaults inside ``repo``."""
     return config_paths or default_config_paths(repo)
+
+
+def _load_config_or_exit(config_paths: list[Path] | None, repo: Path) -> Config:
+    """Load the config, or print a clean error and exit non-zero."""
+    try:
+        return load_config(_resolve_config(config_paths, repo))
+    except ConfigNotFoundError as e:
+        _error(str(e))
+        raise typer.Exit(code=1) from e
+    except ConfigError as e:
+        _error(f"Invalid config {e}")
+        raise typer.Exit(code=1) from e
 
 
 def _error(message: str) -> None:
@@ -175,14 +190,7 @@ def run(  # noqa: PLR0913
     """Apply jobs locally; pass --mode push or --mode publish to publish."""
     _setup_logging(debug)
     _check_jj()
-    try:
-        cfg = load_config(_resolve_config(config_paths, repo))
-    except ConfigNotFoundError as e:
-        _error(str(e))
-        raise typer.Exit(code=1) from e
-    except ConfigError as e:
-        _error(f"Invalid config {e}")
-        raise typer.Exit(code=1) from e
+    cfg = _load_config_or_exit(config_paths, repo)
     _ensure_colocated_repo(repo)
     try:
         platform = get_platform(cfg, repo) if mode is RunMode.publish else None
@@ -237,6 +245,109 @@ def validate_config(
         _error(f"Invalid config {e}")
         raise typer.Exit(code=1) from e
     typer.echo(f"Config OK: {len(cfg.jobs)} job(s) defined.")
+
+
+def _format_job_forest(jobs: list[Job]) -> list[tuple[str, Job]]:
+    """Render ``jobs`` as a dependency forest: one (tree label, job) row per line.
+
+    ``jobs`` must be topologically sorted. A job is nested under each of its
+    dependencies present in ``jobs`` (so a job with several parents yields one
+    row per parent); a job none of whose dependencies are present is a root.
+    """
+    children: dict[str, list[Job]] = {j.name: [] for j in jobs}
+    roots: list[Job] = []
+    for job in jobs:
+        parents = [name for name in job.depends_on if name in children]
+        for parent in parents:
+            children[parent].append(job)
+        if not parents:
+            roots.append(job)
+
+    rows: list[tuple[str, Job]] = []
+
+    def render(job: Job, prefix: str) -> None:
+        kids = children[job.name]
+        for kid in kids[:-1]:
+            rows.append((f"{prefix}├── {kid.name}", kid))
+            render(kid, f"{prefix}│   ")
+        for kid in kids[-1:]:
+            rows.append((f"{prefix}└── {kid.name}", kid))
+            render(kid, f"{prefix}    ")
+
+    for root in roots:
+        rows.append((root.name, root))
+        render(root, "")
+    return rows
+
+
+def _format_job_table(
+    rows: list[tuple[str, Job]], widths_from: list[tuple[str, Job]] | None = None
+) -> list[str]:
+    """Align forest ``rows`` into columns: tree label, title, effective tags.
+
+    Column widths are computed over ``widths_from`` (default: ``rows``), so
+    several tables can share one alignment.
+    """
+    if not rows:
+        return []
+    widths_from = widths_from or rows
+    label_width = max(len(label) for label, _ in widths_from)
+    title_width = max(len(job.title) for _, job in widths_from)
+    return [
+        f"{label:<{label_width}}  {job.title:<{title_width}}  "
+        + ", ".join(sorted(job.effective_tags()))
+        for label, job in rows
+    ]
+
+
+@info_app.command("jobs")
+def info_jobs(
+    config_paths: _ConfigOption = None,
+    repo: _RepoOption = _DEFAULT_REPO,
+    debug: _DebugOption = False,
+) -> None:
+    """Show all configured jobs as a dependency tree.
+
+    Jobs are printed in topological order, each nested under its depends_on
+    targets (once per parent); jobs without dependencies are roots. Each line
+    also shows the job's title and effective tags in aligned columns.
+    """
+    _setup_logging(debug)
+    cfg = _load_config_or_exit(config_paths, repo)
+    for line in _format_job_table(_format_job_forest(topological_sort(cfg.jobs))):
+        typer.echo(line)
+
+
+@info_app.command("tags")
+def info_tags(
+    config_paths: _ConfigOption = None,
+    repo: _RepoOption = _DEFAULT_REPO,
+    debug: _DebugOption = False,
+) -> None:
+    """List tags with the jobs carrying each tag.
+
+    Jobs are grouped by their effective tags, i.e. the tags driving job
+    selection: a job's explicit tags, or the implicit 'enabled'/'disabled'
+    tag when it has none. Within each tag, jobs are shown as a dependency
+    tree in topological order: a job is nested under its dependencies that
+    carry the same tag, and dependencies in other tags leave it at the root.
+    Each line also shows the job's title and effective tags in aligned columns.
+    """
+    _setup_logging(debug)
+    cfg = _load_config_or_exit(config_paths, repo)
+    jobs_by_tag: dict[str, list[Job]] = {}
+    # Sort all jobs at once: a per-tag sort would break on dependencies whose
+    # tags differ from the dependent's.
+    for job in topological_sort(cfg.jobs):
+        for tag in job.effective_tags():
+            jobs_by_tag.setdefault(tag, []).append(job)
+    forests = {tag: _format_job_forest(jobs) for tag, jobs in jobs_by_tag.items()}
+    # Share one alignment across all tag tables.
+    all_rows = [row for rows in forests.values() for row in rows]
+    for tag in sorted(forests):
+        typer.echo(f"{tag}:")
+        for line in _format_job_table(forests[tag], all_rows):
+            typer.echo(f"  {line}")
 
 
 @app.command("dump-schema")
