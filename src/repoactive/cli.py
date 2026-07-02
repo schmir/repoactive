@@ -179,7 +179,7 @@ def run(  # noqa: PLR0913
             config=cfg,
             repo_path=repo,
             platform=platform,
-            requested_jobs=jobs or None,
+            requested_names=jobs or None,
             requested_tags=tags or None,
             mode=mode,
         )

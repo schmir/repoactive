@@ -104,7 +104,7 @@ class TestRun:
         kwargs = run_all.call_args.kwargs
         assert kwargs["repo_path"] == repo
         assert kwargs["mode"] is RunMode.local
-        assert kwargs["requested_jobs"] is None
+        assert kwargs["requested_names"] is None
         assert kwargs["requested_tags"] is None
         assert kwargs["platform"] is None
 
@@ -190,7 +190,7 @@ class TestRun:
             )
         assert result.exit_code == 0
         kwargs = run_all.call_args.kwargs
-        assert kwargs["requested_jobs"] == ["a"]
+        assert kwargs["requested_names"] == ["a"]
         assert kwargs["requested_tags"] == ["x"]
 
     def test_publish_mode_resolves_platform(self, tmp_path: Path) -> None:

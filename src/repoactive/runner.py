@@ -616,9 +616,9 @@ def _include_dependencies(jobs: list[Job], selected: set[str]) -> None:
 def _select_jobs(
     *,
     jobs: list[Job],
-    requested_jobs: set[str],
+    requested_names: set[str],
     requested_tags: set[str] | None = None,
-    refresh_jobs: set[str] | None = None,
+    refresh_names: set[str] | None = None,
 ) -> list[Job]:
     """Return the filtered, topologically sorted jobs to run.
 
@@ -629,21 +629,21 @@ def _select_jobs(
     matching any requested tag (``DEFAULT_TAG`` is not implied), with all
     dependencies force-included.
 
-    ``refresh_jobs`` (jobs that currently have an unmerged branch) are
-    force-included regardless of tag, along with their dependencies, so the
-    default run keeps unmerged branches rebased on trunk rather than waiting for
-    the job's next run."""
+    ``refresh_names`` names the jobs that currently have an unmerged branch;
+    they are force-included regardless of tag, along with their dependencies,
+    so the default run keeps unmerged branches rebased on trunk rather than
+    waiting for the job's next run."""
     requested_tags = requested_tags or set()
-    refresh_jobs = refresh_jobs or set()
+    refresh_names = refresh_names or set()
     jobs = _topological_sort(jobs)
 
-    unknown = requested_jobs - {j.name for j in jobs}
+    unknown = requested_names - {j.name for j in jobs}
     if unknown:
         raise UnknownJobsError(unknown)
 
     selected: set[str]
-    if requested_jobs or requested_tags:
-        selected = set(requested_jobs)
+    if requested_names or requested_tags:
+        selected = set(requested_names)
         selected.update(j.name for j in jobs if j.effective_tags() & requested_tags)
         _include_dependencies(jobs, selected)
     else:
@@ -653,17 +653,17 @@ def _select_jobs(
                 print(f"==> [{j.name}] skipped (dependency not in default run)")
                 selected.remove(j.name)
 
-    if refresh_jobs:
-        selected.update(refresh_jobs & {j.name for j in jobs})
+    if refresh_names:
+        selected.update(refresh_names & {j.name for j in jobs})
         _include_dependencies(jobs, selected)
 
     result = [j for j in jobs if j.name in selected]
     logger.debug(
         "selected jobs: %s (requested=%s, tags=%s, refresh=%s)",
         [j.name for j in result],
-        sorted(requested_jobs),
+        sorted(requested_names),
         sorted(requested_tags),
-        sorted(refresh_jobs),
+        sorted(refresh_names),
     )
     return result
 
@@ -672,24 +672,24 @@ def _select_run_jobs(
     *,
     config: Config,
     repo: JJ,
-    requested_jobs: list[str] | None,
+    requested_names: list[str] | None,
     requested_tags: list[str] | None,
 ) -> list[Job]:
     """Pick and order the jobs to run, accounting for unmerged-branch refresh."""
     # On the bare default run, also refresh jobs with an unmerged branch so a
     # stale branch is rebased on trunk now rather than at the job's next run.
-    refresh_jobs: set[str] = set()
-    if not requested_jobs and not requested_tags:
-        refresh_jobs = repo.unmerged_job_names() & {j.name for j in config.jobs}
-        if refresh_jobs:
-            print(f"==> refreshing unmerged branches: {', '.join(sorted(refresh_jobs))}")
+    refresh_names: set[str] = set()
+    if not requested_names and not requested_tags:
+        refresh_names = repo.unmerged_job_names() & {j.name for j in config.jobs}
+        if refresh_names:
+            print(f"==> refreshing unmerged branches: {', '.join(sorted(refresh_names))}")
         else:
             print("==> no unmerged branches to refresh")
     return _select_jobs(
         jobs=config.jobs,
-        requested_jobs=set(requested_jobs or []),
+        requested_names=set(requested_names or []),
         requested_tags=set(requested_tags or []),
-        refresh_jobs=refresh_jobs,
+        refresh_names=refresh_names,
     )
 
 
@@ -918,7 +918,7 @@ def run_all(  # noqa: PLR0913
     config: Config,
     repo_path: Path,
     platform: Platform | None = None,
-    requested_jobs: list[str] | None = None,
+    requested_names: list[str] | None = None,
     requested_tags: list[str] | None = None,
     mode: RunMode = RunMode.local,
 ) -> RunSummary:
@@ -932,10 +932,10 @@ def run_all(  # noqa: PLR0913
     # concurrent run's live workspaces. Fail-fast if another run holds the lock.
     with run_lock(repo_path), _prepare_repo(config=config, repo_path=repo_path) as repo:
         logger.debug(
-            "run_all: repo=%s mode=%s requested_jobs=%s requested_tags=%s",
+            "run_all: repo=%s mode=%s requested_names=%s requested_tags=%s",
             repo_path,
             mode,
-            requested_jobs,
+            requested_names,
             requested_tags,
         )
 
@@ -943,7 +943,7 @@ def run_all(  # noqa: PLR0913
             _select_run_jobs(
                 config=config,
                 repo=repo,
-                requested_jobs=requested_jobs,
+                requested_names=requested_names,
                 requested_tags=requested_tags,
             )
         )
