@@ -1228,6 +1228,19 @@ class TestBuildGeneratedJobs:
                 run_names={"gen"},
             )
 
+    def test_sibling_cycle_raises(self) -> None:
+        specs = {
+            "a": {"command": "c", "title": "A", "depends_on": ["b"]},
+            "b": {"command": "c", "title": "B", "depends_on": ["a"]},
+        }
+        with pytest.raises(GeneratedJobError, match="Circular dependency"):
+            _build_generated_jobs(generator=_gen(), specs=specs, run_names={"gen"})
+
+    def test_self_dependency_raises(self) -> None:
+        specs = {"a": {"command": "c", "title": "A", "depends_on": ["a"]}}
+        with pytest.raises(GeneratedJobError, match="Circular dependency"):
+            _build_generated_jobs(generator=_gen(), specs=specs, run_names={"gen"})
+
     def test_unknown_dependency_raises(self) -> None:
         with pytest.raises(GeneratedJobError, match="not in this run"):
             _build_generated_jobs(

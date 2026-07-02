@@ -18,10 +18,12 @@ from pydantic import ValidationError
 
 from repoactive.config import (
     DEFAULT_TAG,
+    CircularDependencyError,
     Config,
     CreateMR,
     Job,
     _merge_jobs,
+    detect_dependency_cycle,
     expand_config_paths,
     jobs_table,
 )
@@ -554,9 +556,11 @@ def _build_generated_jobs(
 ) -> list[Job]:
     """Turn a generator's raw specs into validated ``Job`` objects.
 
-    Validates each spec (see ``_build_generated_job``) and then that every
+    Validates each spec (see ``_build_generated_job``), that every
     ``depends_on`` target is within this run (the existing jobs or a sibling
-    emitted job). ``generator`` must be resolved (its inherited fields filled in).
+    emitted job), and that the emitted jobs are acyclic — a cycle would
+    otherwise silently mis-order the topological sort and crash the run.
+    ``generator`` must be resolved (its inherited fields filled in).
     """
     emitted = [
         _build_generated_job(generator=generator, name=name, spec=spec, run_names=run_names)
@@ -570,6 +574,12 @@ def _build_generated_jobs(
                 generator.name,
                 f"emitted job {j.name!r} depends_on jobs not in this run: {sorted(unknown)}",
             )
+    # A cycle can only run through emitted jobs: the existing jobs were
+    # validated acyclic and cannot depend on emitted names.
+    try:
+        detect_dependency_cycle({j.name: j.depends_on for j in emitted})
+    except CircularDependencyError as e:
+        raise GeneratedJobError(generator.name, str(e)) from e
     return emitted
 
 

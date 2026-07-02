@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import re
 import tomllib
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import timedelta
 from enum import StrEnum
@@ -317,6 +318,33 @@ class Job(BaseModel):
         )
 
 
+def detect_dependency_cycle(deps_by_name: Mapping[str, Sequence[str]]) -> None:
+    """Raise CircularDependencyError if the dependency graph contains a cycle.
+
+    ``deps_by_name`` maps each job name to its ``depends_on`` list. A
+    dependency naming a job outside the mapping is ignored: it belongs to an
+    already-validated job set, which cannot depend back into this one (used
+    when checking a generator's emitted jobs against the running set).
+    """
+    visiting: set[str] = set()
+    visited: set[str] = set()
+
+    def visit(name: str) -> None:
+        if name in visiting:
+            raise CircularDependencyError(name)
+        if name in visited:
+            return
+        visiting.add(name)
+        for dep in deps_by_name[name]:
+            if dep in deps_by_name:
+                visit(dep)
+        visiting.discard(name)
+        visited.add(name)
+
+    for name in deps_by_name:
+        visit(name)
+
+
 class Config(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
@@ -351,23 +379,7 @@ class Config(BaseModel):
             unknown = set(job.depends_on) - names
             if unknown:
                 raise UnknownDependencyError(job.name, sorted(unknown))
-        by_name = {j.name: j for j in self.jobs}
-        visiting: set[str] = set()
-        visited: set[str] = set()
-
-        def detect_cycle(name: str) -> None:
-            if name in visiting:
-                raise CircularDependencyError(name)
-            if name in visited:
-                return
-            visiting.add(name)
-            for dep in by_name[name].depends_on:
-                detect_cycle(dep)
-            visiting.discard(name)
-            visited.add(name)
-
-        for job in self.jobs:
-            detect_cycle(job.name)
+        detect_dependency_cycle({j.name: j.depends_on for j in self.jobs})
         return self
 
     def _resolved_jobs(self) -> list[Job]:
