@@ -25,7 +25,7 @@ PROGRESS_LINES_ENV = "REPOACTIVE_PROGRESS_LINES"
 DEFAULT_PROGRESS_LINES = 8
 
 
-def progress_lines() -> int:
+def progress_line_count() -> int:
     """How many output lines to show, from ``REPOACTIVE_PROGRESS_LINES``.
 
     Defaults to ``DEFAULT_PROGRESS_LINES`` and falls back to it on a non-integer
@@ -41,20 +41,21 @@ def progress_lines() -> int:
 
 
 class ProgressView:
-    """A live tail of the last ``lines`` output lines.
+    """A live tail of the last ``max_lines`` output lines.
 
     Use as a context manager around a streaming read loop, calling ``feed`` for
     each line. On exit the block's final lines are left on screen (non-transient
-    Live). When disabled — ``lines <= 0`` or stdout is not a terminal — nothing is
-    drawn, but ``feed`` still tracks the most recent lines, queryable via ``tail``.
+    Live). When disabled — ``max_lines <= 0`` or stdout is not a terminal — nothing
+    is drawn, but ``feed`` still tracks the most recent lines, queryable via
+    ``tail``.
     """
 
-    def __init__(self, *, header: str, lines: int, console: Console | None = None) -> None:
+    def __init__(self, *, header: str, max_lines: int, console: Console | None = None) -> None:
         self._header = header
         self._console = console or Console()
-        self._tail_lines: deque[str] = deque(maxlen=max(lines, 0))
+        self._tail_lines: deque[str] = deque(maxlen=max(max_lines, 0))
         # Only drive Live when there is something to show and somewhere to show it.
-        self.enabled = lines > 0 and self._console.is_terminal
+        self.enabled = max_lines > 0 and self._console.is_terminal
         # transient=False leaves the final block on screen when the Live stops.
         self._live = Live(console=self._console, transient=False, refresh_per_second=12)
 
@@ -75,7 +76,7 @@ class ProgressView:
             self._live.update(self._render())
 
     def tail(self) -> list[str]:
-        """The most recent lines kept (the last ``lines`` fed)."""
+        """The most recent lines kept (the last ``max_lines`` fed)."""
         return list(self._tail_lines)
 
     def _render(self) -> Group:

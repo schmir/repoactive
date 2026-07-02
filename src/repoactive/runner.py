@@ -30,7 +30,7 @@ from repoactive.config import (
 from repoactive.jj import JJ, workspace_name
 from repoactive.lock import run_lock
 from repoactive.platforms.base import MRParams, Platform
-from repoactive.progress import ProgressView, progress_lines
+from repoactive.progress import ProgressView, progress_line_count
 from repoactive.ui import print_undo_hint
 from repoactive.updates import (
     BookmarkPush,
@@ -255,7 +255,7 @@ def _run_command(
     # for the commit message and the success result) while feeding a live tail of
     # the last few lines (see repoactive.progress).
     output_lines: list[str] = []
-    view = ProgressView(header=f"==> [{job.name}] running…", lines=progress_lines())
+    view = ProgressView(header=f"==> [{job.name}] running…", max_lines=progress_line_count())
     try:
         assert proc.stdout is not None
         with view:
@@ -486,7 +486,11 @@ def _load_job_specs(jobs_dir: Path) -> dict[str, dict]:
 
 
 def run_generator(
-    *, job: Job, parents: list[str], repo_path: Path, secret_env_names: frozenset[str] = frozenset()
+    *,
+    job: Job,
+    parents: list[str],
+    repo_path: Path,
+    secret_env_names: frozenset[str] = frozenset(),
 ) -> dict[str, dict]:
     """Run a generator job and return the raw job specs it emitted, keyed by name.
 
@@ -785,7 +789,9 @@ def _run_generator_job(  # noqa: PLR0913
     dependents, exactly like an ordinary job failure."""
     start = time.monotonic()
     try:
-        specs = run_generator(job=job, parents=parents, repo_path=repo_path, secret_env_names=secret_env_names)
+        specs = run_generator(
+            job=job, parents=parents, repo_path=repo_path, secret_env_names=secret_env_names
+        )
         emitted = _build_generated_jobs(generator=job, specs=specs, run_names=run_names)
     except Exception as e:
         elapsed = e.elapsed if isinstance(e, CommandError) else time.monotonic() - start
@@ -794,9 +800,7 @@ def _run_generator_job(  # noqa: PLR0913
         blocked.add(job.name)
         return []
 
-    summary.results[job.name] = JobResult(
-        job=job, effective_revsets=parents, produced_diff=False
-    )
+    summary.results[job.name] = JobResult(job=job, effective_revsets=parents, produced_diff=False)
     names = ", ".join(j.name for j in emitted) if emitted else "none"
     print(f"==> [{job.name}] generated {len(emitted)} job(s): {names}")
     return emitted
