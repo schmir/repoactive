@@ -112,7 +112,7 @@ Run flow (a refinement of `run_all` / `_select_run_jobs`):
    parses and merges them, applies tag/`depends_on` inheritance, and inserts
    the new jobs into the run.
 3. Re-topologically-sort and run the expanded set. The generator's own
-   `JobResult` (empty, `produced_output=False`) is retained so a dependent's
+   `JobResult` (empty, `produced_diff=False`) is retained so a dependent's
    `_compute_parents` resolves through it to `trunk()`.
 4. Track the emitted jobs' bookmarks (`bookmark_track`) before running them,
    so a branch an earlier run already pushed for a generated job is

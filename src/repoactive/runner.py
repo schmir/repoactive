@@ -113,7 +113,7 @@ class JobResult:
     # the command produced a diff) or the parent revsets the change was based
     # on (if the command produced nothing and the change was abandoned).
     effective_revsets: list[str]
-    produced_output: bool
+    produced_diff: bool
     # Pending remote operations for this job, collected during the run and
     # carried out later by apply_plan. None for cooldown/local runs.
     update: JobUpdate | None = None
@@ -140,9 +140,9 @@ class RunSummary:
         # whose MR failed at apply time is in results and failed - so count the
         # union of names, not the sum of the buckets.
         total = len(self.results.keys() | self.failed.keys() | self.skipped)
-        produced = sum(1 for r in self.results.values() if r.produced_output)
+        produced = sum(1 for r in self.results.values() if r.produced_diff)
         print(
-            f"\nDone: {produced}/{total} produced output"
+            f"\nDone: {produced}/{total} produced changes"
             + (f", {len(self.failed)} failed" if self.failed else "")
             + (f", {len(self.skipped)} skipped" if self.skipped else "")
             + (f", {len(self.cooldown)} on cooldown" if self.cooldown else "")
@@ -302,7 +302,7 @@ def _discard_empty_job(  # noqa: PLR0913
     Abandons the empty change so it leaves no commit behind. If the job's
     bookmark already existed (from an earlier run that did produce a diff), it
     is now stale, so the bookmark is deleted locally and a deletion is recorded
-    for the apply phase to push. Returns a JobResult with produced_output=False,
+    for the apply phase to push. Returns a JobResult with produced_diff=False,
     carrying the original parents forward so dependents still have a base.
     """
     ws.abandon()
@@ -322,7 +322,7 @@ def _discard_empty_job(  # noqa: PLR0913
     return JobResult(
         job=job,
         effective_revsets=parents,
-        produced_output=False,
+        produced_diff=False,
         update=update,
         command_output=command_result.output,
     )
@@ -368,7 +368,7 @@ def _commit_job(
     Points the job's bookmark at the change and writes its commit message. The
     push and (when the job wants one) the MR are not carried out here; they are
     recorded on the returned JobResult for the apply phase. Returns a JobResult
-    with produced_output=True, whose effective_revsets is the bookmark so
+    with produced_diff=True, whose effective_revsets is the bookmark so
     dependents build on this change.
     """
     stat = ws.diff_stat()
@@ -410,7 +410,7 @@ def _commit_job(
     return JobResult(
         job=job,
         effective_revsets=[bookmark],
-        produced_output=True,
+        produced_diff=True,
         update=update,
         command_output=command_result.output,
     )
@@ -729,7 +729,7 @@ def _run_one_job(  # noqa: PLR0913
         summary.cooldown.add(job.name)
         # Treat like a no-op run so dependents proceed on the base branch.
         summary.results[job.name] = JobResult(
-            job=resolved_job, effective_revsets=parents, produced_output=False
+            job=resolved_job, effective_revsets=parents, produced_diff=False
         )
         return []
 
@@ -795,7 +795,7 @@ def _run_generator_job(  # noqa: PLR0913
         return []
 
     summary.results[job.name] = JobResult(
-        job=job, effective_revsets=parents, produced_output=False
+        job=job, effective_revsets=parents, produced_diff=False
     )
     names = ", ".join(j.name for j in emitted) if emitted else "none"
     print(f"==> [{job.name}] generated {len(emitted)} job(s): {names}")

@@ -67,7 +67,7 @@ def _job(  # noqa: PLR0913
 
 
 def _result(job: Job, *, revsets: list[str], produced: bool = True) -> JobResult:
-    return JobResult(job=job, effective_revsets=revsets, produced_output=produced)
+    return JobResult(job=job, effective_revsets=revsets, produced_diff=produced)
 
 
 def _mock_popen(mock_popen: MagicMock, *, output: str = "", returncode: int = 0) -> MagicMock:
@@ -448,7 +448,7 @@ class TestRunOneJob:
             )
         assert summary.cooldown == {"a"}
         # A no-op result is recorded so dependents proceed on the base branch.
-        assert summary.results["a"].produced_output is False
+        assert summary.results["a"].produced_diff is False
         assert summary.results["a"].effective_revsets == ["trunk()"]
         assert plan.updates == []
         mock_run_job.assert_not_called()
@@ -456,7 +456,7 @@ class TestRunOneJob:
     def test_success_records_result(self) -> None:
         config = _config(_job("a"))
         job_a = config.jobs[0]
-        result = JobResult(job=job_a, effective_revsets=["repoactive/a"], produced_output=True)
+        result = JobResult(job=job_a, effective_revsets=["repoactive/a"], produced_diff=True)
         summary = RunSummary()
         plan = UpdatePlan()
         with (
@@ -485,7 +485,7 @@ class TestRunOneJob:
         result = JobResult(
             job=job_a,
             effective_revsets=["repoactive/a"],
-            produced_output=True,
+            produced_diff=True,
             update=update,
         )
         summary = RunSummary()
@@ -793,7 +793,7 @@ class TestRunJob:
         # The push is recorded for the apply phase, not performed during the run.
         mock_jj.git_push_bookmarks.assert_not_called()
         mock_jj.abandon.assert_not_called()
-        assert result.produced_output is True
+        assert result.produced_diff is True
         assert result.effective_revsets == ["repoactive/foo"]
         assert result.update is not None
         assert result.update.push == BookmarkPush(bookmark="repoactive/foo")
@@ -884,7 +884,7 @@ class TestRunJob:
         mock_jj.bookmark_set.assert_not_called()
         mock_jj.bookmark_delete.assert_not_called()
         mock_jj.git_push_bookmarks.assert_not_called()
-        assert result.produced_output is False
+        assert result.produced_diff is False
         assert result.effective_revsets == ["trunk()"]
 
     @patch("repoactive.runner.JJ")
@@ -904,7 +904,7 @@ class TestRunJob:
         # The remote deletion is deferred: recorded as a delete push, not pushed now.
         mock_jj.git_push_bookmarks.assert_not_called()
         mock_jj.bookmark_set.assert_not_called()
-        assert result.produced_output is False
+        assert result.produced_diff is False
         assert result.effective_revsets == ["trunk()"]
         assert result.update is not None
         assert result.update.push == BookmarkPush(bookmark="repoactive/foo", delete=True)
@@ -1078,7 +1078,7 @@ class TestRunJob:
         result = run_job(job=job, parents=["trunk()"], repo_path=REPO)
 
         assert result.mr_url is None
-        assert result.produced_output is True
+        assert result.produced_diff is True
         # A push is still recorded, but with no MR.
         assert result.update is not None
         assert result.update.push == BookmarkPush(bookmark="repoactive/foo")
@@ -1685,7 +1685,7 @@ class TestRunAll:
         assert summary.failed == {"a": boom}
         assert not summary.ok
         # The report still prints, and "a" is not double-counted in the total.
-        assert "Done: 1/1 produced output, 1 failed." in capsys.readouterr().out
+        assert "Done: 1/1 produced changes, 1 failed." in capsys.readouterr().out
 
     @patch("repoactive.runner.run_job")
     def test_unless_superseded_mr_dropped_from_plan(
@@ -1876,7 +1876,7 @@ class TestRunAll:
 
         mock_run_job.assert_not_called()
         assert summary.cooldown == {"a"}
-        assert summary.results["a"].produced_output is False
+        assert summary.results["a"].produced_diff is False
         assert summary.ok  # cooldown is not a failure
 
     @patch("repoactive.runner.run_job")
@@ -2033,7 +2033,7 @@ class TestRunAll:
         called = {c.kwargs["job"].name for c in mock_run_job.call_args_list}
         assert called == {"child"}
         # The generator itself records a no-op result so dependents parent on it.
-        assert summary.results["gen"].produced_output is False
+        assert summary.results["gen"].produced_diff is False
 
     @patch("repoactive.runner.run_job")
     @patch(
