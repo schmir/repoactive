@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class BookmarkPush(BaseModel):
@@ -45,7 +45,7 @@ class MRUpdate(BaseModel):
     command_output: str
     labels: list[str]
     draft: bool
-    depends_on: list[str] = []
+    depends_on: list[str] = Field(default_factory=list)
 
 
 class JobUpdate(BaseModel):
@@ -64,7 +64,7 @@ class JobUpdate(BaseModel):
 class UpdatePlan(BaseModel):
     """All pending remote operations from a run, in topological order."""
 
-    updates: list[JobUpdate] = []
+    updates: list[JobUpdate] = Field(default_factory=list)
 
 
 @dataclass(frozen=True)
