@@ -19,6 +19,7 @@ from repoactive.config import (
 )
 from repoactive.jj import (
     JJ,
+    JJError,
     JJNotFoundError,
     NotAColocatedRepoError,
     NotColocatedGitRepoError,
@@ -26,8 +27,12 @@ from repoactive.jj import (
     require_jj_on_path,
 )
 from repoactive.lock import RunLockHeldError
-from repoactive.platforms import get_platform
-from repoactive.runner import RunMode, run_all
+from repoactive.platforms import (
+    NoPlatformConfiguredError,
+    PlatformTokenNotSetError,
+    get_platform,
+)
+from repoactive.runner import RunMode, UnknownJobsError, run_all
 from repoactive.ui import print_undo_hint
 
 # Exit code used when another repoactive run already holds the repository lock,
@@ -162,8 +167,8 @@ def run(  # noqa: PLR0913
         _error(f"Invalid config {e}")
         raise typer.Exit(code=1) from e
     _ensure_colocated_repo(repo)
-    platform = get_platform(cfg, repo) if mode is RunMode.publish else None
     try:
+        platform = get_platform(cfg, repo) if mode is RunMode.publish else None
         summary = run_all(
             config=cfg,
             repo_path=repo,
@@ -175,6 +180,12 @@ def run(  # noqa: PLR0913
     except RunLockHeldError as e:
         _error(str(e))
         raise typer.Exit(code=LOCK_HELD_EXIT_CODE) from e
+    except (UnknownJobsError, JJError, NoPlatformConfiguredError, PlatformTokenNotSetError) as e:
+        # Anticipated failures (a mistyped job name, no matching platform, an
+        # unset token, a failing jj/git invocation) get a clean error line, not
+        # a traceback.
+        _error(str(e))
+        raise typer.Exit(code=1) from e
     if not summary.ok:
         raise typer.Exit(code=1)
 
@@ -259,7 +270,11 @@ def recent_commits(
             revset = "all()"
 
     cutoff = datetime.now(UTC) - delta
-    commits = JJ(repo).recent_job_commits(cutoff, revset=revset)
+    try:
+        commits = JJ(repo).recent_job_commits(cutoff, revset=revset)
+    except JJError as e:
+        _error(str(e))
+        raise typer.Exit(code=1) from e
 
     filter_names = set(jobs) if jobs else None
     # A commit may carry several Repoactive-Job trailers (a generated job records

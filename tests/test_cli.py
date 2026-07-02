@@ -7,9 +7,10 @@ from unittest.mock import MagicMock, patch
 from typer.testing import CliRunner
 
 from repoactive.cli import LOCK_HELD_EXIT_CODE, app
-from repoactive.jj import JobCommit
+from repoactive.jj import CommandFailedError, JobCommit
 from repoactive.lock import RunLockHeldError
-from repoactive.runner import RunMode, RunSummary
+from repoactive.platforms import PlatformTokenNotSetError
+from repoactive.runner import RunMode, RunSummary, UnknownJobsError
 
 runner = CliRunner()
 
@@ -102,6 +103,45 @@ class TestRun:
             result = runner.invoke(app, ["run", "--repo", str(repo), "--config", str(cfg)])
         assert result.exit_code == LOCK_HELD_EXIT_CODE
         assert "Error: another repoactive run is in progress" in result.output
+
+    def test_unknown_job_reports_error_without_traceback(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path)
+        cfg = repo / "config.toml"
+        _write_job(cfg, "a")
+        err = UnknownJobsError({"nope"})
+        with patch("repoactive.cli.run_all", side_effect=err):
+            result = runner.invoke(app, ["run", "--repo", str(repo), "--config", str(cfg), "nope"])
+        assert result.exit_code == 1
+        assert "Error: Unknown job(s): nope" in result.output
+        assert "Traceback" not in result.output
+
+    def test_jj_failure_reports_error_without_traceback(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path)
+        cfg = repo / "config.toml"
+        _write_job(cfg, "a")
+        err = CommandFailedError("jj", ("git", "push"), "remote rejected")
+        with patch("repoactive.cli.run_all", side_effect=err):
+            result = runner.invoke(app, ["run", "--repo", str(repo), "--config", str(cfg)])
+        assert result.exit_code == 1
+        assert "Error: jj git push failed" in result.output
+        assert "Traceback" not in result.output
+
+    def test_unset_platform_token_reports_error_without_traceback(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path)
+        cfg = repo / "config.toml"
+        _write_job(cfg, "a")
+        err = PlatformTokenNotSetError("GITHUB_TOKEN")
+        with (
+            patch("repoactive.cli.get_platform", side_effect=err),
+            patch("repoactive.cli.run_all") as run_all,
+        ):
+            result = runner.invoke(
+                app, ["run", "--repo", str(repo), "--config", str(cfg), "--mode", "publish"]
+            )
+        assert result.exit_code == 1
+        assert "Error: Platform token not set" in result.output
+        assert "Traceback" not in result.output
+        run_all.assert_not_called()
 
     def test_passes_jobs_and_tags(self, tmp_path: Path) -> None:
         repo = _make_repo(tmp_path)
@@ -233,6 +273,16 @@ class TestRecentCommits:
         repo = _make_repo(tmp_path)
         result = runner.invoke(app, ["recent-commits", "--repo", str(repo), "--within", "nope"])
         assert result.exit_code == 1
+
+    def test_jj_failure_reports_error_without_traceback(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path)
+        jj = MagicMock()
+        jj.recent_job_commits.side_effect = CommandFailedError("jj", ("log",), "no trunk()")
+        with patch("repoactive.cli.JJ", return_value=jj):
+            result = runner.invoke(app, ["recent-commits", "--repo", str(repo)])
+        assert result.exit_code == 1
+        assert "Error: jj log failed" in result.output
+        assert "Traceback" not in result.output
 
     def test_no_commits_reports_message(self, tmp_path: Path) -> None:
         repo = _make_repo(tmp_path)
