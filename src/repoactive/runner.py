@@ -697,7 +697,7 @@ def _select_run_jobs(
     )
 
 
-def _run_one_job(  # noqa: PLR0913
+def _dispatch_job(  # noqa: PLR0913
     *,
     job: Job,
     config: Config,
@@ -866,7 +866,7 @@ def _run_jobs(  # noqa: PLR0913
             break
         job = pending[0]
         started.add(job.name)
-        emitted = _run_one_job(
+        emitted = _dispatch_job(
             job=job,
             config=config,
             repo_path=repo_path,

@@ -23,10 +23,10 @@ from repoactive.runner import (
     _build_commit_message,
     _build_generated_jobs,
     _compute_parents,
+    _dispatch_job,
     _load_job_specs,
     _prepare_repo,
     _run_command,
-    _run_one_job,
     _select_jobs,
     _select_run_jobs,
     _suppress_superseded_mrs,
@@ -414,7 +414,7 @@ class TestRunOneJob:
         blocked = {"a"}
         plan = UpdatePlan()
         with patch("repoactive.runner.run_job") as mock_run_job:
-            _run_one_job(
+            _dispatch_job(
                 job=job_b,
                 config=config,
                 repo_path=REPO,
@@ -437,7 +437,7 @@ class TestRunOneJob:
             patch("repoactive.runner._on_cooldown", return_value=True),
             patch("repoactive.runner.run_job") as mock_run_job,
         ):
-            _run_one_job(
+            _dispatch_job(
                 job=job_a,
                 config=config,
                 repo_path=REPO,
@@ -463,7 +463,7 @@ class TestRunOneJob:
             patch("repoactive.runner._on_cooldown", return_value=False),
             patch("repoactive.runner.run_job", return_value=result) as mock_run_job,
         ):
-            _run_one_job(
+            _dispatch_job(
                 job=job_a,
                 config=config,
                 repo_path=REPO,
@@ -494,7 +494,7 @@ class TestRunOneJob:
             patch("repoactive.runner._on_cooldown", return_value=False),
             patch("repoactive.runner.run_job", return_value=result),
         ):
-            _run_one_job(
+            _dispatch_job(
                 job=job_a,
                 config=config,
                 repo_path=REPO,
@@ -515,7 +515,7 @@ class TestRunOneJob:
             patch("repoactive.runner._on_cooldown", return_value=False),
             patch("repoactive.runner.run_job", side_effect=err),
         ):
-            _run_one_job(
+            _dispatch_job(
                 job=job_a,
                 config=config,
                 repo_path=REPO,
@@ -538,7 +538,7 @@ class TestRunOneJob:
             patch("repoactive.runner._on_cooldown", return_value=False),
             patch("repoactive.runner.run_job", side_effect=err),
         ):
-            _run_one_job(
+            _dispatch_job(
                 job=job_a,
                 config=config,
                 repo_path=REPO,
