@@ -52,7 +52,7 @@ class ProgressView:
     def __init__(self, *, header: str, lines: int, console: Console | None = None) -> None:
         self._header = header
         self._console = console or Console()
-        self._deque: deque[str] = deque(maxlen=max(lines, 0))
+        self._tail_lines: deque[str] = deque(maxlen=max(lines, 0))
         # Only drive Live when there is something to show and somewhere to show it.
         self.enabled = lines > 0 and self._console.is_terminal
         # transient=False leaves the final block on screen when the Live stops.
@@ -70,17 +70,17 @@ class ProgressView:
 
     def feed(self, line: str) -> None:
         """Record one output line and refresh the live block (if drawing)."""
-        self._deque.append(line.rstrip("\n"))
+        self._tail_lines.append(line.rstrip("\n"))
         if self.enabled:
             self._live.update(self._render())
 
     def tail(self) -> list[str]:
         """The most recent lines kept (the last ``lines`` fed)."""
-        return list(self._deque)
+        return list(self._tail_lines)
 
     def _render(self) -> Group:
         body = [
             Text(f"  | {line}", style="dim", no_wrap=True, overflow="ellipsis")
-            for line in self._deque
+            for line in self._tail_lines
         ]
         return Group(Text(self._header), *body)
