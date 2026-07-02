@@ -752,7 +752,7 @@ class TestRunCommand:
             branch_prefix="repoactive/",
             commit_title_prefix="",
         )
-        result = _run_command(job, tmp_path, secret_env=frozenset({"GITHUB_TOKEN"}))
+        result = _run_command(job, tmp_path, secret_env_names=frozenset({"GITHUB_TOKEN"}))
 
         assert "token=[unset]" in result.output
         assert "supersecret" not in result.output

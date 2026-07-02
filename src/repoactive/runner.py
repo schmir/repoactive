@@ -193,17 +193,17 @@ def _kill_process_group(proc: subprocess.Popen[str]) -> None:
 
 
 def _command_env(
-    *, extra_env: dict[str, str] | None, secret_env: frozenset[str]
+    *, extra_env: dict[str, str] | None, secret_env_names: frozenset[str]
 ) -> dict[str, str]:
     """The environment a job command runs in.
 
     Starts from the inherited environment (so the command still sees PATH etc.),
-    drops the platform token variables (``secret_env``) so a command cannot read
+    drops the platform token variables (``secret_env_names``) so a command cannot read
     the credential repoactive uses to push/create MRs, then layers on ``extra_env``
     (e.g. REPOACTIVE_JOBS_DIR for a generator). See
     docs/adr/0006-job-commands-are-trusted.md.
     """
-    env = {k: v for k, v in os.environ.items() if k not in secret_env}
+    env = {k: v for k, v in os.environ.items() if k not in secret_env_names}
     if extra_env:
         env.update(extra_env)
     return env
@@ -213,7 +213,7 @@ def _run_command(
     job: Job,
     cwd: Path,
     *,
-    secret_env: frozenset[str] = frozenset(),
+    secret_env_names: frozenset[str] = frozenset(),
     extra_env: dict[str, str] | None = None,
 ) -> CommandResult:
     start = time.monotonic()
@@ -231,7 +231,7 @@ def _run_command(
         encoding="utf-8",
         errors="replace",
         start_new_session=True,
-        env=_command_env(extra_env=extra_env, secret_env=secret_env),
+        env=_command_env(extra_env=extra_env, secret_env_names=secret_env_names),
     )
 
     # The blocking read below cannot be interrupted by a timeout, so a watchdog
@@ -421,7 +421,7 @@ def run_job(
     job: Job,
     parents: list[str],
     repo_path: Path,
-    secret_env: frozenset[str] = frozenset(),
+    secret_env_names: frozenset[str] = frozenset(),
 ) -> JobResult:
     logger.debug("starting job: %s", job.model_dump_json(indent=2))
     logger.debug("parents: %s", parents)
@@ -441,7 +441,7 @@ def run_job(
         ws.git_sync_head()
         logger.debug("[%s] running command: %s", job.name, job.command)
         try:
-            command_result = _run_command(job, ws.cwd, secret_env=secret_env)
+            command_result = _run_command(job, ws.cwd, secret_env_names=secret_env_names)
         except CommandError:
             # The command timed out or failed; discard its partial change.
             ws.abandon()
@@ -486,7 +486,7 @@ def _load_job_specs(jobs_dir: Path) -> dict[str, dict]:
 
 
 def run_generator(
-    *, job: Job, parents: list[str], repo_path: Path, secret_env: frozenset[str] = frozenset()
+    *, job: Job, parents: list[str], repo_path: Path, secret_env_names: frozenset[str] = frozenset()
 ) -> dict[str, dict]:
     """Run a generator job and return the raw job specs it emitted, keyed by name.
 
@@ -509,7 +509,7 @@ def run_generator(
                 _run_command(
                     job,
                     ws.cwd,
-                    secret_env=secret_env,
+                    secret_env_names=secret_env_names,
                     extra_env={REPOACTIVE_JOBS_DIR_ENV: str(jobs_dir)},
                 )
             except CommandError:
@@ -733,7 +733,7 @@ def _run_one_job(  # noqa: PLR0913
         )
         return []
 
-    secret_env = frozenset(config.token_env_names())
+    secret_env_names = frozenset(config.token_env_names())
     if resolved_job.emits_jobs:
         return _run_generator_job(
             job=resolved_job,
@@ -742,7 +742,7 @@ def _run_one_job(  # noqa: PLR0913
             summary=summary,
             blocked=blocked,
             run_names=run_names,
-            secret_env=secret_env,
+            secret_env_names=secret_env_names,
         )
 
     start = time.monotonic()
@@ -751,7 +751,7 @@ def _run_one_job(  # noqa: PLR0913
             job=resolved_job,
             parents=parents,
             repo_path=repo_path,
-            secret_env=secret_env,
+            secret_env_names=secret_env_names,
         )
         summary.results[job.name] = result
         if result.update is not None:
@@ -775,7 +775,7 @@ def _run_generator_job(  # noqa: PLR0913
     summary: RunSummary,
     blocked: set[str],
     run_names: set[str],
-    secret_env: frozenset[str],
+    secret_env_names: frozenset[str],
 ) -> list[Job]:
     """Run a generator and return its emitted jobs (resolved ``job`` required).
 
@@ -785,7 +785,7 @@ def _run_generator_job(  # noqa: PLR0913
     dependents, exactly like an ordinary job failure."""
     start = time.monotonic()
     try:
-        specs = run_generator(job=job, parents=parents, repo_path=repo_path, secret_env=secret_env)
+        specs = run_generator(job=job, parents=parents, repo_path=repo_path, secret_env_names=secret_env_names)
         emitted = _build_generated_jobs(generator=job, specs=specs, run_names=run_names)
     except Exception as e:
         elapsed = e.elapsed if isinstance(e, CommandError) else time.monotonic() - start
