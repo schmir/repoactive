@@ -844,8 +844,9 @@ def _run_jobs(  # noqa: PLR0913
     """Run ``ordered_jobs`` in topological order, expanding generators in place.
 
     ``ordered_jobs`` is topologically sorted, so the first job not yet in
-    ``done`` always has its dependencies satisfied: every job ahead of it in the
-    order is already done (were one not, *it* would be the first not-done job).
+    ``started`` always has its dependencies satisfied: every job ahead of it in
+    the order has already run (were one not, *it* would be the first
+    not-started job).
     A generator's emitted jobs are appended and the list re-sorted so each runs
     after its dependencies (the generator included); the next iteration picks
     them up once their turn comes. See docs/adr/0004-job-generators.md.
@@ -854,13 +855,13 @@ def _run_jobs(  # noqa: PLR0913
     """
     # Names of jobs that failed or were skipped - their dependents are blocked.
     blocked: set[str] = set()
-    done: set[str] = set()
+    started: set[str] = set()
     while True:
-        pending = [j for j in ordered_jobs if j.name not in done]
+        pending = [j for j in ordered_jobs if j.name not in started]
         if not pending:
             break
         job = pending[0]
-        done.add(job.name)
+        started.add(job.name)
         emitted = _run_one_job(
             job=job,
             config=config,
