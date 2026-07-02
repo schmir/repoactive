@@ -998,6 +998,7 @@ def _run_jobs(  # noqa: PLR0913
                 *sorted(j.resolve(config.job_defaults).branch_name() for j in emitted)
             )
             ordered_jobs = topological_sort(ordered_jobs + emitted)
+            print_job_table(format_job_forest(ordered_jobs), indent="  ")
 
 
 def _suppress_superseded_mrs(*, plan: UpdatePlan, results: dict[str, JobResult]) -> None:
