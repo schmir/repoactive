@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+from rich.logging import RichHandler
 
 from repoactive.config import (
     Config,
@@ -36,7 +37,7 @@ from repoactive.platforms import (
 from repoactive.platforms.base import PlatformError
 from repoactive.runner import RunMode, UnknownJobsError, run_all, topological_sort
 from repoactive.settings import SettingsError, load_settings
-from repoactive.ui import print_undo_hint
+from repoactive.ui import err_console, print_undo_hint
 
 # Exit code used when another repoactive run already holds the repository lock,
 # kept distinct from the generic failure code (1) so a scheduler can tell
@@ -62,11 +63,27 @@ _DebugOption = Annotated[bool, typer.Option("--debug", "-d", help="Enable debug 
 
 
 def _setup_logging(debug: bool) -> None:
-    """Configure logging from --debug or, failing that, REPOACTIVE_LOG_LEVEL."""
+    """Configure logging from --debug or, failing that, REPOACTIVE_LOG_LEVEL.
+
+    Logs render through rich unless REPOACTIVE_LOG_HANDLER=plain selects the
+    stdlib's default stream handler.
+    """
+    settings = load_settings()
     if debug:
-        logging.basicConfig(level=logging.DEBUG)
-    elif (level := load_settings().log_level) is not None:
-        logging.basicConfig(level=level.upper())
+        level: int | str = logging.DEBUG
+    elif settings.log_level is not None:
+        level = settings.log_level.upper()
+    else:
+        return
+    if settings.log_handler == "plain":
+        logging.basicConfig(level=level)
+    else:
+        logging.basicConfig(
+            level=level,
+            format="%(message)s",
+            datefmt="[%X]",
+            handlers=[RichHandler(console=err_console)],
+        )
 
 
 class MergeStatus(StrEnum):

@@ -10,7 +10,7 @@ mid-run.
 
 from typing import Literal
 
-from pydantic import ValidationError, field_validator
+from pydantic import ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ENV_PREFIX = "REPOACTIVE_"
@@ -33,10 +33,23 @@ class Settings(BaseSettings):
     # --debug on every invocation. The --debug flag takes precedence.
     log_level: Literal["debug", "info", "warning", "error", "critical"] | None = None
 
-    @field_validator("ui", "log_level", mode="before")
+    # Set REPOACTIVE_LOG_HANDLER to choose how log records are rendered:
+    # "rich" (colourised column layout) or "plain" (the stdlib's default
+    # stream handler, e.g. when the output is collected by a log aggregator).
+    # When unset, it follows REPOACTIVE_UI: plain for noninteractive, rich
+    # otherwise.
+    log_handler: Literal["rich", "plain"] | None = None
+
+    @field_validator("ui", "log_level", "log_handler", mode="before")
     @classmethod
     def _lowercase(cls, value: object) -> object:
         return value.lower() if isinstance(value, str) else value
+
+    @model_validator(mode="after")
+    def _default_log_handler_from_ui(self) -> "Settings":
+        if self.log_handler is None:
+            self.log_handler = "plain" if self.ui == "noninteractive" else "rich"
+        return self
 
 
 def load_settings() -> Settings:

@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from rich.logging import RichHandler
 from typer.testing import CliRunner
 
 from repoactive.cli import LOCK_HELD_EXIT_CODE, _setup_logging, app
@@ -63,13 +64,29 @@ class TestSetupLogging:
         monkeypatch.setenv("REPOACTIVE_LOG_LEVEL", "warning")
         with patch("logging.basicConfig") as basic_config:
             _setup_logging(debug=True)
-        basic_config.assert_called_once_with(level=logging.DEBUG)
+        basic_config.assert_called_once()
+        assert basic_config.call_args.kwargs["level"] == logging.DEBUG
 
     def test_env_sets_level(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("REPOACTIVE_LOG_LEVEL", "info")
         with patch("logging.basicConfig") as basic_config:
             _setup_logging(debug=False)
-        basic_config.assert_called_once_with(level="INFO")
+        basic_config.assert_called_once()
+        assert basic_config.call_args.kwargs["level"] == "INFO"
+
+    def test_logs_go_through_rich_handler(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("REPOACTIVE_LOG_HANDLER", raising=False)
+        monkeypatch.delenv("REPOACTIVE_UI", raising=False)
+        with patch("logging.basicConfig") as basic_config:
+            _setup_logging(debug=True)
+        (handler,) = basic_config.call_args.kwargs["handlers"]
+        assert isinstance(handler, RichHandler)
+
+    def test_plain_handler_uses_stdlib_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("REPOACTIVE_LOG_HANDLER", "plain")
+        with patch("logging.basicConfig") as basic_config:
+            _setup_logging(debug=True)
+        basic_config.assert_called_once_with(level=logging.DEBUG)
 
     def test_unset_leaves_logging_unconfigured(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("REPOACTIVE_LOG_LEVEL", raising=False)

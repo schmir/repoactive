@@ -197,7 +197,12 @@ repoactive run --debug
 Instead of passing `--debug` on every invocation, set the
 `REPOACTIVE_LOG_LEVEL` environment variable to `debug`, `info`, `warning`,
 `error`, or `critical` to enable logging at that level (the `--debug` flag
-takes precedence).
+takes precedence). Log records render through
+[rich](https://github.com/Textualize/rich) by default; set
+`REPOACTIVE_LOG_HANDLER=plain` to use the stdlib's plain stream handler
+instead, e.g. when the output is collected by a log aggregator. When
+`REPOACTIVE_LOG_HANDLER` is unset, `REPOACTIVE_UI=noninteractive` also
+switches the log handler to `plain`.
 
 A local `run` (the default `--mode local`) captures the jj operation id
 beforehand and prints a `jj op restore <id>` command (both before and after
