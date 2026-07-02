@@ -22,11 +22,15 @@ class GitHubPlatform(Platform):
 
     def ensure_mr(self, params: MRParams) -> str:
         owner = self._repo.owner.login
+        # Look up by head only: filtering on base would miss the PR after the
+        # job's base_branch changed, and a new PR would be opened next to the
+        # stale one. The edit below retargets the base instead. (GitHub allows
+        # several open PRs from one head to different bases; the first match is
+        # updated.)
         existing = list(
             self._repo.get_pulls(
                 state="open",
                 head=f"{owner}:{params.source_branch}",
-                base=params.target_branch,
             )
         )
         if existing:
@@ -34,6 +38,7 @@ class GitHubPlatform(Platform):
             pr.edit(
                 title=params.title,
                 body=params.description,
+                base=params.target_branch,
                 # PyGithub does not support converting to/from draft via edit;
                 # draft state can only be set at creation time.
             )

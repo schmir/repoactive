@@ -13,8 +13,9 @@ from repoactive.platforms import (
     _match_platform,
     get_platform,
 )
-from repoactive.platforms.base import extract_host, parse_repo_from_url
+from repoactive.platforms.base import MRParams, extract_host, parse_repo_from_url
 from repoactive.platforms.github import GitHubPlatform
+from repoactive.platforms.gitlab import GitLabPlatform
 
 
 class TestParseRepoFromUrl:
@@ -111,6 +112,126 @@ class TestGitHubPlatformInit:
     def test_none_url_uses_default_api_url(self, mock_github: MagicMock) -> None:
         GitHubPlatform(url=None, token="tok", repo="owner/repo")
         mock_github.assert_called_once_with("tok", base_url="https://api.github.com")
+
+
+def _mr_params(**overrides: object) -> MRParams:
+    defaults: dict = {
+        "source_branch": "repoactive/a",
+        "target_branch": "develop",
+        "title": "Change a",
+        "description": "desc",
+        "labels": ["auto"],
+        "draft": False,
+    }
+    defaults.update(overrides)
+    return MRParams(**defaults)
+
+
+class TestGitHubEnsureMR:
+    def _platform(self, mock_github: MagicMock) -> tuple[GitHubPlatform, MagicMock]:
+        repo = mock_github.return_value.get_repo.return_value
+        repo.owner.login = "owner"
+        return GitHubPlatform(url=None, token="tok", repo="owner/repo"), repo
+
+    @patch("repoactive.platforms.github.Github")
+    def test_updates_and_retargets_existing_pr(self, mock_github: MagicMock) -> None:
+        platform, repo = self._platform(mock_github)
+        pr = MagicMock()
+        pr.html_url = "https://example.com/pull/1"
+        repo.get_pulls.return_value = [pr]
+
+        url = platform.ensure_mr(_mr_params())
+
+        # Looked up by head only - a base filter would miss the PR after the
+        # job's base_branch changed.
+        repo.get_pulls.assert_called_once_with(state="open", head="owner:repoactive/a")
+        pr.edit.assert_called_once_with(title="Change a", body="desc", base="develop")
+        pr.set_labels.assert_called_once_with("auto")
+        repo.create_pull.assert_not_called()
+        assert url == "https://example.com/pull/1"
+
+    @patch("repoactive.platforms.github.Github")
+    def test_creates_pr_when_none_open(self, mock_github: MagicMock) -> None:
+        platform, repo = self._platform(mock_github)
+        repo.get_pulls.return_value = []
+        repo.create_pull.return_value.html_url = "https://example.com/pull/2"
+
+        url = platform.ensure_mr(_mr_params(draft=True))
+
+        repo.create_pull.assert_called_once_with(
+            title="Change a",
+            body="desc",
+            head="repoactive/a",
+            base="develop",
+            draft=True,
+        )
+        repo.create_pull.return_value.set_labels.assert_called_once_with("auto")
+        assert url == "https://example.com/pull/2"
+
+    @patch("repoactive.platforms.github.Github")
+    def test_create_without_labels_skips_set_labels(self, mock_github: MagicMock) -> None:
+        platform, repo = self._platform(mock_github)
+        repo.get_pulls.return_value = []
+
+        platform.ensure_mr(_mr_params(labels=[]))
+
+        repo.create_pull.return_value.set_labels.assert_not_called()
+
+
+class TestGitLabEnsureMR:
+    def _platform(self, mock_gitlab: MagicMock) -> tuple[GitLabPlatform, MagicMock]:
+        project = mock_gitlab.Gitlab.return_value.projects.get.return_value
+        return GitLabPlatform(url=None, token="tok", repo="ns/repo"), project
+
+    @patch("repoactive.platforms.gitlab.gitlab")
+    def test_updates_and_retargets_existing_mr(self, mock_gitlab: MagicMock) -> None:
+        platform, project = self._platform(mock_gitlab)
+        mr = MagicMock()
+        mr.web_url = "https://example.com/mr/1"
+        project.mergerequests.list.return_value = [mr]
+
+        url = platform.ensure_mr(_mr_params())
+
+        project.mergerequests.list.assert_called_once_with(
+            source_branch="repoactive/a", state="opened", iterator=False
+        )
+        assert mr.title == "Change a"
+        assert mr.description == "desc"
+        assert mr.labels == ["auto"]
+        # Retargeted in case the job's base_branch changed since creation.
+        assert mr.target_branch == "develop"
+        mr.save.assert_called_once_with()
+        project.mergerequests.create.assert_not_called()
+        assert url == "https://example.com/mr/1"
+
+    @patch("repoactive.platforms.gitlab.gitlab")
+    def test_draft_prefixes_title_on_update(self, mock_gitlab: MagicMock) -> None:
+        platform, project = self._platform(mock_gitlab)
+        mr = MagicMock()
+        project.mergerequests.list.return_value = [mr]
+
+        platform.ensure_mr(_mr_params(draft=True))
+
+        assert mr.title == "Draft: Change a"
+
+    @patch("repoactive.platforms.gitlab.gitlab")
+    def test_creates_mr_when_none_open(self, mock_gitlab: MagicMock) -> None:
+        platform, project = self._platform(mock_gitlab)
+        project.mergerequests.list.return_value = []
+        project.mergerequests.create.return_value.web_url = "https://example.com/mr/2"
+
+        url = platform.ensure_mr(_mr_params())
+
+        project.mergerequests.create.assert_called_once_with(
+            {
+                "source_branch": "repoactive/a",
+                "target_branch": "develop",
+                "title": "Change a",
+                "description": "desc",
+                "labels": ["auto"],
+            }
+        )
+        assert url == "https://example.com/mr/2"
 
 
 REPO = Path("/repo")

@@ -29,6 +29,9 @@ class GitLabPlatform(Platform):
             mr.title = title
             mr.description = params.description
             mr.labels = params.labels
+            # Retarget in case the job's base_branch changed since the MR was
+            # created.
+            mr.target_branch = params.target_branch
             mr.save()
         else:
             mr = self._project.mergerequests.create(
