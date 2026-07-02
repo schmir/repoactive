@@ -1,6 +1,6 @@
-from github import Github
+from github import Github, GithubException
 
-from repoactive.platforms.base import MRParams, Platform
+from repoactive.platforms.base import MRParams, Platform, PlatformError
 
 _DEFAULT_API_URL = "https://api.github.com"
 _PUBLIC_GITHUB_URL = "https://github.com"
@@ -15,7 +15,10 @@ class GitHubPlatform(Platform):
             else _DEFAULT_API_URL
         )
         self._gh = Github(token, base_url=base_url)
-        self._repo = self._gh.get_repo(repo)
+        try:
+            self._repo = self._gh.get_repo(repo)
+        except GithubException as e:
+            raise PlatformError("GitHub", repo, e) from e
 
     def default_branch(self) -> str:
         return self._repo.default_branch

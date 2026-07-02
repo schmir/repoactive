@@ -1,6 +1,7 @@
 import gitlab
+from gitlab.exceptions import GitlabError
 
-from repoactive.platforms.base import MRParams, Platform
+from repoactive.platforms.base import MRParams, Platform, PlatformError
 
 _DRAFT_PREFIX = "Draft: "
 
@@ -12,7 +13,10 @@ def _mr_title(title: str, *, draft: bool) -> str:
 class GitLabPlatform(Platform):
     def __init__(self, *, url: str | None, token: str, repo: str) -> None:
         self._gl = gitlab.Gitlab(url or "https://gitlab.com", private_token=token)
-        self._project = self._gl.projects.get(repo)
+        try:
+            self._project = self._gl.projects.get(repo)
+        except GitlabError as e:
+            raise PlatformError("GitLab", repo, e) from e
 
     def default_branch(self) -> str:
         return self._project.default_branch

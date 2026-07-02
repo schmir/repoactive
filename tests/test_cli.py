@@ -11,6 +11,7 @@ from repoactive.cli import LOCK_HELD_EXIT_CODE, app
 from repoactive.jj import CommandFailedError, JobCommit
 from repoactive.lock import RunLockHeldError
 from repoactive.platforms import PlatformTokenNotSetError
+from repoactive.platforms.base import PlatformError
 from repoactive.runner import RunMode, RunSummary, UnknownJobsError
 
 runner = CliRunner()
@@ -164,6 +165,19 @@ class TestRun:
         assert "Error: Platform token not set" in result.output
         assert "Traceback" not in result.output
         run_all.assert_not_called()
+
+    def test_rejected_platform_token_reports_error_without_traceback(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path)
+        cfg = repo / "config.toml"
+        _write_job(cfg, "a")
+        err = PlatformError("GitHub", "o/r", RuntimeError("401 Bad credentials"))
+        with patch("repoactive.cli.get_platform", side_effect=err):
+            result = runner.invoke(
+                app, ["run", "--repo", str(repo), "--config", str(cfg), "--mode", "publish"]
+            )
+        assert result.exit_code == 1
+        assert "Error: GitHub: cannot access repository" in result.output
+        assert "Traceback" not in result.output
 
     def test_passes_jobs_and_tags(self, tmp_path: Path) -> None:
         repo = _make_repo(tmp_path)

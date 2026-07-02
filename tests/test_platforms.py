@@ -5,6 +5,8 @@ from typing import Literal
 from unittest.mock import MagicMock, patch
 
 import pytest
+from github import GithubException
+from gitlab.exceptions import GitlabAuthenticationError
 
 from repoactive.config import Config, PlatformConfig, load_config
 from repoactive.platforms import (
@@ -13,7 +15,7 @@ from repoactive.platforms import (
     _match_platform,
     get_platform,
 )
-from repoactive.platforms.base import MRParams, extract_host, parse_repo_from_url
+from repoactive.platforms.base import MRParams, PlatformError, extract_host, parse_repo_from_url
 from repoactive.platforms.github import GitHubPlatform
 from repoactive.platforms.gitlab import GitLabPlatform
 
@@ -112,6 +114,26 @@ class TestGitHubPlatformInit:
     def test_none_url_uses_default_api_url(self, mock_github: MagicMock) -> None:
         GitHubPlatform(url=None, token="tok", repo="owner/repo")
         mock_github.assert_called_once_with("tok", base_url="https://api.github.com")
+
+    @patch("repoactive.platforms.github.Github")
+    def test_inaccessible_repo_raises_platform_error(self, mock_github: MagicMock) -> None:
+        # A rejected token or unknown repo surfaces as a PlatformError, not a
+        # raw PyGithub exception.
+        mock_github.return_value.get_repo.side_effect = GithubException(
+            401, {"message": "Bad credentials"}, {}
+        )
+        with pytest.raises(PlatformError, match="cannot access repository 'owner/repo'"):
+            GitHubPlatform(url=None, token="bad", repo="owner/repo")
+
+
+class TestGitLabPlatformInit:
+    @patch("repoactive.platforms.gitlab.gitlab")
+    def test_inaccessible_project_raises_platform_error(self, mock_gitlab: MagicMock) -> None:
+        mock_gitlab.Gitlab.return_value.projects.get.side_effect = GitlabAuthenticationError(
+            "401: invalid token"
+        )
+        with pytest.raises(PlatformError, match="cannot access repository 'ns/repo'"):
+            GitLabPlatform(url=None, token="bad", repo="ns/repo")
 
 
 def _mr_params(**overrides: object) -> MRParams:

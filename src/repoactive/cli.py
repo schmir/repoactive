@@ -32,6 +32,7 @@ from repoactive.platforms import (
     PlatformTokenNotSetError,
     get_platform,
 )
+from repoactive.platforms.base import PlatformError
 from repoactive.runner import RunMode, UnknownJobsError, run_all
 from repoactive.ui import print_undo_hint
 
@@ -185,10 +186,16 @@ def run(  # noqa: PLR0913
     except RunLockHeldError as e:
         _error(str(e))
         raise typer.Exit(code=LOCK_HELD_EXIT_CODE) from e
-    except (UnknownJobsError, JJError, NoPlatformConfiguredError, PlatformTokenNotSetError) as e:
+    except (
+        UnknownJobsError,
+        JJError,
+        NoPlatformConfiguredError,
+        PlatformTokenNotSetError,
+        PlatformError,
+    ) as e:
         # Anticipated failures (a mistyped job name, no matching platform, an
-        # unset token, a failing jj/git invocation) get a clean error line, not
-        # a traceback.
+        # unset or rejected token, a failing jj/git invocation) get a clean
+        # error line, not a traceback.
         _error(str(e))
         raise typer.Exit(code=1) from e
     if not summary.ok:
