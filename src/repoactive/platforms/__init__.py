@@ -14,7 +14,7 @@ class NoPlatformConfiguredError(RuntimeError):
 
     def __init__(self, remote_url: str, remote_host: str) -> None:
         super().__init__(
-            f"No platform configured for remote '{remote_url}' (host: {remote_host!r}); "
+            f"no platform configured for remote '{remote_url}' (host: {remote_host!r}); "
             f"add a [[platform]] entry with a matching url"
         )
 
@@ -23,7 +23,7 @@ class PlatformTokenNotSetError(RuntimeError):
     """Raised when the platform token environment variable is unset or empty."""
 
     def __init__(self, token_env: str) -> None:
-        super().__init__(f"Platform token not set: environment variable '{token_env}' is empty")
+        super().__init__(f"platform token not set: environment variable '{token_env}' is empty")
 
 
 def _match_platform(remote_url: str, platforms: list[PlatformConfig]) -> PlatformConfig:

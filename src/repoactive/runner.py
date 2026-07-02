@@ -97,7 +97,7 @@ class UnknownJobsError(ValueError):
     """Raised when requested job names do not match any configured job."""
 
     def __init__(self, unknown: set[str]) -> None:
-        super().__init__(f"Unknown job(s): {', '.join(sorted(unknown))}")
+        super().__init__(f"unknown job(s): {', '.join(sorted(unknown))}")
 
 
 class GeneratedJobError(ValueError):

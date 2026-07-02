@@ -74,7 +74,7 @@ class TestMatchPlatform:
 
     def test_no_match_raises(self) -> None:
         p = self._p("https://github.com")
-        with pytest.raises(NoPlatformConfiguredError, match="No platform configured"):
+        with pytest.raises(NoPlatformConfiguredError, match="no platform configured"):
             _match_platform("git@gitlab.example.com:ns/repo.git", [p])
 
     def test_default_platforms_match_github(self, tmp_path: Path) -> None:
@@ -315,7 +315,7 @@ class TestGetPlatform:
         mock_jj.return_value.get_remote_url.return_value = "https://bitbucket.org/owner/repo.git"
         monkeypatch.setenv("GH_TOKEN", "tok")
 
-        with pytest.raises(NoPlatformConfiguredError, match="No platform configured"):
+        with pytest.raises(NoPlatformConfiguredError, match="no platform configured"):
             get_platform(self._github_config(), REPO)
 
     @patch("repoactive.platforms.GitHubPlatform")

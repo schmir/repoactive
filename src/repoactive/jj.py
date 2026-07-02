@@ -54,7 +54,7 @@ class RemoteNotFoundError(JJError):
     """Raised when a named git remote does not exist."""
 
     def __init__(self, remote: str) -> None:
-        super().__init__(f"Remote '{remote}' not found")
+        super().__init__(f"remote '{remote}' not found")
 
 
 class JJNotFoundError(Exception):

@@ -195,7 +195,7 @@ class TestSelectJobs:
         assert _names(_select_jobs(jobs=config.jobs, requested_names={"c"})) == ["a", "b", "c"]
 
     def test_unknown_job_raises(self) -> None:
-        with pytest.raises(UnknownJobsError, match="Unknown job"):
+        with pytest.raises(UnknownJobsError, match="unknown job"):
             _select_jobs(jobs=_config(_job("a")).jobs, requested_names={"nonexistent"})
 
     def test_no_disabled_jobs(self) -> None:
@@ -1234,12 +1234,12 @@ class TestBuildGeneratedJobs:
             "a": {"command": "c", "title": "A", "depends_on": ["b"]},
             "b": {"command": "c", "title": "B", "depends_on": ["a"]},
         }
-        with pytest.raises(GeneratedJobError, match="Circular dependency"):
+        with pytest.raises(GeneratedJobError, match="circular dependency"):
             _build_generated_jobs(generator=_gen(), specs=specs, run_names={"gen"})
 
     def test_self_dependency_raises(self) -> None:
         specs = {"a": {"command": "c", "title": "A", "depends_on": ["a"]}}
-        with pytest.raises(GeneratedJobError, match="Circular dependency"):
+        with pytest.raises(GeneratedJobError, match="circular dependency"):
             _build_generated_jobs(generator=_gen(), specs=specs, run_names={"gen"})
 
     def test_unknown_dependency_raises(self) -> None:

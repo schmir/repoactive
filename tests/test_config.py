@@ -198,11 +198,11 @@ class TestDependsOnValidation:
             _config(jobs=[_job("a", depends_on=["x", "y"])])
 
     def test_self_dependency_raises(self) -> None:
-        with pytest.raises(ValueError, match="Circular dependency"):
+        with pytest.raises(ValueError, match="circular dependency"):
             _config(jobs=[_job("a", depends_on=["a"])])
 
     def test_direct_cycle_raises(self) -> None:
-        with pytest.raises(ValueError, match="Circular dependency"):
+        with pytest.raises(ValueError, match="circular dependency"):
             _config(
                 jobs=[
                     _job("a", depends_on=["b"]),
@@ -211,7 +211,7 @@ class TestDependsOnValidation:
             )
 
     def test_transitive_cycle_raises(self) -> None:
-        with pytest.raises(ValueError, match="Circular dependency"):
+        with pytest.raises(ValueError, match="circular dependency"):
             _config(
                 jobs=[
                     _job("a", depends_on=["c"]),

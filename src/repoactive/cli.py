@@ -107,7 +107,7 @@ def _load_config_or_exit(config_paths: list[Path] | None, repo: Path) -> Config:
         _error(str(e))
         raise typer.Exit(code=1) from e
     except ConfigError as e:
-        _error(f"Invalid config {e}")
+        _error(f"invalid config {e}")
         raise typer.Exit(code=1) from e
 
 
@@ -259,7 +259,7 @@ def validate_config(
             typer.echo(f"  {file}")
         cfg = load_config(paths)
     except Exception as e:
-        _error(f"Invalid config {e}")
+        _error(f"invalid config {e}")
         raise typer.Exit(code=1) from e
     typer.echo(f"Config OK: {len(cfg.jobs)} job(s) defined.")
 

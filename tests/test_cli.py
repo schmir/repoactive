@@ -132,13 +132,13 @@ class TestValidateConfigShowsLocations:
         cfg.write_text("[job.a]\nbogus = true\n")
         result = runner.invoke(app, ["validate-config", "--config", str(cfg)])
         assert result.exit_code == 1
-        assert f"Invalid config in {cfg}:" in result.output
+        assert f"invalid config in {cfg}:" in result.output
 
     def test_missing_config_reports_error_and_names_file(self, tmp_path: Path) -> None:
         missing = tmp_path / "does-not-exist.toml"
         result = runner.invoke(app, ["validate-config", "--config", str(missing)])
         assert result.exit_code == 1
-        assert f"Invalid config in {missing}:" in result.output
+        assert f"invalid config in {missing}:" in result.output
 
 
 class TestInfoJobs:
@@ -186,7 +186,7 @@ class TestInfoJobs:
         cfg.write_text("[job.a]\nbogus = true\n")
         result = runner.invoke(app, ["info", "jobs", "--config", str(cfg)])
         assert result.exit_code == 1
-        assert f"Invalid config in {cfg}:" in result.output
+        assert f"invalid config in {cfg}:" in result.output
 
     def test_missing_config_reports_error(self, tmp_path: Path) -> None:
         result = runner.invoke(app, ["info", "jobs", "--repo", str(tmp_path)])
@@ -274,7 +274,7 @@ class TestInfoTags:
         cfg.write_text("[job.a]\nbogus = true\n")
         result = runner.invoke(app, ["info", "tags", "--config", str(cfg)])
         assert result.exit_code == 1
-        assert f"Invalid config in {cfg}:" in result.output
+        assert f"invalid config in {cfg}:" in result.output
 
     def test_missing_config_reports_error(self, tmp_path: Path) -> None:
         result = runner.invoke(app, ["info", "tags", "--repo", str(tmp_path)])
@@ -324,7 +324,7 @@ class TestRun:
         with patch("repoactive.cli.run_all", side_effect=err):
             result = runner.invoke(app, ["run", "--repo", str(repo), "--config", str(cfg), "nope"])
         assert result.exit_code == 1
-        assert "Error: Unknown job(s): nope" in result.output
+        assert "Error: unknown job(s): nope" in result.output
         assert "Traceback" not in result.output
 
     def test_jj_failure_reports_error_without_traceback(self, tmp_path: Path) -> None:
@@ -351,7 +351,7 @@ class TestRun:
                 app, ["run", "--repo", str(repo), "--config", str(cfg), "--mode", "publish"]
             )
         assert result.exit_code == 1
-        assert "Error: Platform token not set" in result.output
+        assert "Error: platform token not set" in result.output
         assert "Traceback" not in result.output
         run_all.assert_not_called()
 

@@ -88,14 +88,14 @@ class UnknownDependencyError(ValueError):
     """Raised when a job depends_on a job that does not exist."""
 
     def __init__(self, name: str, unknown: list[str]) -> None:
-        super().__init__(f"Job '{name}' depends_on unknown jobs: {unknown}")
+        super().__init__(f"job '{name}' depends_on unknown jobs: {unknown}")
 
 
 class CircularDependencyError(ValueError):
     """Raised when jobs form a dependency cycle."""
 
     def __init__(self, name: str) -> None:
-        super().__init__(f"Circular dependency involving '{name}'")
+        super().__init__(f"circular dependency involving '{name}'")
 
 
 class JobNameInBodyError(ValueError):
