@@ -1,13 +1,15 @@
 import json
+import logging
 import re
 from datetime import datetime
 from importlib.metadata import version
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
 from typer.testing import CliRunner
 
-from repoactive.cli import LOCK_HELD_EXIT_CODE, app
+from repoactive.cli import LOCK_HELD_EXIT_CODE, _setup_logging, app
 from repoactive.jj import CommandFailedError, JobCommit
 from repoactive.lock import RunLockHeldError
 from repoactive.platforms import PlatformTokenNotSetError
@@ -54,6 +56,26 @@ class TestVersion:
         result = runner.invoke(app, ["--version"])
         assert result.exit_code == 0
         assert result.stdout.strip() == version("repoactive")
+
+
+class TestSetupLogging:
+    def test_debug_flag_wins_over_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("REPOACTIVE_LOG_LEVEL", "warning")
+        with patch("logging.basicConfig") as basic_config:
+            _setup_logging(debug=True)
+        basic_config.assert_called_once_with(level=logging.DEBUG)
+
+    def test_env_sets_level(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("REPOACTIVE_LOG_LEVEL", "info")
+        with patch("logging.basicConfig") as basic_config:
+            _setup_logging(debug=False)
+        basic_config.assert_called_once_with(level="INFO")
+
+    def test_unset_leaves_logging_unconfigured(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("REPOACTIVE_LOG_LEVEL", raising=False)
+        with patch("logging.basicConfig") as basic_config:
+            _setup_logging(debug=False)
+        basic_config.assert_not_called()
 
 
 class TestEnvironmentValidation:

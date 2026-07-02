@@ -194,6 +194,11 @@ repoactive run --debug
 | `--tag TAG`                     | `-t`  | Run jobs carrying any of these tags (repeatable). With no tags/jobs the default run targets the `enabled` tag                |
 | `--debug`                       | `-d`  | Enable debug logging                                                                                                         |
 
+Instead of passing `--debug` on every invocation, set the
+`REPOACTIVE_LOG_LEVEL` environment variable to `debug`, `info`, `warning`,
+`error`, or `critical` to enable logging at that level (the `--debug` flag
+takes precedence).
+
 A local `run` (the default `--mode local`) captures the jj operation id
 beforehand and prints a `jj op restore <id>` command (both before and after
 the run, since a run can produce a lot of output). Run it to roll the

@@ -29,7 +29,11 @@ class Settings(BaseSettings):
     # logged in to *is* interactive.
     ui: Literal["interactive", "noninteractive"] = "interactive"
 
-    @field_validator("ui", mode="before")
+    # Set REPOACTIVE_LOG_LEVEL to enable logging at that level without passing
+    # --debug on every invocation. The --debug flag takes precedence.
+    log_level: Literal["debug", "info", "warning", "error", "critical"] | None = None
+
+    @field_validator("ui", "log_level", mode="before")
     @classmethod
     def _lowercase(cls, value: object) -> object:
         return value.lower() if isinstance(value, str) else value

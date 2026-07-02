@@ -59,8 +59,11 @@ _DebugOption = Annotated[bool, typer.Option("--debug", "-d", help="Enable debug 
 
 
 def _setup_logging(debug: bool) -> None:
+    """Configure logging from --debug or, failing that, REPOACTIVE_LOG_LEVEL."""
     if debug:
         logging.basicConfig(level=logging.DEBUG)
+    elif (level := load_settings().log_level) is not None:
+        logging.basicConfig(level=level.upper())
 
 
 class MergeStatus(StrEnum):
