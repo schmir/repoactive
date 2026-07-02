@@ -211,6 +211,18 @@ class JobDefaults(BaseModel):
     timeout: _Duration | None = "2m"
 
 
+# Fields Job.resolve fills in from JobDefaults when the job does not set them
+# itself. labels is absent on purpose: it is merged, not replaced (see resolve).
+_DEFAULTED_FIELDS = (
+    "branch_prefix",
+    "mr_title_prefix",
+    "commit_title_prefix",
+    "base_branch",
+    "cooldown_period",
+    "timeout",
+)
+
+
 class Job(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -295,27 +307,12 @@ class Job(BaseModel):
         return lines
 
     def resolve(self, defaults: JobDefaults) -> Job:
-        return self.model_copy(
-            update={
-                "branch_prefix": self.branch_prefix
-                if self.branch_prefix is not None
-                else defaults.branch_prefix,
-                "mr_title_prefix": self.mr_title_prefix
-                if self.mr_title_prefix is not None
-                else defaults.mr_title_prefix,
-                "commit_title_prefix": self.commit_title_prefix
-                if self.commit_title_prefix is not None
-                else defaults.commit_title_prefix,
-                "base_branch": self.base_branch
-                if self.base_branch is not None
-                else defaults.base_branch,
-                "cooldown_period": self.cooldown_period
-                if self.cooldown_period is not None
-                else defaults.cooldown_period,
-                "timeout": self.timeout if self.timeout is not None else defaults.timeout,
-                "labels": list(dict.fromkeys(defaults.labels + self.labels)),
-            }
-        )
+        update: dict[str, object] = {
+            f: getattr(self, f) if getattr(self, f) is not None else getattr(defaults, f)
+            for f in _DEFAULTED_FIELDS
+        }
+        update["labels"] = list(dict.fromkeys(defaults.labels + self.labels))
+        return self.model_copy(update=update)
 
 
 def detect_dependency_cycle(deps_by_name: Mapping[str, Sequence[str]]) -> None:

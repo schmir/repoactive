@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from repoactive.config import (
+    _DEFAULTED_FIELDS,
     Config,
     ConfigError,
     ConfigNotFoundError,
@@ -228,6 +229,14 @@ class TestJobDefaults:
     def test_labels_default_empty(self) -> None:
         cfg = _config()
         assert cfg.job_defaults.labels == []
+
+    def test_defaulted_fields_cover_job_defaults(self) -> None:
+        # Every JobDefaults field must be wired into Job.resolve: either as a
+        # fallback field in _DEFAULTED_FIELDS or as the special-cased labels
+        # merge. Fails loudly when a new JobDefaults field is added without
+        # updating resolve.
+        assert set(_DEFAULTED_FIELDS) | {"labels"} == set(JobDefaults.model_fields)
+        assert set(_DEFAULTED_FIELDS) <= set(Job.model_fields)
 
 
 class TestParseInterval:
