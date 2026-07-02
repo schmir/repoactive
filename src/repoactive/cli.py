@@ -39,6 +39,8 @@ from repoactive.runner import (
     RunMode,
     UnknownJobsError,
     UnknownTagsError,
+    format_job_forest,
+    print_job_table,
     run_all,
     topological_sort,
 )
@@ -278,59 +280,6 @@ def validate_config(
     typer.echo(f"Config OK: {len(cfg.jobs)} job(s) defined.")
 
 
-def _format_job_forest(jobs: list[Job]) -> list[tuple[str, Job]]:
-    """Render ``jobs`` as a dependency forest: one (tree label, job) row per line.
-
-    ``jobs`` must be topologically sorted. A job is nested under each of its
-    dependencies present in ``jobs`` (so a job with several parents yields one
-    row per parent); a job none of whose dependencies are present is a root.
-    """
-    children: dict[str, list[Job]] = {j.name: [] for j in jobs}
-    roots: list[Job] = []
-    for job in jobs:
-        parents = [name for name in job.depends_on if name in children]
-        for parent in parents:
-            children[parent].append(job)
-        if not parents:
-            roots.append(job)
-
-    rows: list[tuple[str, Job]] = []
-
-    def render(job: Job, prefix: str) -> None:
-        kids = children[job.name]
-        for kid in kids[:-1]:
-            rows.append((f"{prefix}├── {kid.name}", kid))
-            render(kid, f"{prefix}│   ")
-        for kid in kids[-1:]:
-            rows.append((f"{prefix}└── {kid.name}", kid))
-            render(kid, f"{prefix}    ")
-
-    for root in roots:
-        rows.append((root.name, root))
-        render(root, "")
-    return rows
-
-
-def _format_job_table(
-    rows: list[tuple[str, Job]], widths_from: list[tuple[str, Job]] | None = None
-) -> list[str]:
-    """Align forest ``rows`` into columns: tree label, title, effective tags.
-
-    Column widths are computed over ``widths_from`` (default: ``rows``), so
-    several tables can share one alignment.
-    """
-    if not rows:
-        return []
-    widths_from = widths_from or rows
-    label_width = max(len(label) for label, _ in widths_from)
-    title_width = max(len(job.title) for _, job in widths_from)
-    return [
-        f"{label:<{label_width}}  {job.title:<{title_width}}  "
-        + ", ".join(sorted(job.effective_tags()))
-        for label, job in rows
-    ]
-
-
 @info_app.command("jobs")
 def info_jobs(
     config_paths: _ConfigOption = None,
@@ -345,8 +294,7 @@ def info_jobs(
     """
     _setup_logging(debug)
     cfg = _load_config_or_exit(config_paths, repo)
-    for line in _format_job_table(_format_job_forest(topological_sort(cfg.jobs))):
-        typer.echo(line)
+    print_job_table(format_job_forest(topological_sort(cfg.jobs)))
 
 
 @info_app.command("tags")
@@ -372,13 +320,12 @@ def info_tags(
     for job in topological_sort(cfg.jobs):
         for tag in job.effective_tags():
             jobs_by_tag.setdefault(tag, []).append(job)
-    forests = {tag: _format_job_forest(jobs) for tag, jobs in jobs_by_tag.items()}
+    forests = {tag: format_job_forest(jobs) for tag, jobs in jobs_by_tag.items()}
     # Share one alignment across all tag tables.
     all_rows = [row for rows in forests.values() for row in rows]
     for tag in sorted(forests):
         typer.echo(f"{tag}:")
-        for line in _format_job_table(forests[tag], all_rows):
-            typer.echo(f"  {line}")
+        print_job_table(forests[tag], all_rows, indent="  ")
 
 
 @app.command("dump-schema")

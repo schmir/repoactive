@@ -1667,6 +1667,22 @@ class TestRunAll:
         assert not summary.skipped
 
     @patch("repoactive.runner.run_job")
+    def test_prints_selected_jobs_as_dependency_tree(
+        self, mock_run_job: MagicMock, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # The run opens with the same tree view 'info jobs' shows, restricted
+        # to the selected jobs.
+        a, b = _job("a"), _job("b", depends_on=["a"])
+        mock_run_job.return_value = _result(a, revsets=["repoactive/a"])
+
+        run_all(config=_config(a, b), repo_path=REPO)
+
+        out = capsys.readouterr().out
+        assert "Running 2 job(s):" in out
+        assert "  a      Change a  enabled" in out
+        assert "  └── b  Change b  enabled" in out
+
+    @patch("repoactive.runner.run_job")
     def test_collected_plan_is_applied(self, mock_run_job: MagicMock, mock_jj: MagicMock) -> None:
         a = _job("a")
         result = _result(a, revsets=["repoactive/a"])
