@@ -15,7 +15,7 @@ from repoactive.jj import CommandFailedError, JobCommit
 from repoactive.lock import RunLockHeldError
 from repoactive.platforms import PlatformTokenNotSetError
 from repoactive.platforms.base import PlatformError
-from repoactive.runner import RunMode, RunSummary, UnknownJobsError
+from repoactive.runner import RunMode, RunSummary, UnknownJobsError, UnknownTagsError
 
 runner = CliRunner()
 
@@ -333,6 +333,19 @@ class TestRun:
             result = runner.invoke(app, ["run", "--repo", str(repo), "--config", str(cfg), "nope"])
         assert result.exit_code == 1
         assert "Error: unknown job(s): nope" in result.output
+        assert "Traceback" not in result.output
+
+    def test_unknown_tag_reports_error_without_traceback(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path)
+        cfg = repo / "config.toml"
+        _write_job(cfg, "a")
+        err = UnknownTagsError({"weekley"})
+        with patch("repoactive.cli.run_all", side_effect=err):
+            result = runner.invoke(
+                app, ["run", "--repo", str(repo), "--config", str(cfg), "--tag", "weekley"]
+            )
+        assert result.exit_code == 1
+        assert "Error: unknown tag(s): weekley" in result.output
         assert "Traceback" not in result.output
 
     def test_jj_failure_reports_error_without_traceback(self, tmp_path: Path) -> None:

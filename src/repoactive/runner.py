@@ -100,6 +100,17 @@ class UnknownJobsError(ValueError):
         super().__init__(f"unknown job(s): {', '.join(sorted(unknown))}")
 
 
+class UnknownTagsError(ValueError):
+    """Raised when a requested tag is carried by no configured job.
+
+    A tag only exists as a value on jobs, so a tag matching nothing is
+    indistinguishable from a typo; failing loudly keeps a mistyped --tag in a
+    crontab from silently running zero jobs."""
+
+    def __init__(self, unknown: set[str]) -> None:
+        super().__init__(f"unknown tag(s): {', '.join(sorted(unknown))}")
+
+
 class GeneratedJobError(ValueError):
     """Raised when a generator emits an invalid job set (collision, recursion,
     unknown dependency, or a job that fails validation)."""
@@ -616,6 +627,22 @@ def _on_cooldown(job: Job, repo_path: Path) -> bool:
     return on_cooldown
 
 
+def _validate_selection(
+    jobs: list[Job], requested_names: set[str], requested_tags: set[str]
+) -> None:
+    """Reject unknown job names and tags (a tag carried by no job is a typo).
+
+    run_all calls this before taking the run lock or touching the repository,
+    so a mistyped selection fails before any state changes - and before the
+    undo hint is printed, which would be noise for a run that did nothing."""
+    unknown = requested_names - {j.name for j in jobs}
+    if unknown:
+        raise UnknownJobsError(unknown)
+    unknown_tags = requested_tags - {t for j in jobs for t in j.effective_tags()}
+    if unknown_tags:
+        raise UnknownTagsError(unknown_tags)
+
+
 def _include_dependencies(jobs: list[Job], selected: set[str]) -> None:
     """Add the transitive dependencies of every selected job to ``selected``.
 
@@ -640,7 +667,8 @@ def _select_jobs(
     dropped if any dependency is not itself selected. Naming jobs or passing
     tags is explicit selection: the union of the named jobs and the jobs
     matching any requested tag (``DEFAULT_TAG`` is not implied), with all
-    dependencies force-included.
+    dependencies force-included. An unknown name or a tag carried by no job
+    raises (``UnknownJobsError``/``UnknownTagsError``).
 
     ``refresh_names`` names the jobs that currently have an unmerged branch;
     they are force-included regardless of tag, along with their dependencies,
@@ -650,9 +678,7 @@ def _select_jobs(
     refresh_names = refresh_names or set()
     jobs = topological_sort(jobs)
 
-    unknown = requested_names - {j.name for j in jobs}
-    if unknown:
-        raise UnknownJobsError(unknown)
+    _validate_selection(jobs, requested_names, requested_tags)
 
     selected: set[str]
     if requested_names or requested_tags:
@@ -941,6 +967,10 @@ def run_all(  # noqa: PLR0913
     assert (mode is RunMode.publish) == (platform is not None), (
         f"mode={mode} is inconsistent with platform={platform!r}"
     )
+    # Fail on a mistyped job name or tag before the lock is taken and before
+    # _prepare_repo mutates anything (or promises an undo hint for a run that
+    # never started).
+    _validate_selection(config.jobs, set(requested_names or []), set(requested_tags or []))
     # Serialise runs against the same repository: a run mutates repo-global state
     # (workspaces, bookmarks, pushes), and forget_stale_workspaces would clobber a
     # concurrent run's live workspaces. Fail-fast if another run holds the lock.

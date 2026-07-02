@@ -554,6 +554,13 @@ repoactive run --tag weekly
 repoactive run --tag nightly regenerate-api-client
 ```
 
+Requesting a tag that no job carries is an error, exactly like naming an
+unknown job — a typo in a crontab's `--tag` fails loudly instead of silently
+running zero jobs. This also means a scheduled entry whose tag has lost its
+last member fails until you remove the entry (or re-tag a job); a tag only
+exists as a value on jobs, so an empty tag is indistinguishable from a
+mistyped one.
+
 Because assigning a tag removes the implicit `enabled` tag, **tags are
 load-bearing, not free-form labels**: tagging a job takes it out of the bare
 `repoactive run`. If you want a job to stay in the default run _and_ belong

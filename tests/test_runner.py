@@ -19,6 +19,7 @@ from repoactive.runner import (
     RunMode,
     RunSummary,
     UnknownJobsError,
+    UnknownTagsError,
     _boxquote,
     _build_commit_message,
     _build_generated_jobs,
@@ -197,6 +198,22 @@ class TestSelectJobs:
     def test_unknown_job_raises(self) -> None:
         with pytest.raises(UnknownJobsError, match="unknown job"):
             _select_jobs(jobs=_config(_job("a")).jobs, requested_names={"nonexistent"})
+
+    def test_unknown_tag_raises(self) -> None:
+        jobs = _config(_djob("a", tags=["weekly"])).jobs
+        with pytest.raises(UnknownTagsError, match="unknown tag"):
+            _select_jobs(jobs=jobs, requested_names=set(), requested_tags={"weekley"})
+
+    def test_implicit_enabled_and_disabled_tags_are_known(self) -> None:
+        # effective tags include the implicit enabled/disabled, so requesting
+        # them is valid even though no job lists them explicitly.
+        jobs = _config(_djob("a"), _djob("b", disabled=True)).jobs
+        assert _names(
+            _select_jobs(jobs=jobs, requested_names=set(), requested_tags={"enabled"})
+        ) == ["a"]
+        assert _names(
+            _select_jobs(jobs=jobs, requested_names=set(), requested_tags={"disabled"})
+        ) == ["b"]
 
     def test_no_disabled_jobs(self) -> None:
         config = _config(_djob("a"), _djob("b"))
@@ -2008,6 +2025,21 @@ class TestRunAll:
         out = capsys.readouterr().out
         assert out.count("jj --repository /repo op restore OP-START") == 1
         assert "local repository" in out
+
+    def test_unknown_selection_fails_before_touching_the_repo(
+        self, mock_jj: MagicMock, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # A mistyped name or tag must fail before the run prepares the repo:
+        # no workspace cleanup, no bookmark tracking, and no undo hint for a
+        # run that never started.
+        config = _config(_djob("a"))
+        with pytest.raises(UnknownTagsError):
+            run_all(config=config, repo_path=REPO, requested_tags=["weekley"])
+        with pytest.raises(UnknownJobsError):
+            run_all(config=config, repo_path=REPO, requested_names=["nope"])
+        assert "op restore" not in capsys.readouterr().out
+        mock_jj.return_value.forget_stale_workspaces.assert_not_called()
+        mock_jj.return_value.bookmark_track.assert_not_called()
 
     @staticmethod
     def _generator_config(**gen_fields: object) -> Config:
