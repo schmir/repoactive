@@ -134,7 +134,11 @@ def _ensure_colocated_repo(repo: Path) -> None:
     try:
         require_colocated_repo(repo)
     except NotColocatedGitRepoError:
-        JJ(repo).git_init_colocate()
+        try:
+            JJ(repo).git_init_colocate()
+        except JJError as e:
+            _error(str(e))
+            raise typer.Exit(code=1) from e
         abs_repo = repo.resolve()
         print_undo_hint(
             title="To undo",
@@ -258,7 +262,10 @@ def validate_config(
         for file in files:
             typer.echo(f"  {file}")
         cfg = load_config(paths)
-    except Exception as e:
+    except ConfigNotFoundError as e:
+        _error(str(e))
+        raise typer.Exit(code=1) from e
+    except ConfigError as e:
         _error(f"invalid config {e}")
         raise typer.Exit(code=1) from e
     typer.echo(f"Config OK: {len(cfg.jobs)} job(s) defined.")

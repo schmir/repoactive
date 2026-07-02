@@ -140,6 +140,14 @@ class TestValidateConfigShowsLocations:
         assert result.exit_code == 1
         assert f"invalid config in {missing}:" in result.output
 
+    def test_missing_default_config_reports_error_like_run(self, tmp_path: Path) -> None:
+        # No config anywhere: the message must match `run`'s, not be wrapped
+        # in "invalid config".
+        result = runner.invoke(app, ["validate-config", "--repo", str(tmp_path)])
+        assert result.exit_code == 1
+        assert "no configuration found" in result.output
+        assert "invalid config" not in result.output
+
 
 class TestInfoJobs:
     def test_shows_all_jobs_as_dependency_tree(self, tmp_path: Path) -> None:
@@ -447,6 +455,21 @@ class TestRun:
         jj.git_init_colocate.assert_called_once()
         assert "jj git init --colocate" in result.output
         assert "To undo" in result.output
+
+    def test_failing_colocate_reports_error_without_traceback(self, tmp_path: Path) -> None:
+        repo = tmp_path
+        (repo / ".git").mkdir()
+        cfg = repo / "config.toml"
+        _write_job(cfg, "a")
+        jj = MagicMock()
+        jj.git_init_colocate.side_effect = CommandFailedError(
+            "jj", ("git", "init", "--colocate"), "boom"
+        )
+        with patch("repoactive.cli.JJ", return_value=jj):
+            result = runner.invoke(app, ["run", "--repo", str(repo), "--config", str(cfg)])
+        assert result.exit_code == 1
+        assert "Error: jj git init --colocate failed" in result.output
+        assert "Traceback" not in result.output
 
     def test_plain_git_repo_without_config_is_not_colocated(self, tmp_path: Path) -> None:
         repo = tmp_path
