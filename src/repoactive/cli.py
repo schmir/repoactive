@@ -293,24 +293,21 @@ def recent_commits(
         raise typer.Exit(code=1) from e
 
     filter_names = set(jobs) if jobs else None
-    # A commit may carry several Repoactive-Job trailers (a generated job records
-    # both its own name and its generator's), joined with commas in job_name.
-    shown = [
-        c for c in commits if filter_names is None or (set(c.job_name.split(",")) & filter_names)
-    ]
+    shown = [c for c in commits if filter_names is None or (c.job_names & filter_names)]
 
     if not shown:
         typer.echo("No matching commits found.")
         return
 
+    names_column = [",".join(sorted(c.job_names)) for c in shown]
     id_width = max(len(c.commit_id) for c in shown)
     change_width = max(len(c.change_id) for c in shown)
-    name_width = max(len(c.job_name) for c in shown)
+    name_width = max(len(names) for names in names_column)
     age_width = max(len(c.relative_age) for c in shown)
-    for c in shown:
+    for c, names in zip(shown, names_column, strict=True):
         typer.echo(
             f"{c.commit_id:<{id_width}}  {c.change_id:<{change_width}}  "
-            f"{c.job_name:<{name_width}}  {c.relative_age:<{age_width}}  {c.subject}"
+            f"{names:<{name_width}}  {c.relative_age:<{age_width}}  {c.subject}"
         )
 
 

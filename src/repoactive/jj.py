@@ -131,7 +131,10 @@ class Bookmark:
 class JobCommit:
     commit_id: str
     change_id: str
-    job_name: str
+    # All Repoactive-Job trailer values on the commit. A job produced by a
+    # generator records both its own name and the generator's, so there may be
+    # more than one (see docs/adr/0004-job-generators.md).
+    job_names: set[str]
     subject: str
     relative_age: str
 
@@ -276,7 +279,7 @@ class JJ:
         # so it's safe as a field delimiter. jj templates use the escape form; Python splits on the
         # actual byte.
         sep = "\\x1f"
-        # Field order: commit_id, change_id, job_name, relative_age, subject
+        # Field order: commit_id, change_id, job names (comma-joined), relative_age, subject
         template = f"""
         if(trailers.contains_key("{JOB_TRAILER_KEY}"),
            join("{sep}",
@@ -298,7 +301,9 @@ class JJ:
                     JobCommit(
                         commit_id=parts[0],
                         change_id=parts[1],
-                        job_name=parts[2],
+                        # Undo the template's comma-join; job names never
+                        # contain a comma.
+                        job_names=set(parts[2].split(",")),
                         relative_age=parts[3],
                         subject=parts[4],
                     )

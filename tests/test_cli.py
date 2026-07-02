@@ -294,7 +294,7 @@ def _commit(name: str, age: str = "1 day ago") -> JobCommit:
     return JobCommit(
         commit_id=f"abc{name}",
         change_id=f"chg{name}",
-        job_name=name,
+        job_names={name},
         subject=f"subject {name}",
         relative_age=age,
     )

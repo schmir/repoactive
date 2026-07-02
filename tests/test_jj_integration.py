@@ -482,7 +482,7 @@ class TestRecentJobCommits:
         commits = repo.recent_job_commits(self._day_ago())
         assert len(commits) == 1
         commit = commits[0]
-        assert commit.job_name == "my-job"
+        assert commit.job_names == {"my-job"}
         assert commit.subject == "upgrade deps"
         assert commit.commit_id == _commit_id(repo)[: len(commit.commit_id)]
         assert commit.change_id == _change_id(repo)[: len(commit.change_id)]
@@ -502,13 +502,13 @@ class TestRecentJobCommits:
         repo.new("@")
         repo.describe("newer\n\nRepoactive-Job: job-b")
         commits = repo.recent_job_commits(self._day_ago())
-        assert [c.job_name for c in commits] == ["job-b", "job-a"]
+        assert [c.job_names for c in commits] == [{"job-b"}, {"job-a"}]
 
-    def test_joins_multiple_trailer_values(self, repo: JJ) -> None:
+    def test_collects_multiple_trailer_values(self, repo: JJ) -> None:
         repo.describe("shared work\n\nRepoactive-Job: job-a\nRepoactive-Job: job-b")
         commits = repo.recent_job_commits(self._day_ago())
         assert len(commits) == 1
-        assert commits[0].job_name == "job-a,job-b"
+        assert commits[0].job_names == {"job-a", "job-b"}
 
     def test_revset_restricts_to_matching_commits(self, repo: JJ) -> None:
         repo.describe("on main\n\nRepoactive-Job: my-job")
@@ -517,7 +517,11 @@ class TestRecentJobCommits:
         repo.new("root()")
         repo.describe("unrelated\n\nRepoactive-Job: other-job")
         repo.bookmark_set("other")
-        names = {c.job_name for c in repo.recent_job_commits(self._day_ago(), revset="::main")}
+        names = {
+            name
+            for c in repo.recent_job_commits(self._day_ago(), revset="::main")
+            for name in c.job_names
+        }
         assert names == {"my-job"}
 
     def test_empty_when_no_job_commits(self, repo: JJ) -> None:
