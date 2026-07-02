@@ -135,9 +135,11 @@ class RunSummary:
         return not self.failed and not self.skipped
 
     def print_report(self) -> None:
-        # Cooldown jobs are also stored in results (so dependents can read their
-        # effective_revsets), so omit len(self.cooldown) to avoid counting them twice.
-        total = len(self.results) + len(self.failed) + len(self.skipped)
+        # A name may sit in more than one bucket - cooldown jobs are also stored
+        # in results (so dependents can read their effective_revsets), and a job
+        # whose MR failed at apply time is in results and failed - so count the
+        # union of names, not the sum of the buckets.
+        total = len(self.results.keys() | self.failed.keys() | self.skipped)
         produced = sum(1 for r in self.results.values() if r.produced_output)
         print(
             f"\nDone: {produced}/{total} produced output"
@@ -968,9 +970,12 @@ def run_all(  # noqa: PLR0913
         # A local run stops here: the plan is built but deliberately not applied, so
         # nothing is pushed and no MR is created.
         if mode is not RunMode.local:
-            mr_urls = apply_plan(plan, repo_path=repo_path, platform=platform, mode=mode)
-            for name, url in mr_urls.items():
+            applied = apply_plan(plan, repo_path=repo_path, platform=platform, mode=mode)
+            for name, url in applied.mr_urls.items():
                 summary.results[name].mr_url = url
+            # A job whose MR failed keeps its results entry (the command ran and
+            # its branch was pushed) but the run still counts as failed.
+            summary.failed.update(applied.failed)
 
         summary.print_report()
         return summary
@@ -985,50 +990,80 @@ def _apply_plan_push(plan: UpdatePlan, *, repo_path: Path) -> None:
     JJ(repo_path).git_push_bookmarks(*bookmarks)
 
 
+@dataclass
+class ApplyResult:
+    """Outcome of applying an UpdatePlan: the MR URL or the failure, per job."""
+
+    mr_urls: dict[str, str] = field(default_factory=dict)
+    failed: dict[str, Exception] = field(default_factory=dict)
+
+
 def _apply_plan_publish(
     plan: UpdatePlan,
     *,
     platform: Platform,
-) -> dict[str, str]:
+) -> ApplyResult:
     titles = {u.job_name: u.title for u in plan.updates}
-    mr_urls: dict[str, str] = {}
+    result = ApplyResult()
 
-    for update in plan.updates:
-        if (update.push is not None and update.push.delete) or update.mr is None:
-            continue
-
-        dep_urls = [(titles[dep], mr_urls[dep]) for dep in update.mr.depends_on if dep in mr_urls]
-        params = MRParams(
-            source_branch=update.mr.source_branch,
-            target_branch=update.mr.target_branch or platform.default_branch(),
-            title=update.mr.title,
-            description=build_mr_description(update.mr, dep_urls),
-            labels=update.mr.labels,
-            draft=update.mr.draft,
-        )
-        url = platform.ensure_mr(params)
-        mr_urls[update.job_name] = url
+    pending = [
+        u for u in plan.updates if not (u.push is not None and u.push.delete) and u.mr is not None
+    ]
+    for i, update in enumerate(pending):
+        assert update.mr is not None  # filtered above
+        dep_urls = [
+            (titles[dep], result.mr_urls[dep])
+            for dep in update.mr.depends_on
+            if dep in result.mr_urls
+        ]
+        # Fail fast: a failing platform call usually means something is wrong
+        # (expired token, rate limit), so the remaining MRs are not attempted
+        # rather than hammered against the same failure. Nothing is lost - the
+        # bookmarks are already pushed, ensure_mr is idempotent, and the next
+        # run re-attempts every MR. The failure is recorded per job and
+        # surfaces in the run summary.
+        try:
+            params = MRParams(
+                source_branch=update.mr.source_branch,
+                target_branch=update.mr.target_branch or platform.default_branch(),
+                title=update.mr.title,
+                description=build_mr_description(update.mr, dep_urls),
+                labels=update.mr.labels,
+                draft=update.mr.draft,
+            )
+            url = platform.ensure_mr(params)
+        except Exception as e:
+            print(f"==> [{update.job_name}] failed to create/update MR: {e}")
+            result.failed[update.job_name] = e
+            remaining = [u.job_name for u in pending[i + 1 :]]
+            if remaining:
+                print(f"==> aborting MR updates, not attempted: {', '.join(remaining)}")
+            break
+        result.mr_urls[update.job_name] = url
         print(f"==> [{update.job_name}] {url}")
-    return mr_urls
+    return result
 
 
 def apply_plan(
     plan: UpdatePlan, *, repo_path: Path, platform: Platform | None, mode: RunMode
-) -> dict[str, str]:
+) -> ApplyResult:
     """Carry out the remote operations collected during a run.
 
     Pushes each bookmark and, in ``publish`` mode, creates/updates each MR. MRs
     are processed in plan order (topological), so a dependency's MR URL is known
-    by the time a dependent that links to it is reached. Returns a
-    ``{job_name: mr_url}`` map of the MRs that were created or updated.
+    by the time a dependent that links to it is reached. The MR loop is
+    fail-fast: the first failing MR is recorded per job and the remaining
+    updates are not attempted (the next run re-attempts them; ensure_mr is
+    idempotent and the bookmarks are pushed regardless). Returns the MR URLs
+    and failures per job.
     """
     assert mode is not RunMode.local
     if not plan.updates:
-        return {}
+        return ApplyResult()
     print(f"Applying {len(plan.updates)} update(s)...")
     _apply_plan_push(plan, repo_path=repo_path)
 
     if mode is RunMode.publish:
         assert platform is not None
         return _apply_plan_publish(plan, platform=platform)
-    return {}
+    return ApplyResult()

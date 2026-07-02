@@ -11,6 +11,7 @@ import pytest
 from repoactive.config import Config, CreateMR, Job, JobDefaults
 from repoactive.runner import (
     REPOACTIVE_JOBS_DIR_ENV,
+    ApplyResult,
     CommandError,
     CommandResult,
     GeneratedJobError,
@@ -1356,9 +1357,10 @@ class TestApplyPlan:
     def test_empty_plan_is_noop(self, mock_jj_cls: MagicMock) -> None:
         platform = MagicMock()
 
-        urls = apply_plan(UpdatePlan(), repo_path=REPO, platform=platform, mode=RunMode.publish)
+        result = apply_plan(UpdatePlan(), repo_path=REPO, platform=platform, mode=RunMode.publish)
 
-        assert urls == {}
+        assert result.mr_urls == {}
+        assert result.failed == {}
         mock_jj_cls.return_value.git_push_bookmarks.assert_not_called()
         platform.ensure_mr.assert_not_called()
 
@@ -1366,10 +1368,10 @@ class TestApplyPlan:
     def test_pushes_bookmark_without_mr(self, mock_jj_cls: MagicMock) -> None:
         plan = UpdatePlan(updates=[_push_update("a")])
 
-        urls = apply_plan(plan, repo_path=REPO, platform=None, mode=RunMode.push)
+        result = apply_plan(plan, repo_path=REPO, platform=None, mode=RunMode.push)
 
         mock_jj_cls.return_value.git_push_bookmarks.assert_called_once_with("repoactive/a")
-        assert urls == {}
+        assert result.mr_urls == {}
 
     @patch("repoactive.runner.JJ")
     def test_delete_push_propagated(self, mock_jj_cls: MagicMock) -> None:
@@ -1393,7 +1395,7 @@ class TestApplyPlan:
         platform.ensure_mr.return_value = "https://example.com/mr/1"
         plan = UpdatePlan(updates=[_mr_update("a")])
 
-        urls = apply_plan(plan, repo_path=REPO, platform=platform, mode=RunMode.publish)
+        result = apply_plan(plan, repo_path=REPO, platform=platform, mode=RunMode.publish)
 
         mock_jj_cls.return_value.git_push_bookmarks.assert_called_once_with("repoactive/a")
         params = platform.ensure_mr.call_args[0][0]
@@ -1402,7 +1404,7 @@ class TestApplyPlan:
         assert params.title == "[bot] Change a"
         assert params.labels == ["auto"]
         assert params.draft is False
-        assert urls == {"a": "https://example.com/mr/1"}
+        assert result.mr_urls == {"a": "https://example.com/mr/1"}
 
     @patch("repoactive.runner.JJ")
     def test_unresolved_target_branch_uses_platform_default(self, mock_jj_cls: MagicMock) -> None:
@@ -1434,14 +1436,33 @@ class TestApplyPlan:
         assert b_params.description == "Depends on:\n- [Change a](https://example.com/mr/a)"
 
     @patch("repoactive.runner.JJ")
+    def test_failing_mr_aborts_remaining_updates(
+        self, mock_jj_cls: MagicMock, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        platform = MagicMock()
+        boom = RuntimeError("boom")
+        platform.ensure_mr.side_effect = boom
+        plan = UpdatePlan(updates=[_mr_update("a"), _mr_update("b"), _mr_update("c")])
+
+        result = apply_plan(plan, repo_path=REPO, platform=platform, mode=RunMode.publish)
+
+        # Fail-fast: a's failure is recorded (not raised) and b/c are not
+        # attempted; the bookmarks were pushed regardless.
+        platform.ensure_mr.assert_called_once()
+        assert result.failed == {"a": boom}
+        assert result.mr_urls == {}
+        mock_jj_cls.return_value.git_push_bookmarks.assert_called_once()
+        assert "not attempted: b, c" in capsys.readouterr().out
+
+    @patch("repoactive.runner.JJ")
     def test_push_mode_skips_mr(self, mock_jj_cls: MagicMock) -> None:
         # In push mode the bookmark is pushed but the MR is left alone.
         plan = UpdatePlan(updates=[_mr_update("a")])
 
-        urls = apply_plan(plan, repo_path=REPO, platform=None, mode=RunMode.push)
+        result = apply_plan(plan, repo_path=REPO, platform=None, mode=RunMode.push)
 
         mock_jj_cls.return_value.git_push_bookmarks.assert_called_once_with("repoactive/a")
-        assert urls == {}
+        assert result.mr_urls == {}
 
 
 class TestSuppressSupersededMRs:
@@ -1642,6 +1663,31 @@ class TestRunAll:
         assert summary.results["a"].mr_url == "https://example.com/mr/a"
 
     @patch("repoactive.runner.run_job")
+    def test_failed_mr_recorded_in_summary(
+        self, mock_run_job: MagicMock, mock_jj: MagicMock, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        a = _job("a")
+        result = _result(a, revsets=["repoactive/a"])
+        result.update = _mr_update("a")
+        mock_run_job.return_value = result
+        platform = MagicMock()
+        boom = RuntimeError("boom")
+        platform.ensure_mr.side_effect = boom
+
+        summary = run_all(
+            config=_config(a), repo_path=REPO, platform=platform, mode=RunMode.publish
+        )
+
+        # The branch was pushed and the job keeps its results entry, but the
+        # MR failure makes the run fail overall.
+        mock_jj.return_value.git_push_bookmarks.assert_called_once_with("repoactive/a")
+        assert summary.results["a"].mr_url is None
+        assert summary.failed == {"a": boom}
+        assert not summary.ok
+        # The report still prints, and "a" is not double-counted in the total.
+        assert "Done: 1/1 produced output, 1 failed." in capsys.readouterr().out
+
+    @patch("repoactive.runner.run_job")
     def test_unless_superseded_mr_dropped_from_plan(
         self, mock_run_job: MagicMock, mock_jj: MagicMock
     ) -> None:
@@ -1766,7 +1812,7 @@ class TestRunAll:
         mock_run_job.assert_called_once()
         mock_apply_plan.assert_not_called()
 
-    @patch("repoactive.runner.apply_plan", return_value={})
+    @patch("repoactive.runner.apply_plan", return_value=ApplyResult())
     @patch("repoactive.runner.run_job")
     def test_non_local_run_applies_plan(
         self, mock_run_job: MagicMock, mock_apply_plan: MagicMock
