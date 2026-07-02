@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.2.0 - 2026-07-03
+
+- **Breaking:** platforms are now configured as name-keyed tables
+  (`[platform.<name>]`) instead of a `[[platform]]` array; an old
+  `[[platform]]` array is rejected with a clear error. The name is a label
+  (platforms are still matched to a repository by `url`), and it makes a
+  single field reachable from the command line, e.g.
+  `--set 'platform.github.token_env = "MY_TOKEN"'`.
+- A new `--set NAME=VALUE`/`-s` option overrides individual config values on
+  the command line without editing a file. `NAME` is a (dotted) TOML key and
+  `VALUE` a TOML expression; the override is merged as the last,
+  highest-priority source. Repeatable and available on `run`,
+  `validate-config`, `info jobs` and `info tags`.
+- A new `info` subcommand inspects the configured jobs:
+  `repoactive info jobs` shows all jobs as a dependency tree in topological
+  order, and `repoactive info tags` groups jobs by effective tag.
+- `run` now opens with the selected jobs rendered as the same dependency
+  tree `info jobs` shows. The trees printed by `run`, `info jobs` and
+  `info tags` are colorized when stdout is a terminal.
+- `run --tag` now fails with a clean error when a requested tag is carried
+  by no configured job, exactly like naming an unknown job — previously a
+  mistyped tag silently selected zero jobs and exited successfully.
+- Setting `REPOACTIVE_UI=noninteractive` now turns off the "how to undo"
+  hint panels, e.g. for unattended CI runs.
+- Log output is now rendered with rich. Set `REPOACTIVE_LOG_HANDLER=plain`
+  to get the plain stdlib handler back (e.g. when the output is collected by
+  a log aggregator); `REPOACTIVE_UI=noninteractive` also implies the plain
+  handler when `REPOACTIVE_LOG_HANDLER` is unset.
+- The log level can now be set from the environment with
+  `REPOACTIVE_LOG_LEVEL` (`debug`, `info`, `warning`, `error` or `critical`,
+  case-insensitive); an explicit `--debug` takes precedence.
+- A failing `jj git init --colocate` (run when pointing repoactive at a
+  plain git repository) is now reported as a clean error line instead of a
+  traceback.
+- `validate-config` now reports a missing configuration with the same
+  message as `run`, instead of wrapping it in "invalid config".
+- A non-integer `REPOACTIVE_PROGRESS_LINES` value now fails at startup with
+  a one-line error naming the variable (like the other `REPOACTIVE_*`
+  variables), instead of being silently ignored.
+- The Docker image's default jj version is now 0.43.0.
+
 ## 0.1.1 - 2026-07-02
 
 - `create_mr = "unless-superseded"` is now supported: such a job skips its
