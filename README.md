@@ -254,6 +254,7 @@ repoactive recent-commits --status unmerged
 | `--within`                         |       | How far back to look (default: `2w`; e.g. `7d`, `24h`) |
 | `--repo PATH`                      | `-r`  | jj repository path (default: `.`)                      |
 | `--status [all\|merged\|unmerged]` | `-s`  | Filter by merge status into trunk (default: `all`)     |
+| `--debug`                          | `-d`  | Enable debug logging                                   |
 
 ### jj revset aliases
 
@@ -308,6 +309,7 @@ Validation checks include unknown keys, missing required fields, invalid
 | --------------- | ----- | ---------------------------------------------------------------------------------------------------------------------------- |
 | `--config PATH` | `-c`  | Config file or directory of `*.toml` files; repeat to merge. Default: `.repoactive.d/` and `.repoactive.toml` under `--repo` |
 | `--repo PATH`   | `-r`  | jj repository path (default: `.`)                                                                                            |
+| `--debug`       | `-d`  | Enable debug logging                                                                                                         |
 
 ## Listing jobs
 
@@ -337,6 +339,7 @@ build           Build the project   enabled
 | --------------- | ----- | ---------------------------------------------------------------------------------------------------------------------------- |
 | `--config PATH` | `-c`  | Config file or directory of `*.toml` files; repeat to merge. Default: `.repoactive.d/` and `.repoactive.toml` under `--repo` |
 | `--repo PATH`   | `-r`  | jj repository path (default: `.`)                                                                                            |
+| `--debug`       | `-d`  | Enable debug logging                                                                                                         |
 
 ## Listing tags
 
@@ -374,6 +377,7 @@ nightly:
 | --------------- | ----- | ---------------------------------------------------------------------------------------------------------------------------- |
 | `--config PATH` | `-c`  | Config file or directory of `*.toml` files; repeat to merge. Default: `.repoactive.d/` and `.repoactive.toml` under `--repo` |
 | `--repo PATH`   | `-r`  | jj repository path (default: `.`)                                                                                            |
+| `--debug`       | `-d`  | Enable debug logging                                                                                                         |
 
 ## Configuration
 
