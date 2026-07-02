@@ -481,7 +481,7 @@ class JJ:
         and the now-dead git worktree pruned. Teardown is best-effort: jj errors
         during cleanup are suppressed so they cannot mask the body's outcome.
         """
-        tmp_root = Path(tempfile.mkdtemp(prefix="repoactive_"))
+        tmp_root = Path(tempfile.mkdtemp(prefix="repoactive-workspace-"))
         workspace_path = tmp_root / "workspace"
         logger.debug("adding workspace %s at %s", name, workspace_path)
         self.workspace_add(name, workspace_path)
