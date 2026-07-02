@@ -427,7 +427,7 @@ def _deep_merge(*, base: dict, override: dict) -> dict:
     return result
 
 
-def _merge_jobs(*, base: dict, override: dict) -> dict:
+def merge_jobs(*, base: dict, override: dict) -> dict:
     """Merge two job tables keyed by name.
 
     Order is preserved (base names first, new override names appended) and
@@ -532,9 +532,7 @@ def load_config(paths: list[Path]) -> Config:
     for source in sources:
         data = source.data
         try:
-            jobs = _merge_jobs(
-                base=merged.get("job", {}), override=jobs_table(data.get("job", {}))
-            )
+            jobs = merge_jobs(base=merged.get("job", {}), override=jobs_table(data.get("job", {})))
             platforms = _merge_platforms(
                 base=merged.get("platform", []), override=data.get("platform", [])
             )

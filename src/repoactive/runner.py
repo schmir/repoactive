@@ -22,10 +22,10 @@ from repoactive.config import (
     Config,
     CreateMR,
     Job,
-    _merge_jobs,
     detect_dependency_cycle,
     expand_config_paths,
     jobs_table,
+    merge_jobs,
 )
 from repoactive.jj import JJ, workspace_name
 from repoactive.lock import run_lock
@@ -490,7 +490,7 @@ def _load_job_specs(jobs_dir: Path) -> dict[str, dict]:
     specs: dict[str, dict] = {}
     for path in expand_config_paths([jobs_dir]):
         data = tomllib.loads(path.read_text())
-        specs = _merge_jobs(base=specs, override=jobs_table(data.get("job", {})))
+        specs = merge_jobs(base=specs, override=jobs_table(data.get("job", {})))
     return specs
 
 
