@@ -9,7 +9,7 @@ RUN <<EOF
 EOF
 
 # --- Install jujutsu — update JJ_VERSION to the desired release
-ARG JJ_VERSION=0.42.0
+ARG JJ_VERSION=0.43.0
 RUN ARCH=$(uname -m) && \
     curl -fsSL \
     "https://github.com/jj-vcs/jj/releases/download/v${JJ_VERSION}/jj-v${JJ_VERSION}-${ARCH}-unknown-linux-musl.tar.gz" \
