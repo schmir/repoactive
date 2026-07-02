@@ -446,7 +446,7 @@ class TestRunOneJob:
                 plan=plan,
                 run_names={"a"},
             )
-        assert summary.cooldown == {"a"}
+        assert summary.on_cooldown == {"a"}
         # A no-op result is recorded so dependents proceed on the base branch.
         assert summary.results["a"].produced_diff is False
         assert summary.results["a"].effective_revsets == ["trunk()"]
@@ -1875,7 +1875,7 @@ class TestRunAll:
         summary = run_all(config=self._cooldown_config("a", "7d"), repo_path=REPO)
 
         mock_run_job.assert_not_called()
-        assert summary.cooldown == {"a"}
+        assert summary.on_cooldown == {"a"}
         assert summary.results["a"].produced_diff is False
         assert summary.ok  # cooldown is not a failure
 
@@ -1900,7 +1900,7 @@ class TestRunAll:
         summary = run_all(config=self._cooldown_config("a", "7d"), repo_path=REPO)
 
         mock_run_job.assert_called_once()
-        assert not summary.cooldown
+        assert not summary.on_cooldown
 
     @patch("repoactive.runner.run_job")
     def test_cooldown_dependent_falls_back_to_base(
@@ -1921,7 +1921,7 @@ class TestRunAll:
 
         summary = run_all(config=config, repo_path=REPO)
 
-        assert summary.cooldown == {"a"}
+        assert summary.on_cooldown == {"a"}
         # b still runs, parented on the base branch since a was a no-op this run.
         b_call = next(c for c in mock_run_job.call_args_list if c.kwargs["job"].name == "b")
         assert b_call.kwargs["parents"] == ["trunk()"]
@@ -2089,7 +2089,7 @@ class TestRunAll:
 
         mock_run_generator.assert_not_called()
         mock_run_job.assert_not_called()
-        assert summary.cooldown == {"gen"}
+        assert summary.on_cooldown == {"gen"}
 
     @patch("repoactive.runner.run_generator", side_effect=RuntimeError("boom"))
     def test_generator_failure_is_recorded(

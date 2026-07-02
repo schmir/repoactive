@@ -127,7 +127,7 @@ class RunSummary:
     results: dict[str, JobResult] = field(default_factory=dict)
     failed: dict[str, Exception] = field(default_factory=dict)
     skipped: set[str] = field(default_factory=set)
-    cooldown: set[str] = field(default_factory=set)
+    on_cooldown: set[str] = field(default_factory=set)
 
     @property
     def ok(self) -> bool:
@@ -145,7 +145,7 @@ class RunSummary:
             f"\nDone: {produced}/{total} produced changes"
             + (f", {len(self.failed)} failed" if self.failed else "")
             + (f", {len(self.skipped)} skipped" if self.skipped else "")
-            + (f", {len(self.cooldown)} on cooldown" if self.cooldown else "")
+            + (f", {len(self.on_cooldown)} on cooldown" if self.on_cooldown else "")
             + "."
         )
 
@@ -726,7 +726,7 @@ def _run_one_job(  # noqa: PLR0913
     # docs/adr/0004-job-generators.md.
     if _on_cooldown(resolved_job, repo_path):
         print(f"==> [{job.name}] on cooldown ({resolved_job.cooldown_period}), skipped")
-        summary.cooldown.add(job.name)
+        summary.on_cooldown.add(job.name)
         # Treat like a no-op run so dependents proceed on the base branch.
         summary.results[job.name] = JobResult(
             job=resolved_job, effective_revsets=parents, produced_diff=False
