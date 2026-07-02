@@ -1,6 +1,7 @@
 from repoactive.updates import (
     BookmarkPush,
     JobUpdate,
+    MRLink,
     MRUpdate,
     UpdatePlan,
     build_mr_description,
@@ -50,13 +51,16 @@ class TestBuildMrDescription:
         )
 
     def test_dep_urls_included(self) -> None:
-        result = build_mr_description(_mr(), [("Dep A", "https://example.com/mr/1")])
+        result = build_mr_description(_mr(), [MRLink("Dep A", "https://example.com/mr/1")])
         assert result == "Depends on:\n- [Dep A](https://example.com/mr/1)"
 
     def test_dep_urls_multiple(self) -> None:
         result = build_mr_description(
             _mr(),
-            [("Dep A", "https://example.com/mr/1"), ("Dep B", "https://example.com/mr/2")],
+            [
+                MRLink("Dep A", "https://example.com/mr/1"),
+                MRLink("Dep B", "https://example.com/mr/2"),
+            ],
         )
         assert result == (
             "Depends on:\n- [Dep A](https://example.com/mr/1)\n- [Dep B](https://example.com/mr/2)"
@@ -64,13 +68,13 @@ class TestBuildMrDescription:
 
     def test_dep_urls_after_description(self) -> None:
         result = build_mr_description(
-            _mr(description="Details."), [("Dep A", "https://example.com/mr/1")]
+            _mr(description="Details."), [MRLink("Dep A", "https://example.com/mr/1")]
         )
         assert result == "Details.\n\nDepends on:\n- [Dep A](https://example.com/mr/1)"
 
     def test_dep_urls_before_command_output(self) -> None:
         result = build_mr_description(
-            _mr(command_output="some output"), [("Dep A", "https://example.com/mr/1")]
+            _mr(command_output="some output"), [MRLink("Dep A", "https://example.com/mr/1")]
         )
         assert result == (
             "Depends on:\n- [Dep A](https://example.com/mr/1)\n\n```\n$ cmd-x\nsome output\n```"

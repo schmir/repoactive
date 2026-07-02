@@ -35,6 +35,7 @@ from repoactive.ui import print_undo_hint
 from repoactive.updates import (
     BookmarkPush,
     JobUpdate,
+    MRLink,
     MRUpdate,
     UpdatePlan,
     build_mr_description,
@@ -1016,8 +1017,8 @@ def _apply_plan_publish(
     ]
     for i, update in enumerate(pending):
         assert update.mr is not None  # filtered above
-        dep_urls = [
-            (titles[dep], result.mr_urls[dep])
+        dependency_links = [
+            MRLink(title=titles[dep], url=result.mr_urls[dep])
             for dep in update.mr.depends_on
             if dep in result.mr_urls
         ]
@@ -1032,7 +1033,7 @@ def _apply_plan_publish(
                 source_branch=update.mr.source_branch,
                 target_branch=update.mr.target_branch or platform.default_branch(),
                 title=update.mr.title,
-                description=build_mr_description(update.mr, dep_urls),
+                description=build_mr_description(update.mr, dependency_links),
                 labels=update.mr.labels,
                 draft=update.mr.draft,
             )

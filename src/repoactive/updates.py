@@ -4,10 +4,14 @@ A run is split into two phases: a *collect* phase that does only local jj work
 (running the command, setting the bookmark, writing the commit) and records the
 intended remote operations into an ``UpdatePlan``, and an *apply* phase that
 performs those operations (``jj git push`` and ``Platform.ensure_mr``). The
-models here are pydantic so a plan can be serialized to disk and applied later.
+plan models are pydantic so a plan can be serialized to disk and applied later;
+``MRLink`` is not part of the plan — it exists only at apply time, once the
+dependency MR URLs it carries are known.
 """
 
 from __future__ import annotations
+
+from dataclasses import dataclass
 
 from pydantic import BaseModel
 
@@ -63,18 +67,26 @@ class UpdatePlan(BaseModel):
     updates: list[JobUpdate] = []
 
 
-def build_mr_description(mr: MRUpdate, dep_urls: list[tuple[str, str]]) -> str:
+@dataclass(frozen=True)
+class MRLink:
+    """A dependency's MR, as linked from the "Depends on" section of a
+    dependent's MR description."""
+
+    title: str
+    url: str
+
+
+def build_mr_description(mr: MRUpdate, dependency_links: list[MRLink]) -> str:
     """Assemble an MR description from its parts.
 
     Order: the job's base description, then a "Depends on" section linking each
-    dependency's MR (``dep_urls`` is ``(title, url)`` pairs), then the command
-    output rendered as a fenced code block.
+    dependency's MR, then the command output rendered as a fenced code block.
     """
     description = mr.description or ""
-    if dep_urls:
+    if dependency_links:
         if description:
             description += "\n\n"
-        links = "\n".join(f"- [{title}]({url})" for title, url in dep_urls)
+        links = "\n".join(f"- [{link.title}]({link.url})" for link in dependency_links)
         description += f"Depends on:\n{links}"
     if mr.command_output:
         if description:
