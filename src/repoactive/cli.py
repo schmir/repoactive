@@ -53,6 +53,12 @@ _ConfigOption = Annotated[
     ),
 ]
 _RepoOption = Annotated[Path, typer.Option("--repo", "-r", help="Path to the jj repository.")]
+_DebugOption = Annotated[bool, typer.Option("--debug", "-d", help="Enable debug logging.")]
+
+
+def _setup_logging(debug: bool) -> None:
+    if debug:
+        logging.basicConfig(level=logging.DEBUG)
 
 
 class MergeStatus(StrEnum):
@@ -140,7 +146,7 @@ def run(  # noqa: PLR0913
             "'push' also pushes bookmarks, 'publish' also creates/updates MRs/PRs.",
         ),
     ] = RunMode.local,
-    debug: Annotated[bool, typer.Option("--debug", "-d", help="Enable debug logging.")] = False,
+    debug: _DebugOption = False,
     tags: Annotated[
         list[str] | None,
         typer.Option(
@@ -155,8 +161,7 @@ def run(  # noqa: PLR0913
     ] = None,
 ) -> None:
     """Apply jobs locally; pass --mode push or --mode publish to publish."""
-    if debug:
-        logging.basicConfig(level=logging.DEBUG)
+    _setup_logging(debug)
     _check_jj()
     try:
         cfg = load_config(_resolve_config(config, repo))
@@ -194,6 +199,7 @@ def run(  # noqa: PLR0913
 def validate_config(
     config: _ConfigOption = None,
     repo: _RepoOption = _DEFAULT_REPO,
+    debug: _DebugOption = False,
 ) -> None:
     """Validate configuration and exit.
 
@@ -201,6 +207,7 @@ def validate_config(
     defined.' on success (exit 0). Prints the error to stderr and exits with
     code 1 on failure.
     """
+    _setup_logging(debug)
     try:
         paths = _resolve_config(config, repo)
         files = expand_config_paths(paths)
@@ -245,6 +252,7 @@ def recent_commits(
         list[str] | None,
         typer.Argument(help="Job names to filter on (default: all)."),
     ] = None,
+    debug: _DebugOption = False,
 ) -> None:
     """List commits produced by repoactive within a time window.
 
@@ -253,6 +261,7 @@ def recent_commits(
     By default shows all commits; pass --status merged or --status unmerged to
     filter by whether the commit has landed in trunk.
     """
+    _setup_logging(debug)
     _check_jj()
     _ensure_colocated_repo(repo)
     try:

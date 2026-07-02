@@ -1,4 +1,5 @@
 import json
+import re
 from datetime import datetime
 from importlib.metadata import version
 from pathlib import Path
@@ -24,6 +25,27 @@ def _make_repo(tmp_path: Path) -> Path:
     (tmp_path / ".jj").mkdir()
     (tmp_path / ".git").mkdir()
     return tmp_path
+
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _plain(output: str) -> str:
+    """Strip ANSI style sequences from CLI output.
+
+    typer forces terminal mode (and thus rich's styled help output) when
+    GITHUB_ACTIONS, FORCE_COLOR, or PY_COLORS is set, even under CliRunner;
+    the styling splits option names like ``--debug`` across escape sequences.
+    """
+    return _ANSI_RE.sub("", output)
+
+
+class TestDebugOption:
+    def test_all_jj_commands_expose_debug(self) -> None:
+        for command in ("run", "validate-config", "recent-commits"):
+            result = runner.invoke(app, [command, "--help"], env={"COLUMNS": "200"})
+            assert result.exit_code == 0
+            assert "--debug" in _plain(result.output), command
 
 
 class TestVersion:
