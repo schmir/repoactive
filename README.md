@@ -116,9 +116,10 @@ need to write is the script that produces the change.
 3. If the script produced a diff, it records the change. With `--mode push`
    or `--mode publish`, it pushes the branch; with `--mode publish`, it also
    creates or updates the merge request.
-4. If the script produced no diff, the branch is reset to the base. With
-   `--mode push` or `--mode publish`, the reset branch is pushed without
-   opening or updating an MR.
+4. If the script produced no diff, the empty commit is discarded and no MR
+   is opened. A branch left over from an earlier run that did produce a diff
+   is now stale, so it is deleted; with `--mode push` or `--mode publish`,
+   the deletion is pushed to the remote.
 
 > **jj commits the whole working tree.** Because `repoactive` uses jj, every
 > new file your script creates inside the working directory is added to the
