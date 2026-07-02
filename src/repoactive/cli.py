@@ -70,9 +70,9 @@ class MergeStatus(StrEnum):
     unmerged = "unmerged"
 
 
-def _resolve_config(config: list[Path] | None, repo: Path) -> list[Path]:
+def _resolve_config(config_paths: list[Path] | None, repo: Path) -> list[Path]:
     """Use the given config paths, or discover defaults inside ``repo``."""
-    return config or default_config_paths(repo)
+    return config_paths or default_config_paths(repo)
 
 
 def _error(message: str) -> None:
@@ -136,7 +136,7 @@ def callback(
 
 @app.command()
 def run(  # noqa: PLR0913
-    config: _ConfigOption = None,
+    config_paths: _ConfigOption = None,
     repo: _RepoOption = _DEFAULT_REPO,
     mode: Annotated[
         RunMode,
@@ -165,7 +165,7 @@ def run(  # noqa: PLR0913
     _setup_logging(debug)
     _check_jj()
     try:
-        cfg = load_config(_resolve_config(config, repo))
+        cfg = load_config(_resolve_config(config_paths, repo))
     except ConfigNotFoundError as e:
         _error(str(e))
         raise typer.Exit(code=1) from e
@@ -204,7 +204,7 @@ def run(  # noqa: PLR0913
 
 @app.command("validate-config")
 def validate_config(
-    config: _ConfigOption = None,
+    config_paths: _ConfigOption = None,
     repo: _RepoOption = _DEFAULT_REPO,
     debug: _DebugOption = False,
 ) -> None:
@@ -216,7 +216,7 @@ def validate_config(
     """
     _setup_logging(debug)
     try:
-        paths = _resolve_config(config, repo)
+        paths = _resolve_config(config_paths, repo)
         files = expand_config_paths(paths)
         typer.echo("Configuration files:")
         for file in files:
