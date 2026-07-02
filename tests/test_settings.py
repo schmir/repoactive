@@ -68,3 +68,30 @@ def test_invalid_log_handler_raises_naming_the_variable(monkeypatch: pytest.Monk
     monkeypatch.setenv("REPOACTIVE_LOG_HANDLER", "syslog")
     with pytest.raises(SettingsError, match="REPOACTIVE_LOG_HANDLER"):
         load_settings()
+
+
+def test_progress_lines_defaults_to_eight(monkeypatch: pytest.MonkeyPatch) -> None:
+    default = 8
+    monkeypatch.delenv("REPOACTIVE_PROGRESS_LINES", raising=False)
+    assert load_settings().progress_lines == default
+
+
+def test_progress_lines_reads_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    override = 7
+    monkeypatch.setenv("REPOACTIVE_PROGRESS_LINES", str(override))
+    assert load_settings().progress_lines == override
+
+
+def test_non_positive_progress_lines_passes_through_to_disable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("REPOACTIVE_PROGRESS_LINES", "0")
+    assert load_settings().progress_lines == 0
+
+
+def test_invalid_progress_lines_raises_naming_the_variable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("REPOACTIVE_PROGRESS_LINES", "lots")
+    with pytest.raises(SettingsError, match="REPOACTIVE_PROGRESS_LINES"):
+        load_settings()

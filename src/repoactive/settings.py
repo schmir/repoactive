@@ -40,6 +40,11 @@ class Settings(BaseSettings):
     # otherwise.
     log_handler: Literal["rich", "plain"] | None = None
 
+    # Set REPOACTIVE_PROGRESS_LINES to change how many output lines the live
+    # tail shows while a job command runs; a value <= 0 disables the live
+    # block entirely.
+    progress_lines: int = 8
+
     @field_validator("ui", "log_level", "log_handler", mode="before")
     @classmethod
     def _lowercase(cls, value: object) -> object:

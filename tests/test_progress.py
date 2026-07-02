@@ -1,10 +1,9 @@
 import io
 from typing import cast
 
-import pytest
 from rich.console import Console
 
-from repoactive.progress import DEFAULT_PROGRESS_LINES, ProgressView, progress_line_count
+from repoactive.progress import ProgressView
 
 
 def _terminal_console() -> Console:
@@ -19,25 +18,6 @@ def _plain_console() -> Console:
 def _written(console: Console) -> str:
     # The helpers above back every Console with a StringIO.
     return cast(io.StringIO, console.file).getvalue()
-
-
-class TestProgressLines:
-    def test_defaults_when_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("REPOACTIVE_PROGRESS_LINES", raising=False)
-        assert progress_line_count() == DEFAULT_PROGRESS_LINES
-
-    def test_reads_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        override = 7
-        monkeypatch.setenv("REPOACTIVE_PROGRESS_LINES", str(override))
-        assert progress_line_count() == override
-
-    def test_falls_back_on_non_integer(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("REPOACTIVE_PROGRESS_LINES", "lots")
-        assert progress_line_count() == DEFAULT_PROGRESS_LINES
-
-    def test_non_positive_passes_through_to_disable(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("REPOACTIVE_PROGRESS_LINES", "0")
-        assert progress_line_count() == 0
 
 
 class TestProgressView:

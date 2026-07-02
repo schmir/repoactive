@@ -12,32 +12,11 @@ truncation and only draws when stdout is a real terminal, so piped/CI output is
 left untouched.
 """
 
-import os
 from collections import deque
 
 from rich.console import Console, Group
 from rich.live import Live
 from rich.text import Text
-
-# Number of output lines shown in the live block. Overridable so a user who wants
-# more (or less) context can tune it; <= 0 disables the live block entirely.
-PROGRESS_LINES_ENV = "REPOACTIVE_PROGRESS_LINES"
-DEFAULT_PROGRESS_LINES = 8
-
-
-def progress_line_count() -> int:
-    """How many output lines to show, from ``REPOACTIVE_PROGRESS_LINES``.
-
-    Defaults to ``DEFAULT_PROGRESS_LINES`` and falls back to it on a non-integer
-    value. A value <= 0 is returned as-is and disables the live block.
-    """
-    raw = os.environ.get(PROGRESS_LINES_ENV)
-    if raw is None:
-        return DEFAULT_PROGRESS_LINES
-    try:
-        return int(raw)
-    except ValueError:
-        return DEFAULT_PROGRESS_LINES
 
 
 class ProgressView:

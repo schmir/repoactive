@@ -30,7 +30,8 @@ from repoactive.config import (
 from repoactive.jj import JJ, workspace_name
 from repoactive.lock import run_lock
 from repoactive.platforms.base import MRParams, Platform
-from repoactive.progress import ProgressView, progress_line_count
+from repoactive.progress import ProgressView
+from repoactive.settings import load_settings
 from repoactive.ui import print_undo_hint
 from repoactive.updates import (
     BookmarkPush,
@@ -261,7 +262,9 @@ def _run_command(
     # for the commit message and the success result) while feeding a live tail of
     # the last few lines (see repoactive.progress).
     output_lines: list[str] = []
-    view = ProgressView(header=f"==> [{job.name}] running…", max_lines=progress_line_count())
+    view = ProgressView(
+        header=f"==> [{job.name}] running…", max_lines=load_settings().progress_lines
+    )
     try:
         assert proc.stdout is not None
         with view:
