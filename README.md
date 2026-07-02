@@ -15,8 +15,11 @@ and (with `--mode publish`) the full MR lifecycle.
 - [How it works](#how-it-works)
 - [Use cases](#use-cases)
 - [Usage](#usage)
+  - [Environment variables](#environment-variables)
 - [Inspecting repoactive commits](#inspecting-repoactive-commits)
 - [Validating configuration](#validating-configuration)
+- [Listing jobs](#listing-jobs)
+- [Listing tags](#listing-tags)
 - [Configuration](#configuration)
 - [Selecting jobs with tags](#selecting-jobs-with-tags)
 - [Disabling jobs](#disabling-jobs)
@@ -195,15 +198,20 @@ repoactive run --debug
 | `--tag TAG`                     | `-t`  | Run jobs carrying any of these tags (repeatable). With no tags/jobs the default run targets the `enabled` tag                |
 | `--debug`                       | `-d`  | Enable debug logging                                                                                                         |
 
-Instead of passing `--debug` on every invocation, set the
-`REPOACTIVE_LOG_LEVEL` environment variable to `debug`, `info`, `warning`,
-`error`, or `critical` to enable logging at that level (the `--debug` flag
-takes precedence). Log records render through
-[rich](https://github.com/Textualize/rich) by default; set
-`REPOACTIVE_LOG_HANDLER=plain` to use the stdlib's plain stream handler
-instead, e.g. when the output is collected by a log aggregator. When
-`REPOACTIVE_LOG_HANDLER` is unset, `REPOACTIVE_UI=noninteractive` also
-switches the log handler to `plain`.
+### Environment variables
+
+Besides the command-line options, repoactive reads a few `REPOACTIVE_*`
+environment variables that tune how it presents itself in the current
+environment (as opposed to the [configuration](#configuration), which
+describes the jobs to run). They are handled uniformly: all of them go
+through a single settings model and are validated together at startup, so a
+misconfigured variable fails immediately with a one-line error naming it
+instead of surfacing mid-run or being silently ignored. Values are
+case-insensitive.
+
+#### `REPOACTIVE_UI`
+
+`interactive` (default) or `noninteractive`.
 
 Every `run` captures the jj operation id beforehand and prints a
 `jj op restore <id>` command at the end of the run (last, since a run can
@@ -211,18 +219,41 @@ produce a lot of output). Run it to roll the local repository - commits,
 bookmarks and colocated git refs - back to the state it was in before the
 run. It only undoes local changes: a branch already pushed or an MR already
 created by a `--mode push`/`--mode publish` run is not affected, as the hint
-panel itself points out. Set the `REPOACTIVE_UI` environment variable to
-`noninteractive` to suppress the hint panel, e.g. for unattended CI runs
-(leave it unset where a human may be watching — say, a CI container you can
-log in to).
+panel itself points out.
+
+`noninteractive` suppresses these "how to undo" hint panels. Set it where
+nobody is at the keyboard, say an unattended CI job. This is an explicit
+switch rather than CI auto-detection, because a CI container someone has
+logged in to _is_ interactive.
+
+#### `REPOACTIVE_LOG_LEVEL`
+
+`debug`, `info`, `warning`, `error`, or `critical`; unset by default
+(logging off).
+
+Enables logging at that level without passing `--debug` on every invocation;
+an explicit `--debug` takes precedence.
+
+#### `REPOACTIVE_LOG_HANDLER`
+
+`rich` or `plain`; defaults to `rich`, or `plain` when `REPOACTIVE_UI` is
+`noninteractive`.
+
+How log records are rendered: a colorized column layout via
+[rich](https://github.com/Textualize/rich), or the stdlib's plain stream
+handler (e.g. when the output is collected by a log aggregator).
+
+#### `REPOACTIVE_PROGRESS_LINES`
+
+An integer (default: `8`).
 
 While a job's command runs in an interactive terminal, repoactive shows a
 live, scrolling block of its most recent output lines. The block stays on
 screen once the command finishes, with the job's status line printed below
-it. It defaults to 8 lines; set the `REPOACTIVE_PROGRESS_LINES` environment
-variable to change the count (or to `0` to disable the live block). When
-output is not a terminal (piped or in CI) the block is disabled and the
-command's output is left untouched.
+it. `REPOACTIVE_PROGRESS_LINES` sets how many lines that live tail shows;
+`0` or less disables the live block entirely. When output is not a terminal
+(piped or in CI) the block is disabled and the command's output is left
+untouched.
 
 ## Inspecting repoactive commits
 
