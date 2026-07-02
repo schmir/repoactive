@@ -204,16 +204,16 @@ instead, e.g. when the output is collected by a log aggregator. When
 `REPOACTIVE_LOG_HANDLER` is unset, `REPOACTIVE_UI=noninteractive` also
 switches the log handler to `plain`.
 
-A local `run` (the default `--mode local`) captures the jj operation id
-beforehand and prints a `jj op restore <id>` command (both before and after
-the run, since a run can produce a lot of output). Run it to roll the
-repository - commits, bookmarks and colocated git refs - back to the state
-it was in before the run. The hint is omitted for
-`--mode push`/`--mode publish` runs, since restoring local state would not
-undo a branch already pushed or an MR already created. Set the
-`REPOACTIVE_UI` environment variable to `noninteractive` to suppress the
-hint panel, e.g. for unattended CI runs (leave it unset where a human may be
-watching — say, a CI container you can log in to).
+Every `run` captures the jj operation id beforehand and prints a
+`jj op restore <id>` command at the end of the run (last, since a run can
+produce a lot of output). Run it to roll the local repository - commits,
+bookmarks and colocated git refs - back to the state it was in before the
+run. It only undoes local changes: a branch already pushed or an MR already
+created by a `--mode push`/`--mode publish` run is not affected, as the hint
+panel itself points out. Set the `REPOACTIVE_UI` environment variable to
+`noninteractive` to suppress the hint panel, e.g. for unattended CI runs
+(leave it unset where a human may be watching — say, a CI container you can
+log in to).
 
 While a job's command runs in an interactive terminal, repoactive shows a
 live, scrolling block of its most recent output lines. The block stays on
