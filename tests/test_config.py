@@ -347,7 +347,7 @@ class TestLoadConfig:
     def test_minimal_config(self, tmp_path: Path) -> None:
         f = tmp_path / ".repoactive.toml"
         f.write_text(
-            '[[platform]]\nurl = "https://github.com"\ntype = "github"\ntoken_env = "GH_TOKEN"\n'
+            '[platform.github]\nurl = "https://github.com"\ntype = "github"\ntoken_env = "GH_TOKEN"\n'
             '[job.x]\ncommand = "echo"\ntitle = "X"\n'
         )
         cfg = load_config([f])
@@ -362,8 +362,8 @@ class TestLoadConfig:
     def test_multiple_platforms(self, tmp_path: Path) -> None:
         f = tmp_path / ".repoactive.toml"
         f.write_text(
-            '[[platform]]\nurl = "https://github.com"\ntype = "github"\ntoken_env = "GH_TOKEN"\n'
-            '[[platform]]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "GL_TOKEN"\n'
+            '[platform.github]\nurl = "https://github.com"\ntype = "github"\ntoken_env = "GH_TOKEN"\n'
+            '[platform.gitlab]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "GL_TOKEN"\n'
         )
         cfg = load_config([f])
         assert [p.url for p in cfg.platforms] == ["https://github.com", "https://gitlab.com"]
@@ -371,11 +371,11 @@ class TestLoadConfig:
     def test_merge_later_scalar_wins(self, tmp_path: Path) -> None:
         base = tmp_path / "base.toml"
         base.write_text(
-            '[[platform]]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "A"\n'
+            '[platform.gitlab]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "A"\n'
         )
         override = tmp_path / "override.toml"
         override.write_text(
-            '[[platform]]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "B"\n'
+            '[platform.gitlab]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "B"\n'
         )
         cfg = load_config([base, override])
         gitlab = next(p for p in cfg.platforms if p.url == "https://gitlab.com")
@@ -384,7 +384,7 @@ class TestLoadConfig:
     def test_merge_later_nested_scalar_wins(self, tmp_path: Path) -> None:
         base = tmp_path / "base.toml"
         base.write_text(
-            '[[platform]]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
+            '[platform.gitlab]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
             '[job-defaults]\nbranch_prefix = "old/"\n'
         )
         override = tmp_path / "override.toml"
@@ -395,7 +395,7 @@ class TestLoadConfig:
     def test_merge_unset_key_preserved(self, tmp_path: Path) -> None:
         base = tmp_path / "base.toml"
         base.write_text(
-            '[[platform]]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
+            '[platform.gitlab]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
             '[job-defaults]\nbranch_prefix = "base/"\nmr_title_prefix = "kept"\n'
         )
         override = tmp_path / "override.toml"
@@ -407,19 +407,30 @@ class TestLoadConfig:
     def test_merge_platform_new_entry_appended(self, tmp_path: Path) -> None:
         base = tmp_path / "base.toml"
         base.write_text(
-            '[[platform]]\nurl = "https://github.com"\ntype = "github"\ntoken_env = "GH"\n'
+            '[platform.github]\nurl = "https://github.com"\ntype = "github"\ntoken_env = "GH"\n'
         )
         override = tmp_path / "override.toml"
         override.write_text(
-            '[[platform]]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "GL"\n'
+            '[platform.gitlab]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "GL"\n'
         )
         cfg = load_config([base, override])
         assert [p.url for p in cfg.platforms] == ["https://github.com", "https://gitlab.com"]
 
+    def test_duplicate_platform_host_rejected(self, tmp_path: Path) -> None:
+        # two differently-named platforms resolving to the same host are
+        # ambiguous (only the first would ever be matched).
+        f = tmp_path / "dup.toml"
+        f.write_text(
+            '[platform.gh]\nurl = "https://github.com"\ntype = "github"\ntoken_env = "A"\n'
+            '[platform.gh2]\nurl = "git@github.com:org/repo.git"\ntype = "github"\ntoken_env = "B"\n'
+        )
+        with pytest.raises(ConfigError, match=r"same host 'github\.com'"):
+            load_config([f])
+
     def test_merge_jobs_new_name_appended(self, tmp_path: Path) -> None:
         base = tmp_path / "base.toml"
         base.write_text(
-            '[[platform]]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
+            '[platform.gitlab]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
             '[job.a]\ncommand = "cmd-a"\ntitle = "A"\n'
         )
         override = tmp_path / "override.toml"
@@ -430,7 +441,7 @@ class TestLoadConfig:
     def test_merge_jobs_existing_name_updated(self, tmp_path: Path) -> None:
         base = tmp_path / "base.toml"
         base.write_text(
-            '[[platform]]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
+            '[platform.gitlab]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
             '[job.a]\ncommand = "old-cmd"\ntitle = "Old"\n'
         )
         override = tmp_path / "override.toml"
@@ -443,7 +454,7 @@ class TestLoadConfig:
     def test_merge_jobs_partial_field_override(self, tmp_path: Path) -> None:
         base = tmp_path / "base.toml"
         base.write_text(
-            '[[platform]]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
+            '[platform.gitlab]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
             '[job.a]\ncommand = "cmd"\ntitle = "A"\ndraft = false\n'
         )
         override = tmp_path / "override.toml"
@@ -460,7 +471,7 @@ class TestLoadConfig:
     def test_second_config_may_be_partial(self, tmp_path: Path) -> None:
         base = tmp_path / "base.toml"
         base.write_text(
-            '[[platform]]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
+            '[platform.gitlab]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
         )
         partial = tmp_path / "partial.toml"
         partial.write_text('[job-defaults]\nbranch_prefix = "x/"\n')
@@ -470,7 +481,7 @@ class TestLoadConfig:
     def test_second_config_invalid_depends_on_raises(self, tmp_path: Path) -> None:
         base = tmp_path / "base.toml"
         base.write_text(
-            '[[platform]]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
+            '[platform.gitlab]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
             '[job.a]\ncommand = "cmd"\ntitle = "A"\n'
         )
         override = tmp_path / "override.toml"
@@ -489,7 +500,7 @@ class TestLoadConfig:
     def test_validation_error_names_offending_file(self, tmp_path: Path) -> None:
         base = tmp_path / "base.toml"
         base.write_text(
-            '[[platform]]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
+            '[platform.gitlab]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
             '[job.a]\ncommand = "cmd"\ntitle = "A"\n'
         )
         override = tmp_path / "override.toml"
@@ -503,7 +514,7 @@ class TestLoadConfig:
     def test_override_scalar_wins(self, tmp_path: Path) -> None:
         base = tmp_path / "base.toml"
         base.write_text(
-            '[[platform]]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
+            '[platform.gitlab]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
             '[job-defaults]\ncooldown_period = "1h"\n'
         )
         cfg = load_config([base], overrides=['job-defaults.cooldown_period = "24h"'])
@@ -512,7 +523,7 @@ class TestLoadConfig:
     def test_override_dotted_key(self, tmp_path: Path) -> None:
         base = tmp_path / "base.toml"
         base.write_text(
-            '[[platform]]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
+            '[platform.gitlab]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
             '[job-defaults]\nbranch_prefix = "old/"\n'
         )
         cfg = load_config([base], overrides=['job-defaults.branch_prefix = "new/"'])
@@ -521,17 +532,34 @@ class TestLoadConfig:
     def test_override_job_field_merges(self, tmp_path: Path) -> None:
         base = tmp_path / "base.toml"
         base.write_text(
-            '[[platform]]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
+            '[platform.gitlab]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
             '[job.a]\ncommand = "cmd"\ntitle = "A"\ndraft = false\n'
         )
         cfg = load_config([base], overrides=["job.a.draft = true"])
         assert cfg.jobs[0].command == "cmd"
         assert cfg.jobs[0].draft is True
 
+    def test_override_platform_field_via_dotted_key(self, tmp_path: Path) -> None:
+        base = tmp_path / "base.toml"
+        base.write_text(
+            '[platform.github]\nurl = "https://github.com"\ntype = "github"\ntoken_env = "GITHUB_TOKEN"\n'
+        )
+        cfg = load_config([base], overrides=['platform.github.token_env = "MY_TOKEN"'])
+        github = next(p for p in cfg.platforms if p.url == "https://github.com")
+        assert github.token_env == "MY_TOKEN"
+
+    def test_old_platform_array_form_rejected(self, tmp_path: Path) -> None:
+        bad = tmp_path / "old.toml"
+        bad.write_text(
+            '[[platform]]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
+        )
+        with pytest.raises(ConfigError, match=r"\[platform.<name>\]"):
+            load_config([bad])
+
     def test_override_invalid_toml_names_set_label(self, tmp_path: Path) -> None:
         base = tmp_path / "base.toml"
         base.write_text(
-            '[[platform]]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
+            '[platform.gitlab]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
         )
         # cooldown = 24h is not valid TOML (bareword value)
         with pytest.raises(ConfigError, match=r"--set"):
@@ -540,7 +568,7 @@ class TestLoadConfig:
     def test_override_unknown_key_rejected(self, tmp_path: Path) -> None:
         base = tmp_path / "base.toml"
         base.write_text(
-            '[[platform]]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
+            '[platform.gitlab]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
         )
         with pytest.raises(ConfigError, match=r"--set"):
             load_config([base], overrides=["nonexistent = true"])
@@ -548,7 +576,7 @@ class TestLoadConfig:
     def test_name_in_job_body_rejected(self, tmp_path: Path) -> None:
         f = tmp_path / "redundant.toml"
         f.write_text(
-            '[[platform]]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
+            '[platform.gitlab]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
             '[job.a]\nname = "a"\ncommand = "cmd"\ntitle = "A"\n'
         )
         with pytest.raises(ConfigError, match=str(f)) as exc_info:
@@ -558,7 +586,7 @@ class TestLoadConfig:
     def test_old_job_array_form_rejected_with_migration_hint(self, tmp_path: Path) -> None:
         f = tmp_path / "legacy.toml"
         f.write_text(
-            '[[platform]]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
+            '[platform.gitlab]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
             '[[job]]\nname = "a"\ncommand = "cmd"\ntitle = "A"\n'
         )
         with pytest.raises(ConfigError, match=str(f)) as exc_info:
@@ -570,7 +598,7 @@ class TestLoadConfig:
         conf_dir.mkdir()
         (conf_dir / "02-override.toml").write_text('[job-defaults]\nbranch_prefix = "second/"\n')
         (conf_dir / "01-base.toml").write_text(
-            '[[platform]]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
+            '[platform.gitlab]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
             '[job-defaults]\nbranch_prefix = "first/"\n'
             '[job.a]\ncommand = "cmd"\ntitle = "A"\n'
         )
@@ -583,7 +611,7 @@ class TestLoadConfig:
         conf_dir = tmp_path / "conf.d"
         conf_dir.mkdir()
         (conf_dir / "a.toml").write_text(
-            '[[platform]]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
+            '[platform.gitlab]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
             '[job.x]\ncommand = "cmd"\ntitle = "X"\n'
         )
         (conf_dir / "README.md").write_text("not a config\n")
@@ -595,7 +623,7 @@ class TestLoadConfig:
         conf_dir.mkdir()
         (conf_dir / "nested.toml").mkdir()
         (conf_dir / "a.toml").write_text(
-            '[[platform]]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
+            '[platform.gitlab]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
             '[job.x]\ncommand = "cmd"\ntitle = "X"\n'
         )
         cfg = load_config([conf_dir])
@@ -605,7 +633,7 @@ class TestLoadConfig:
         conf_dir = tmp_path / "conf.d"
         conf_dir.mkdir()
         (conf_dir / "base.toml").write_text(
-            '[[platform]]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
+            '[platform.gitlab]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
             '[job-defaults]\nbranch_prefix = "dir/"\n'
         )
         override = tmp_path / "override.toml"

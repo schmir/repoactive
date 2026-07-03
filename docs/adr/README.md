@@ -57,3 +57,9 @@ it.
   source, so errors are attributed to the file that introduced them and a
   fragment may only reference jobs defined by earlier-sorted sources —
   forward cross-file `depends_on` is rejected by design.
+- [0011 — Configure platforms as a name-keyed table](0011-platforms-keyed-by-name.md)
+  — Accepted (supersedes the platform note in 0008). Platforms move from a
+  `[[platform]]` array merged by `url` to a `[platform.<name>]` table merged
+  by name, so a field is reachable via `--set platform.<name>.<field>` and
+  jobs and platforms share one merge helper. A breaking change; the old
+  array form is rejected with a migration hint.

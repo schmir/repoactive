@@ -15,7 +15,7 @@ class NoPlatformConfiguredError(RuntimeError):
     def __init__(self, remote_url: str, remote_host: str) -> None:
         super().__init__(
             f"no platform configured for remote '{remote_url}' (host: {remote_host!r}); "
-            f"add a [[platform]] entry with a matching url"
+            f"add a [platform.<name>] entry with a matching url"
         )
 
 

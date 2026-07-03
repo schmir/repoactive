@@ -502,10 +502,11 @@ depends_on = ["regenerate-api-client", "sync-license-headers"]
 
 For public GitHub.com or GitLab.com repositories no platform declaration is
 needed — `repoactive` detects the remote URL automatically. To use a
-self-hosted instance, add a `[[platform]]` section:
+self-hosted instance, add a `[platform.<name>]` section (the name is a label
+of your choosing; platforms are matched to a repository by their `url`):
 
 ```toml
-[[platform]]
+[platform.company-gitlab]
 # Base URL of the platform instance
 url = "https://gitlab.example.com"
 # Name of the env var holding the API token
@@ -580,20 +581,17 @@ repoactive run \
   --set 'job.lint.disabled = true'
 ```
 
-Platforms are an array of tables (`[[platform]]`) merged by their `url`, so
-there is no dotted key into a single entry. Override one by passing a
-`platform` list whose entry repeats the target `url`; only the `url` and the
-fields you change are needed, the rest are kept from the file or the
-built-in defaults:
+Platforms are name-keyed tables (`[platform.<name>]`) merged by name, so a
+single field is reachable with a dotted key. The built-in defaults define
+`github` and `gitlab`, so pointing GitHub.com at a different token
+environment variable is just:
 
 ```bash
-# point github.com at a different token environment variable
-repoactive run \
-  --set 'platform = [{ url = "https://github.com", token_env = "MY_TOKEN" }]'
+repoactive run --set 'platform.github.token_env = "MY_TOKEN"'
 ```
 
-A `url` that does not already exist is appended as a new platform, which
-then needs the full set of fields (`type`, `token_env`, …).
+A platform name that does not already exist is created as a new platform,
+which then needs the full set of fields (`url`, `type`, `token_env`).
 
 `--set` is available on `run`, `validate-config`, `info jobs`, and
 `info tags`. Each `--set` is validated as its own source (like a separate

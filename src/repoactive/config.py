@@ -127,6 +127,36 @@ class JobsNotTableError(ValueError):
         )
 
 
+class PlatformNotTableError(ValueError):
+    """Raised when a [platform.<name>] entry is not a table."""
+
+    def __init__(self, name: str) -> None:
+        super().__init__(f"platform {name!r} must be a table ([platform.{name}])")
+
+
+class PlatformsNotTableError(ValueError):
+    """Raised when 'platform' is not a table keyed by name (e.g. the old array form)."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "platforms must be a table keyed by name ([platform.<name>]); the [[platform]] "
+            "array form is no longer supported"
+        )
+
+
+class DuplicatePlatformHostError(ValueError):
+    """Raised when two platforms resolve to the same host.
+
+    Platforms are matched to a repository by host (see platforms._match_platform),
+    so two entries sharing a host are ambiguous — only the first would ever be used."""
+
+    def __init__(self, host: str, first_url: str, second_url: str) -> None:
+        super().__init__(
+            f"two platforms resolve to the same host {host!r} "
+            f"({first_url!r} and {second_url!r}); platform hosts must be unique"
+        )
+
+
 class ConfigError(Exception):
     """Wraps a parse or validation error with the config source it came from."""
 
@@ -369,6 +399,39 @@ class Config(BaseModel):
             jobs.append({**body, "name": name})
         return jobs
 
+    @field_validator("platforms", mode="before")
+    @classmethod
+    def _platforms_from_mapping(cls, value: object) -> object:
+        """Coerce the ``[platform.<name>]`` table into the list pydantic expects.
+
+        TOML stores platforms as a table keyed by name; the name is only a label
+        (platforms are matched by ``url``), so it is dropped here. A non-mapping
+        value (e.g. an already-built ``list`` passed programmatically) passes
+        through unchanged."""
+        if not isinstance(value, dict):
+            return value
+        platforms: list[dict] = []
+        for key, body in value.items():
+            if not isinstance(body, dict):
+                raise PlatformNotTableError(str(key))
+            platforms.append(body)
+        return platforms
+
+    @model_validator(mode="after")
+    def validate_unique_platform_hosts(self) -> Config:
+        # platforms are matched to a repo by host, so two entries sharing a host
+        # are ambiguous (only the first would ever be selected). Imported here,
+        # not at module top, to avoid a circular import via platforms/__init__.
+        from repoactive.platforms.base import extract_host  # noqa: PLC0415
+
+        url_by_host: dict[str, str] = {}
+        for platform in self.platforms:
+            host = extract_host(platform.url)
+            if host in url_by_host:
+                raise DuplicatePlatformHostError(host, url_by_host[host], platform.url)
+            url_by_host[host] = platform.url
+        return self
+
     @model_validator(mode="after")
     def validate_depends_on(self) -> Config:
         names = {j.name for j in self.jobs}
@@ -417,6 +480,17 @@ def jobs_table(value: object) -> dict:
     return value
 
 
+def platforms_table(value: object) -> dict:
+    """Return ``value`` as a platform table, rejecting the old ``[[platform]]`` array.
+
+    TOML parses ``[platform.<name>]`` tables into a dict keyed by name; an array
+    of tables (the format used before) parses into a list, which is no longer
+    accepted."""
+    if not isinstance(value, dict):
+        raise PlatformsNotTableError
+    return value
+
+
 def _deep_merge(*, base: dict, override: dict) -> dict:
     result = dict(base)
     for key, value in override.items():
@@ -427,8 +501,8 @@ def _deep_merge(*, base: dict, override: dict) -> dict:
     return result
 
 
-def merge_jobs(*, base: dict, override: dict) -> dict:
-    """Merge two job tables keyed by name.
+def _merge_named_tables(*, base: dict, override: dict) -> dict:
+    """Merge two tables keyed by name.
 
     Order is preserved (base names first, new override names appended) and
     override fields win field-by-field, the same semantics as the per-source
@@ -442,27 +516,23 @@ def merge_jobs(*, base: dict, override: dict) -> dict:
     return result
 
 
-def _merge_platforms(*, base: list[dict], override: list[dict]) -> list[dict]:
-    """Merge two platform lists by url: override fields win, new entries appended."""
-    platform_by_url: dict[str, dict] = {}
-    result: list[dict] = []
-    for platform in base + override:
-        url = platform.get("url", "")
-        if url in platform_by_url:
-            platform_by_url[url].update(platform)
-        else:
-            platform_by_url[url] = dict(platform)
-            result.append(platform_by_url[url])
-    return result
+def merge_jobs(*, base: dict, override: dict) -> dict:
+    """Merge two job tables keyed by name (see ``_merge_named_tables``)."""
+    return _merge_named_tables(base=base, override=override)
+
+
+def merge_platforms(*, base: dict, override: dict) -> dict:
+    """Merge two platform tables keyed by name (see ``_merge_named_tables``)."""
+    return _merge_named_tables(base=base, override=override)
 
 
 _default_platforms = """
-[[platform]]
+[platform.github]
 url="https://github.com"
 type="github"
 token_env="GITHUB_TOKEN"
 
-[[platform]]
+[platform.gitlab]
 url="https://gitlab.com"
 type="gitlab"
 token_env="GITLAB_TOKEN"
@@ -548,8 +618,9 @@ def load_config(paths: list[Path], overrides: list[str] | None = None) -> Config
         data = source.data
         try:
             jobs = merge_jobs(base=merged.get("job", {}), override=jobs_table(data.get("job", {})))
-            platforms = _merge_platforms(
-                base=merged.get("platform", []), override=data.get("platform", [])
+            platforms = merge_platforms(
+                base=merged.get("platform", {}),
+                override=platforms_table(data.get("platform", {})),
             )
             merged = _deep_merge(base=merged, override=data)
             merged["job"] = jobs

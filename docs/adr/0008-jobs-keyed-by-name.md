@@ -44,7 +44,9 @@ key — so internal code and generator-emitted jobs are unaffected. Generator
 
 Platforms stay a `[[platform]]` array: their natural key is the URL, which
 makes an awkward bare TOML key (dots and slashes), and there is no
-boilerplate to remove.
+boilerplate to remove. (Superseded by
+[ADR 0011](0011-platforms-keyed-by-name.md), which moves platforms to the
+same name-keyed form so a single field is reachable via `--set`.)
 
 ## Consequences
 
