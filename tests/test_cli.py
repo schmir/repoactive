@@ -140,6 +140,26 @@ class TestValidateConfigShowsLocations:
         assert result.exit_code == 1
         assert f"invalid config in {missing}:" in result.output
 
+    def test_set_override_applies(self, tmp_path: Path) -> None:
+        cfg = tmp_path / "config.toml"
+        _write_job(cfg, "a")
+        result = runner.invoke(
+            app,
+            ["info", "jobs", "--config", str(cfg), "--set", 'job.a.title = "Overridden"'],
+        )
+        assert result.exit_code == 0
+        assert "Overridden" in result.stdout
+
+    def test_set_override_invalid_reports_error(self, tmp_path: Path) -> None:
+        cfg = tmp_path / "config.toml"
+        _write_job(cfg, "a")
+        result = runner.invoke(
+            app, ["validate-config", "--config", str(cfg), "--set", "cooldown = 24h"]
+        )
+        assert result.exit_code == 1
+        assert "invalid config" in result.output
+        assert "--set" in result.output
+
     def test_missing_default_config_reports_error_like_run(self, tmp_path: Path) -> None:
         # No config anywhere: the message must match `run`'s, not be wrapped
         # in "invalid config".

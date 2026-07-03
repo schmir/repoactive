@@ -500,6 +500,51 @@ class TestLoadConfig:
         assert "base.toml" not in str(exc_info.value)
         assert "invalid duration" in str(exc_info.value)
 
+    def test_override_scalar_wins(self, tmp_path: Path) -> None:
+        base = tmp_path / "base.toml"
+        base.write_text(
+            '[[platform]]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
+            '[job-defaults]\ncooldown_period = "1h"\n'
+        )
+        cfg = load_config([base], overrides=['job-defaults.cooldown_period = "24h"'])
+        assert cfg.job_defaults.cooldown_period == "24h"
+
+    def test_override_dotted_key(self, tmp_path: Path) -> None:
+        base = tmp_path / "base.toml"
+        base.write_text(
+            '[[platform]]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
+            '[job-defaults]\nbranch_prefix = "old/"\n'
+        )
+        cfg = load_config([base], overrides=['job-defaults.branch_prefix = "new/"'])
+        assert cfg.job_defaults.branch_prefix == "new/"
+
+    def test_override_job_field_merges(self, tmp_path: Path) -> None:
+        base = tmp_path / "base.toml"
+        base.write_text(
+            '[[platform]]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
+            '[job.a]\ncommand = "cmd"\ntitle = "A"\ndraft = false\n'
+        )
+        cfg = load_config([base], overrides=["job.a.draft = true"])
+        assert cfg.jobs[0].command == "cmd"
+        assert cfg.jobs[0].draft is True
+
+    def test_override_invalid_toml_names_set_label(self, tmp_path: Path) -> None:
+        base = tmp_path / "base.toml"
+        base.write_text(
+            '[[platform]]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
+        )
+        # cooldown = 24h is not valid TOML (bareword value)
+        with pytest.raises(ConfigError, match=r"--set"):
+            load_config([base], overrides=["cooldown = 24h"])
+
+    def test_override_unknown_key_rejected(self, tmp_path: Path) -> None:
+        base = tmp_path / "base.toml"
+        base.write_text(
+            '[[platform]]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
+        )
+        with pytest.raises(ConfigError, match=r"--set"):
+            load_config([base], overrides=["nonexistent = true"])
+
     def test_name_in_job_body_rejected(self, tmp_path: Path) -> None:
         f = tmp_path / "redundant.toml"
         f.write_text(

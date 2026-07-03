@@ -193,6 +193,7 @@ repoactive run --debug
 | Option                          | Short | Description                                                                                                                  |
 | ------------------------------- | ----- | ---------------------------------------------------------------------------------------------------------------------------- |
 | `--config PATH`                 | `-c`  | Config file or directory of `*.toml` files; repeat to merge. Default: `.repoactive.d/` and `.repoactive.toml` under `--repo` |
+| `--set NAME=VALUE`              | `-s`  | Override a config value (repeatable); `NAME` is a dotted TOML key, `VALUE` a TOML expression. Wins over `--config`           |
 | `--repo PATH`                   | `-r`  | jj repository path (default: `.`)                                                                                            |
 | `--mode [local\|push\|publish]` | `-m`  | How far to publish: `local` (default) applies only locally, `push` also pushes branches, `publish` also creates/updates MRs  |
 | `--tag TAG`                     | `-t`  | Run jobs carrying any of these tags (repeatable). With no tags/jobs the default run targets the `enabled` tag                |
@@ -337,11 +338,12 @@ code 1.
 Validation checks include unknown keys, missing required fields, invalid
 `depends_on` references, and circular job dependencies.
 
-| Option          | Short | Description                                                                                                                  |
-| --------------- | ----- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `--config PATH` | `-c`  | Config file or directory of `*.toml` files; repeat to merge. Default: `.repoactive.d/` and `.repoactive.toml` under `--repo` |
-| `--repo PATH`   | `-r`  | jj repository path (default: `.`)                                                                                            |
-| `--debug`       | `-d`  | Enable debug logging                                                                                                         |
+| Option             | Short | Description                                                                                                                  |
+| ------------------ | ----- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `--config PATH`    | `-c`  | Config file or directory of `*.toml` files; repeat to merge. Default: `.repoactive.d/` and `.repoactive.toml` under `--repo` |
+| `--set NAME=VALUE` | `-s`  | Override a config value (repeatable); `NAME` is a dotted TOML key, `VALUE` a TOML expression. Wins over `--config`           |
+| `--repo PATH`      | `-r`  | jj repository path (default: `.`)                                                                                            |
+| `--debug`          | `-d`  | Enable debug logging                                                                                                         |
 
 ## Listing jobs
 
@@ -367,11 +369,12 @@ build           Build the project   enabled
     └── deploy  Deploy to staging   nightly, risky
 ```
 
-| Option          | Short | Description                                                                                                                  |
-| --------------- | ----- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `--config PATH` | `-c`  | Config file or directory of `*.toml` files; repeat to merge. Default: `.repoactive.d/` and `.repoactive.toml` under `--repo` |
-| `--repo PATH`   | `-r`  | jj repository path (default: `.`)                                                                                            |
-| `--debug`       | `-d`  | Enable debug logging                                                                                                         |
+| Option             | Short | Description                                                                                                                  |
+| ------------------ | ----- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `--config PATH`    | `-c`  | Config file or directory of `*.toml` files; repeat to merge. Default: `.repoactive.d/` and `.repoactive.toml` under `--repo` |
+| `--set NAME=VALUE` | `-s`  | Override a config value (repeatable); `NAME` is a dotted TOML key, `VALUE` a TOML expression. Wins over `--config`           |
+| `--repo PATH`      | `-r`  | jj repository path (default: `.`)                                                                                            |
+| `--debug`          | `-d`  | Enable debug logging                                                                                                         |
 
 ## Listing tags
 
@@ -405,11 +408,12 @@ nightly:
   benchmark            Run nightly benchmarks  nightly
 ```
 
-| Option          | Short | Description                                                                                                                  |
-| --------------- | ----- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `--config PATH` | `-c`  | Config file or directory of `*.toml` files; repeat to merge. Default: `.repoactive.d/` and `.repoactive.toml` under `--repo` |
-| `--repo PATH`   | `-r`  | jj repository path (default: `.`)                                                                                            |
-| `--debug`       | `-d`  | Enable debug logging                                                                                                         |
+| Option             | Short | Description                                                                                                                  |
+| ------------------ | ----- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `--config PATH`    | `-c`  | Config file or directory of `*.toml` files; repeat to merge. Default: `.repoactive.d/` and `.repoactive.toml` under `--repo` |
+| `--set NAME=VALUE` | `-s`  | Override a config value (repeatable); `NAME` is a dotted TOML key, `VALUE` a TOML expression. Wins over `--config`           |
+| `--repo PATH`      | `-r`  | jj repository path (default: `.`)                                                                                            |
+| `--debug`          | `-d`  | Enable debug logging                                                                                                         |
 
 ## Configuration
 
@@ -560,6 +564,44 @@ touching a single large config.
 directory of `*.toml` files, and may be repeated to merge several sources;
 later sources win. Explicit paths are resolved relative to the current
 directory, not `--repo`.
+
+### Overriding values on the command line
+
+`--set NAME=VALUE`/`-s` tweaks individual config values without editing a
+file. It is merged as the last, highest-priority source, so it wins over
+everything discovered or passed with `--config`. `NAME` is a TOML key —
+dotted keys reach into tables — and `VALUE` is a TOML expression, so strings
+need quoting:
+
+```bash
+# override a job-defaults scalar and disable one job for this run
+repoactive run \
+  --set 'job-defaults.cooldown_period = "24h"' \
+  --set 'job.lint.disabled = true'
+```
+
+Platforms are an array of tables (`[[platform]]`) merged by their `url`, so
+there is no dotted key into a single entry. Override one by passing a
+`platform` list whose entry repeats the target `url`; only the `url` and the
+fields you change are needed, the rest are kept from the file or the
+built-in defaults:
+
+```bash
+# point github.com at a different token environment variable
+repoactive run \
+  --set 'platform = [{ url = "https://github.com", token_env = "MY_TOKEN" }]'
+```
+
+A `url` that does not already exist is appended as a new platform, which
+then needs the full set of fields (`type`, `token_env`, …).
+
+`--set` is available on `run`, `validate-config`, `info jobs`, and
+`info tags`. Each `--set` is validated as its own source (like a separate
+config file), so it can amend existing jobs but cannot introduce a brand-new
+job across several flags — put a new job's required fields in one expression
+(e.g. `--set 'job.x = {command = "…", title = "…"}'`) or a config file. An
+unknown key or malformed value is reported with the offending `--set`
+argument named.
 
 ## Selecting jobs with tags
 

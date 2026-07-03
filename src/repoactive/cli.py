@@ -66,6 +66,15 @@ _ConfigOption = Annotated[
         help="Config file or directory of *.toml files; repeat to merge, later files win.",
     ),
 ]
+_SetOption = Annotated[
+    list[str] | None,
+    typer.Option(
+        "--set",
+        "-s",
+        help="Override a config value: NAME=VALUE where NAME is a (dotted) TOML key and "
+        "VALUE is a TOML expression. Repeatable; wins over --config.",
+    ),
+]
 _RepoOption = Annotated[Path, typer.Option("--repo", "-r", help="Path to the jj repository.")]
 _DebugOption = Annotated[bool, typer.Option("--debug", "-d", help="Enable debug logging.")]
 
@@ -107,10 +116,12 @@ def _resolve_config(config_paths: list[Path] | None, repo: Path) -> list[Path]:
     return config_paths or default_config_paths(repo)
 
 
-def _load_config_or_exit(config_paths: list[Path] | None, repo: Path) -> Config:
+def _load_config_or_exit(
+    config_paths: list[Path] | None, repo: Path, overrides: list[str] | None = None
+) -> Config:
     """Load the config, or print a clean error and exit non-zero."""
     try:
-        return load_config(_resolve_config(config_paths, repo))
+        return load_config(_resolve_config(config_paths, repo), overrides=overrides or None)
     except ConfigNotFoundError as e:
         _error(str(e))
         raise typer.Exit(code=1) from e
@@ -202,6 +213,7 @@ def run(  # noqa: PLR0913
             "'push' also pushes bookmarks, 'publish' also creates/updates MRs/PRs.",
         ),
     ] = RunMode.local,
+    overrides: _SetOption = None,
     debug: _DebugOption = False,
     tags: Annotated[
         list[str] | None,
@@ -219,7 +231,7 @@ def run(  # noqa: PLR0913
     """Apply jobs locally; pass --mode push or --mode publish to publish."""
     _setup_logging(debug)
     _check_jj()
-    cfg = _load_config_or_exit(config_paths, repo)
+    cfg = _load_config_or_exit(config_paths, repo, overrides)
     _ensure_colocated_repo(repo)
     try:
         platform = get_platform(cfg, repo) if mode is RunMode.publish else None
@@ -255,6 +267,7 @@ def run(  # noqa: PLR0913
 def validate_config(
     config_paths: _ConfigOption = None,
     repo: _RepoOption = _DEFAULT_REPO,
+    overrides: _SetOption = None,
     debug: _DebugOption = False,
 ) -> None:
     """Validate configuration and exit.
@@ -270,7 +283,7 @@ def validate_config(
         typer.echo("Configuration files:")
         for file in files:
             typer.echo(f"  {file}")
-        cfg = load_config(paths)
+        cfg = load_config(paths, overrides=overrides or None)
     except ConfigNotFoundError as e:
         _error(str(e))
         raise typer.Exit(code=1) from e
@@ -284,6 +297,7 @@ def validate_config(
 def info_jobs(
     config_paths: _ConfigOption = None,
     repo: _RepoOption = _DEFAULT_REPO,
+    overrides: _SetOption = None,
     debug: _DebugOption = False,
 ) -> None:
     """Show all configured jobs as a dependency tree.
@@ -293,7 +307,7 @@ def info_jobs(
     also shows the job's title and effective tags in aligned columns.
     """
     _setup_logging(debug)
-    cfg = _load_config_or_exit(config_paths, repo)
+    cfg = _load_config_or_exit(config_paths, repo, overrides)
     print_job_table(format_job_forest(topological_sort(cfg.jobs)))
 
 
@@ -301,6 +315,7 @@ def info_jobs(
 def info_tags(
     config_paths: _ConfigOption = None,
     repo: _RepoOption = _DEFAULT_REPO,
+    overrides: _SetOption = None,
     debug: _DebugOption = False,
 ) -> None:
     """List tags with the jobs carrying each tag.
@@ -313,7 +328,7 @@ def info_tags(
     Each line also shows the job's title and effective tags in aligned columns.
     """
     _setup_logging(debug)
-    cfg = _load_config_or_exit(config_paths, repo)
+    cfg = _load_config_or_exit(config_paths, repo, overrides)
     jobs_by_tag: dict[str, list[Job]] = {}
     # Sort all jobs at once: a per-tag sort would break on dependencies whose
     # tags differ from the dependent's.

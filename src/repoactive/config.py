@@ -518,7 +518,20 @@ class _ConfigSource:
     data: dict
 
 
-def load_config(paths: list[Path]) -> Config:
+def parse_override(text: str) -> dict:
+    """Parse one ``--set NAME=VALUE`` override into a config dict.
+
+    ``text`` is a TOML assignment line, so dotted keys (``job.lint.disabled``)
+    and value expressions come straight from ``tomllib``.
+    """
+    label = f"--set {text!r}"
+    try:
+        return tomllib.loads(text)
+    except tomllib.TOMLDecodeError as e:
+        raise ConfigError(label, e) from e
+
+
+def load_config(paths: list[Path], overrides: list[str] | None = None) -> Config:
     assert paths
     sources = [_ConfigSource("<built-in defaults>", tomllib.loads(_default_platforms))]
     for path in expand_config_paths(paths):
@@ -527,6 +540,8 @@ def load_config(paths: list[Path]) -> Config:
         except (OSError, tomllib.TOMLDecodeError) as e:
             raise ConfigError(str(path), e) from e
         sources.append(_ConfigSource(str(path), data))
+    for text in overrides or []:
+        sources.append(_ConfigSource(f"--set {text!r}", parse_override(text)))
 
     merged = {}
     for source in sources:
