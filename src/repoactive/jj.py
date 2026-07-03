@@ -457,12 +457,10 @@ class JJ:
         if head is None:
             logger.debug("not colocating workspace %r: parent is the root commit", name)
             return
-        tmp = Path(tempfile.mkdtemp(prefix="repoactive-worktree-", dir=path.parent))
-        try:
+        with tempfile.TemporaryDirectory(prefix="repoactive-worktree-", dir=path.parent) as d:
+            tmp = Path(d)
             self._git("worktree", "add", "--no-checkout", "--detach", str(tmp / name), head)
             (tmp / name / ".git").rename(path / ".git")
-        finally:
-            shutil.rmtree(tmp, ignore_errors=True)
         self._git("worktree", "repair", str(path))
         # jj writes this for colocated repos, but not for workspaces.
         (path / ".jj" / ".gitignore").write_text("/*\n")

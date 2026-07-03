@@ -1,7 +1,6 @@
 import contextlib
 import logging
 import os
-import shutil
 import signal
 import subprocess
 import tempfile
@@ -616,9 +615,9 @@ def run_generator(
         ws.git_sync_head()
         # The output directory lives outside the workspace so the files written
         # there never show up as a diff in the working copy.
-        jobs_dir = Path(tempfile.mkdtemp(prefix="repoactive-jobs-"))
-        logger.debug("[%s] running generator command (jobs dir %s)", job.name, jobs_dir)
-        try:
+        with tempfile.TemporaryDirectory(prefix="repoactive-jobs-") as tmp:
+            jobs_dir = Path(tmp)
+            logger.debug("[%s] running generator command (jobs dir %s)", job.name, jobs_dir)
             try:
                 _run_command(
                     job,
@@ -630,8 +629,6 @@ def run_generator(
                 ws.abandon()
                 raise
             specs = _load_job_specs(jobs_dir)
-        finally:
-            shutil.rmtree(jobs_dir, ignore_errors=True)
         ws.abandon()
     logger.debug("[%s] generator emitted %d job spec(s)", job.name, len(specs))
     return specs
