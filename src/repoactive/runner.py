@@ -307,6 +307,35 @@ def _command_env(
     return env
 
 
+@contextlib.contextmanager
+def _watchdog(proc: subprocess.Popen[str], timeout: float | None) -> Generator[threading.Event]:
+    """Kill ``proc``'s process group if it outlives ``timeout`` seconds.
+
+    The blocking stdout read in ``_run_command`` cannot be interrupted by a
+    timeout, so a background timer SIGKILLs the process group once the deadline
+    passes; that closes stdout and ends the read loop. The poll() guard avoids
+    flagging a false timeout when the command finishes just as the timer fires.
+
+    Yields an event that is set iff the watchdog fired. ``timeout is None`` means
+    no deadline: no timer is started and the event never fires.
+    """
+    timed_out = threading.Event()
+
+    def _on_timeout() -> None:
+        if proc.poll() is None:
+            timed_out.set()
+            _kill_process_group(proc)
+
+    timer = threading.Timer(timeout, _on_timeout) if timeout is not None else None
+    if timer is not None:
+        timer.start()
+    try:
+        yield timed_out
+    finally:
+        if timer is not None:
+            timer.cancel()
+
+
 def _run_command(
     job: Job,
     cwd: Path,
@@ -332,23 +361,6 @@ def _run_command(
         env=_command_env(extra_env=extra_env, secret_env_names=secret_env_names),
     )
 
-    # The blocking read below cannot be interrupted by a timeout, so a watchdog
-    # thread kills the process group once the deadline passes; that closes stdout
-    # and ends the read loop. The poll() guard avoids flagging a false timeout
-    # when the command happens to finish just as the timer fires. A job with no
-    # timeout (timeout_seconds() is None) runs without a watchdog.
-    timed_out = threading.Event()
-
-    def _on_timeout() -> None:
-        if proc.poll() is None:
-            timed_out.set()
-            _kill_process_group(proc)
-
-    timeout = job.timeout_seconds()
-    timer = threading.Timer(timeout, _on_timeout) if timeout is not None else None
-    if timer is not None:
-        timer.start()
-
     # Stream the merged stdout/stderr line by line: keep the full output (needed
     # for the commit message and the success result) while feeding a live tail of
     # the last few lines (see repoactive.progress).
@@ -358,14 +370,12 @@ def _run_command(
     )
     try:
         assert proc.stdout is not None
-        with view:
+        with _watchdog(proc, job.timeout_seconds()) as timed_out, view:
             for line in proc.stdout:
                 output_lines.append(line)
                 view.feed(line)
-        proc.wait()
+            proc.wait()
     finally:
-        if timer is not None:
-            timer.cancel()
         if proc.stdout is not None:
             proc.stdout.close()
 
