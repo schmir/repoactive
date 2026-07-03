@@ -10,7 +10,7 @@ only-include = ["src"]
 
 [project]
 name = "repoactive"
-version = "0.2.0"
+version = "0.2.1.dev1"
 description = "Script-driven code changes with automated merge requests"
 readme = "README.md"
 requires-python = ">=3.11"
