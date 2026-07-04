@@ -30,6 +30,7 @@ from repoactive.runner import (
     _run_command,
     _select_jobs,
     _select_run_jobs,
+    _spawn,
     _suppress_superseded_mrs,
     apply_plan,
     run_all,
@@ -740,6 +741,37 @@ class TestRunCommand:
             time.sleep(0.05)
         assert not _alive(child_pid), "backgrounded child survived the timeout kill"
 
+    def test_spawn_kills_group_when_body_raises(self, tmp_path: Path) -> None:
+        # A body that raises for a reason other than a timeout must still leave no
+        # orphan: _spawn kills the whole process group (including a backgrounded
+        # child) on exit, not just the top-level shell.
+        pidfile = tmp_path / "child.pid"
+        job = Job(
+            name="foo",
+            command=f"sleep 30 & echo $! > {pidfile}; echo ready; wait",
+            title="t",
+            branch_prefix="repoactive/",
+            commit_title_prefix="",
+        )
+
+        class BoomError(Exception):
+            pass
+
+        def _spawn_then_raise() -> None:
+            with _spawn(job, tmp_path, dict(os.environ)) as proc:
+                assert proc.stdout is not None
+                proc.stdout.readline()  # block until the child pid is recorded
+                raise BoomError
+
+        with pytest.raises(BoomError):
+            _spawn_then_raise()
+
+        child_pid = int(pidfile.read_text())
+        deadline = time.monotonic() + 5
+        while _alive(child_pid) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert not _alive(child_pid), "backgrounded child survived the kill on exception"
+
     def test_non_utf8_output_does_not_crash(self, tmp_path: Path) -> None:
         # A command may emit arbitrary bytes; an undecodable byte must be
         # replaced rather than raising UnicodeDecodeError and crashing the run.
@@ -1004,7 +1036,10 @@ class TestRunJob:
         # _ImmediateTimer fires the watchdog as soon as it starts; poll() returning
         # None means the command is still "running", so the group gets killed.
         proc = _mock_popen(mock_sub, output="partial\n")
-        proc.poll.return_value = None
+        # The watchdog's poll() sees the command still running (None) and kills the
+        # group; by the time _spawn's cleanup polls, wait() has reaped it (so it is
+        # not killed a second time).
+        proc.poll.side_effect = [None, -signal.SIGKILL]
         mock_jj.bookmark_exists.return_value = False
         job = Job(
             name="foo",

@@ -335,16 +335,16 @@ def _watchdog(proc: subprocess.Popen[str], timeout: float | None) -> Generator[t
             timer.cancel()
 
 
-def _run_command(
-    job: Job,
-    cwd: Path,
-    *,
-    secret_env_names: frozenset[str] = frozenset(),
-    extra_env: dict[str, str] | None = None,
-) -> CommandResult:
-    start = time.monotonic()
-    # start_new_session puts the command in its own process group so a timeout
-    # can kill the whole tree (see _kill_process_group).
+@contextlib.contextmanager
+def _spawn(job: Job, cwd: Path, env: dict[str, str]) -> Generator[subprocess.Popen[str]]:
+    """Run ``job.command`` in its own session, cleaning up on exit.
+
+    start_new_session puts the command in its own process group so a timeout can
+    kill the whole tree (see _kill_process_group). On exit, if the command is
+    still running — a body that raised before it finished, not just a timeout —
+    the process group is killed and reaped so nothing is orphaned or left a
+    zombie; then stdout is closed.
+    """
     proc = subprocess.Popen(
         job.command,
         shell=True,
@@ -357,8 +357,27 @@ def _run_command(
         encoding="utf-8",
         errors="replace",
         start_new_session=True,
-        env=_command_env(extra_env=extra_env, secret_env_names=secret_env_names),
+        env=env,
     )
+    try:
+        yield proc
+    finally:
+        if proc.poll() is None:
+            _kill_process_group(proc)
+            proc.wait()
+        if proc.stdout is not None:
+            proc.stdout.close()
+
+
+def _run_command(
+    job: Job,
+    cwd: Path,
+    *,
+    secret_env_names: frozenset[str] = frozenset(),
+    extra_env: dict[str, str] | None = None,
+) -> CommandResult:
+    start = time.monotonic()
+    env = _command_env(extra_env=extra_env, secret_env_names=secret_env_names)
 
     # Stream the merged stdout/stderr line by line: keep the full output (needed
     # for the commit message and the success result) while feeding a live tail of
@@ -367,16 +386,13 @@ def _run_command(
     view = ProgressView(
         header=f"==> [{job.name}] running…", max_lines=load_settings().progress_lines
     )
-    try:
+    with _spawn(job, cwd, env) as proc:
         assert proc.stdout is not None
         with _watchdog(proc, job.timeout_seconds()) as timed_out, view:
             for line in proc.stdout:
                 output_lines.append(line)
                 view.feed(line)
             proc.wait()
-    finally:
-        if proc.stdout is not None:
-            proc.stdout.close()
 
     elapsed = time.monotonic() - start
     # On failure report the full output, not just the live tail: in a terminal the
