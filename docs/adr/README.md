@@ -63,3 +63,9 @@ it.
   by name, so a field is reachable via `--set platform.<name>.<field>` and
   jobs and platforms share one merge helper. A breaking change; the old
   array form is rejected with a migration hint.
+- [0012 — Run jobs on fresh commits, then absorb results into existing commits](0012-two-phase-commit-run-then-absorb.md)
+  — Accepted. Jobs always run on a fresh commit so a failed command never
+  touches an existing branch. Successful results are absorbed back into the
+  old commits (in-place mutation, same change-id) so jj auto-rebases
+  dependent branches not in this run. The rejected alternative — skip absorb
+  and push new commits directly — would lose change-id continuity.
