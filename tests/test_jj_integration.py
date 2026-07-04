@@ -289,7 +289,7 @@ class TestBookmarkDelete:
         repo.bookmark_delete("mybranch")
         assert repo.bookmark_exists("mybranch") is False
 
-    def test_raises_for_nonexistent_local_bookmark(self, repo: JJ) -> None:
+    def test_does_not_raise_for_nonexistent_local_bookmark(self, repo: JJ) -> None:
         # jj exits 0 with a warning for unknown bookmarks — this is expected behaviour
         repo.bookmark_delete("nonexistent")  # must not raise
 
