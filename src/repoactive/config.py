@@ -4,7 +4,7 @@ import itertools
 import logging
 import re
 import tomllib
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import timedelta
 from enum import StrEnum
@@ -23,6 +23,7 @@ from pydantic import (
 )
 
 from repoactive.constants import JOB_TRAILER_KEY
+from repoactive.graph import detect_dependency_cycle
 
 logger = logging.getLogger(__name__)
 
@@ -90,13 +91,6 @@ class UnknownDependencyError(ValueError):
 
     def __init__(self, name: str, unknown: list[str]) -> None:
         super().__init__(f"job '{name}' depends_on unknown jobs: {unknown}")
-
-
-class CircularDependencyError(ValueError):
-    """Raised when jobs form a dependency cycle."""
-
-    def __init__(self, name: str) -> None:
-        super().__init__(f"circular dependency involving '{name}'")
 
 
 class JobNameInBodyError(ValueError):
@@ -367,33 +361,6 @@ class Job(BaseModel):
         return self.model_copy(update=update)
 
 
-def detect_dependency_cycle(deps_by_name: Mapping[str, Sequence[str]]) -> None:
-    """Raise CircularDependencyError if the dependency graph contains a cycle.
-
-    ``deps_by_name`` maps each job name to its ``depends_on`` list. A
-    dependency naming a job outside the mapping is ignored: it belongs to an
-    already-validated job set, which cannot depend back into this one (used
-    when checking a generator's emitted jobs against the running set).
-    """
-    visiting: set[str] = set()
-    visited: set[str] = set()
-
-    def visit(name: str) -> None:
-        if name in visiting:
-            raise CircularDependencyError(name)
-        if name in visited:
-            return
-        visiting.add(name)
-        for dep in deps_by_name[name]:
-            if dep in deps_by_name:
-                visit(dep)
-        visiting.discard(name)
-        visited.add(name)
-
-    for name in deps_by_name:
-        visit(name)
-
-
 class Config(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
@@ -463,7 +430,7 @@ class Config(BaseModel):
             unknown = set(job.depends_on) - names
             if unknown:
                 raise UnknownDependencyError(job.name, sorted(unknown))
-        detect_dependency_cycle({j.name: j.depends_on for j in self.jobs})
+        detect_dependency_cycle(self.jobs)
         return self
 
     def _resolved_jobs(self) -> list[Job]:

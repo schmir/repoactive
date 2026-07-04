@@ -19,6 +19,7 @@ from repoactive.config import (
     load_config,
     parse_duration,
 )
+from repoactive.graph import topological_sort
 from repoactive.jj import (
     JJ,
     JJError,
@@ -29,6 +30,7 @@ from repoactive.jj import (
     require_colocated_repo,
     require_jj_on_path,
 )
+from repoactive.jobtree import format_job_forest, print_job_table
 from repoactive.lock import RunLockHeldError
 from repoactive.platforms import (
     NoPlatformConfiguredError,
@@ -40,10 +42,7 @@ from repoactive.runner import (
     RunMode,
     UnknownJobsError,
     UnknownTagsError,
-    format_job_forest,
-    print_job_table,
     run_all,
-    topological_sort,
 )
 from repoactive.settings import SettingsError, load_settings
 from repoactive.ui import err_console, print_undo_hint
