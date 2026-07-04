@@ -1034,8 +1034,9 @@ class TestRunJob:
     ) -> None:
         mock_jj = _mock_jj(mock_jj_cls)
         # _ImmediateTimer fires the watchdog as soon as it starts; poll() returning
-        # None means the command is still "running", so the group gets killed.
-        proc = _mock_popen(mock_sub, output="partial\n")
+        # None means the command is still "running", so the group gets killed. The
+        # killed process reports the kill signal as its returncode.
+        proc = _mock_popen(mock_sub, output="partial\n", returncode=-signal.SIGKILL)
         # The watchdog's poll() sees the command still running (None) and kills the
         # group; by the time _spawn's cleanup polls, wait() has reaped it (so it is
         # not killed a second time).
@@ -1056,6 +1057,41 @@ class TestRunJob:
         mock_jj.abandon.assert_called_once_with()
         mock_jj.bookmark_set.assert_not_called()
 
+    @patch("repoactive.runner.threading.Timer", _ImmediateTimer)
+    @patch("repoactive.runner.os.getpgid", return_value=4242)
+    @patch("repoactive.runner.os.killpg")
+    @patch("repoactive.runner.JJ")
+    @patch("repoactive.runner.subprocess.Popen")
+    def test_watchdog_race_with_clean_exit_is_not_a_timeout(
+        self,
+        mock_sub: MagicMock,
+        mock_jj_cls: MagicMock,
+        mock_killpg: MagicMock,
+        mock_getpgid: MagicMock,
+    ) -> None:
+        # The watchdog can fire just as the command exits on its own: poll()
+        # still saw it running, but the kill hit a dead process and the exit
+        # code is 0. That must count as a success, not a timeout.
+        mock_jj = _mock_jj(mock_jj_cls)
+        proc = _mock_popen(mock_sub, output="done\n")
+        proc.poll.side_effect = [None, 0]
+        mock_jj.bookmark_exists.return_value = False
+        mock_jj.is_empty.return_value = False
+        job = Job(
+            name="foo",
+            command="cmd-foo",
+            title="Change foo",
+            timeout="30m",
+            branch_prefix="repoactive/",
+            commit_title_prefix="",
+        )
+
+        result = run_job(job=job, parents=["trunk()"], repo_path=REPO)
+
+        assert result.produced_diff is True
+        assert result.command_output == "done"
+        mock_jj.abandon.assert_not_called()
+
     @patch("repoactive.runner.threading.Timer")
     @patch("repoactive.runner.JJ")
     @patch("repoactive.runner.subprocess.Popen")
@@ -1069,6 +1105,30 @@ class TestRunJob:
 
         # _job has no timeout, so no watchdog timer is armed.
         run_job(job=_job("foo"), parents=["trunk()"], repo_path=REPO)
+
+        mock_timer.assert_not_called()
+
+    @patch("repoactive.runner.threading.Timer")
+    @patch("repoactive.runner.JJ")
+    @patch("repoactive.runner.subprocess.Popen")
+    def test_zero_timeout_skips_watchdog(
+        self, mock_sub: MagicMock, mock_jj_cls: MagicMock, mock_timer: MagicMock
+    ) -> None:
+        mock_jj = _mock_jj(mock_jj_cls)
+        _mock_popen(mock_sub)
+        mock_jj.bookmark_exists.return_value = False
+        mock_jj.is_empty.return_value = False
+        job = Job(
+            name="foo",
+            command="cmd-foo",
+            title="Change foo",
+            timeout="0s",
+            branch_prefix="repoactive/",
+            commit_title_prefix="",
+        )
+
+        # A zero timeout means no timeout, so no watchdog timer is armed.
+        run_job(job=job, parents=["trunk()"], repo_path=REPO)
 
         mock_timer.assert_not_called()
 

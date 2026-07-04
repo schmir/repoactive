@@ -313,7 +313,9 @@ def _watchdog(proc: subprocess.Popen[str], timeout: float | None) -> Generator[t
     The blocking stdout read in ``_run_command`` cannot be interrupted by a
     timeout, so a background timer SIGKILLs the process group once the deadline
     passes; that closes stdout and ends the read loop. The poll() guard avoids
-    flagging a false timeout when the command finishes just as the timer fires.
+    flagging a false timeout when the command finishes just as the timer fires;
+    the remaining race (the command exits between poll() and the kill) is closed
+    by the caller, which treats only a non-zero exit as a timeout.
 
     Yields an event that is set iff the watchdog fired. ``timeout is None`` means
     no deadline: no timer is started and the event never fires.
@@ -399,7 +401,11 @@ def _run_command(
     # live block only showed the last few lines, and piped/CI runs showed nothing,
     # so the complete output is what makes a failure diagnosable.
     detail = "".join(output_lines).strip()
-    if timed_out.is_set():
+    # The watchdog can lose a race: poll() saw the command still running, the
+    # command then exited on its own, and the kill hit a dead process. A killed
+    # process reports a non-zero returncode (-SIGKILL), so exit code 0 means the
+    # command actually finished - treat that as success, not a timeout.
+    if timed_out.is_set() and proc.returncode != 0:
         raise CommandError(
             f"command timed out after {job.timeout}" + (f":\n{detail}" if detail else ""),
             elapsed=elapsed,

@@ -324,7 +324,15 @@ class Job(BaseModel):
         return parse_duration(self.cooldown_period) if self.cooldown_period is not None else None
 
     def timeout_seconds(self) -> float | None:
-        return parse_duration(self.timeout).total_seconds() if self.timeout is not None else None
+        """The command timeout in seconds, or None for no timeout.
+
+        A zero duration (e.g. ``"0s"``) also means no timeout: TOML cannot
+        express null, so this is how a job opts out of a timeout set in
+        ``job-defaults``.
+        """
+        if self.timeout is None:
+            return None
+        return parse_duration(self.timeout).total_seconds() or None
 
     def commit_trailers(self) -> list[str]:
         """The ``Repoactive-Job`` trailer lines recorded on this job's commit.

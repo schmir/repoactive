@@ -757,7 +757,10 @@ command runs in its own session/process group to make this possible. The
 value uses the same `<number><unit>` format as `cooldown_period` (e.g.
 `"30m"`, `"2h"`). `timeout` may be set per job or in `job-defaults`; a
 per-job value overrides the default. The built-in default is `"2m"`; set
-`timeout` to a larger value in `job-defaults` for longer-running commands.
+`timeout` to a larger value in `job-defaults` for longer-running commands. A
+zero duration (`timeout = "0s"`) disables the timeout entirely; since TOML
+has no null value, this is how a job opts out of a timeout set in
+`job-defaults`.
 
 ## Generating jobs dynamically
 

@@ -328,6 +328,12 @@ class TestTimeout:
         job = Job(name="x", command="cmd", title="X", timeout="30m")
         assert job.timeout_seconds() == 30 * 60
 
+    def test_seconds_none_when_zero(self) -> None:
+        # "0s" disables the timeout: TOML cannot express null, so a zero
+        # duration is how a job opts out of a timeout set in job-defaults.
+        job = Job(name="x", command="cmd", title="X", timeout="0s")
+        assert job.timeout_seconds() is None
+
     def test_falls_back_to_defaults(self) -> None:
         job = Job(name="x", command="cmd", title="X")
         resolved = job.resolve(JobDefaults(timeout="1h"))
