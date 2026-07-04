@@ -1245,7 +1245,9 @@ class TestBuildGeneratedJobs:
     def test_inherits_tags_depends_on_and_records_generator(self) -> None:
         gen = _gen(tags=["weekly"])
         specs = {"child": {"command": "c", "title": "Child"}}
-        [job] = _build_generated_jobs(generator=gen, specs=specs, run_names={"gen"})
+        [job] = _build_generated_jobs(
+            generator=gen, specs=specs, run_names={"gen"}, all_config_names=set()
+        )
         assert job.tags == ["weekly"]
         assert job.depends_on == ["gen"]
         assert job.generated_by == "gen"
@@ -1256,6 +1258,7 @@ class TestBuildGeneratedJobs:
             generator=_gen(),
             specs={"child": {"command": "c", "title": "Child"}},
             run_names={"gen"},
+            all_config_names=set(),
         )
         assert job.tags == ["enabled"]
 
@@ -1264,6 +1267,7 @@ class TestBuildGeneratedJobs:
             generator=_gen(tags=["weekly"]),
             specs={"child": {"command": "c", "title": "Child", "tags": ["daily"]}},
             run_names={"gen"},
+            all_config_names=set(),
         )
         assert job.tags == ["daily"]
 
@@ -1274,6 +1278,7 @@ class TestBuildGeneratedJobs:
             generator=_gen(tags=["weekly"]),
             specs={"child": {"command": "c", "title": "Child", "disabled": True}},
             run_names={"gen"},
+            all_config_names=set(),
         )
         assert job.tags == []
         assert job.disabled is True
@@ -1283,6 +1288,7 @@ class TestBuildGeneratedJobs:
             generator=_gen(cooldown_period="7d"),
             specs={"child": {"command": "c", "title": "Child"}},
             run_names={"gen"},
+            all_config_names=set(),
         )
         assert job.cooldown_period == "7d"
 
@@ -1291,6 +1297,7 @@ class TestBuildGeneratedJobs:
             generator=_gen(cooldown_period="7d"),
             specs={"child": {"command": "c", "title": "Child", "cooldown_period": "1d"}},
             run_names={"gen"},
+            all_config_names=set(),
         )
         assert job.cooldown_period == "1d"
 
@@ -1299,15 +1306,27 @@ class TestBuildGeneratedJobs:
             "a": {"command": "c", "title": "A"},
             "b": {"command": "c", "title": "B", "depends_on": ["a"]},
         }
-        jobs = _build_generated_jobs(generator=_gen(), specs=specs, run_names={"gen"})
+        jobs = _build_generated_jobs(
+            generator=_gen(), specs=specs, run_names={"gen"}, all_config_names=set()
+        )
         assert jobs[1].depends_on == ["a"]
 
-    def test_name_collision_raises(self) -> None:
+    def test_name_collision_with_run_job_raises(self) -> None:
         with pytest.raises(GeneratedJobError, match="collides"):
             _build_generated_jobs(
                 generator=_gen(),
                 specs={"taken": {"command": "c", "title": "T"}},
                 run_names={"gen", "taken"},
+                all_config_names=set(),
+            )
+
+    def test_name_collision_with_unselected_config_job_raises(self) -> None:
+        with pytest.raises(GeneratedJobError, match="collides"):
+            _build_generated_jobs(
+                generator=_gen(),
+                specs={"disabled-job": {"command": "c", "title": "T"}},
+                run_names={"gen"},
+                all_config_names={"disabled-job"},
             )
 
     def test_nested_generator_raises(self) -> None:
@@ -1316,6 +1335,7 @@ class TestBuildGeneratedJobs:
                 generator=_gen(),
                 specs={"child": {"command": "c", "title": "T", "emits_jobs": True}},
                 run_names={"gen"},
+                all_config_names=set(),
             )
 
     def test_sibling_cycle_raises(self) -> None:
@@ -1324,12 +1344,16 @@ class TestBuildGeneratedJobs:
             "b": {"command": "c", "title": "B", "depends_on": ["a"]},
         }
         with pytest.raises(GeneratedJobError, match="circular dependency"):
-            _build_generated_jobs(generator=_gen(), specs=specs, run_names={"gen"})
+            _build_generated_jobs(
+                generator=_gen(), specs=specs, run_names={"gen"}, all_config_names=set()
+            )
 
     def test_self_dependency_raises(self) -> None:
         specs = {"a": {"command": "c", "title": "A", "depends_on": ["a"]}}
         with pytest.raises(GeneratedJobError, match="circular dependency"):
-            _build_generated_jobs(generator=_gen(), specs=specs, run_names={"gen"})
+            _build_generated_jobs(
+                generator=_gen(), specs=specs, run_names={"gen"}, all_config_names=set()
+            )
 
     def test_unknown_dependency_raises(self) -> None:
         with pytest.raises(GeneratedJobError, match="not in this run"):
@@ -1337,6 +1361,7 @@ class TestBuildGeneratedJobs:
                 generator=_gen(),
                 specs={"child": {"command": "c", "title": "T", "depends_on": ["ghost"]}},
                 run_names={"gen"},
+                all_config_names=set(),
             )
 
     def test_invalid_spec_raises(self) -> None:
@@ -1345,6 +1370,7 @@ class TestBuildGeneratedJobs:
                 generator=_gen(),
                 specs={"child": {"command": "c", "title": "T", "bogus": 1}},
                 run_names={"gen"},
+                all_config_names=set(),
             )
 
 

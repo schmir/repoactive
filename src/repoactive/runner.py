@@ -553,7 +553,9 @@ def run_generator(
     return specs
 
 
-def _build_generated_job(*, generator: Job, name: str, spec: dict, run_names: set[str]) -> Job:
+def _build_generated_job(
+    *, generator: Job, name: str, spec: dict, run_names: set[str], all_config_names: set[str]
+) -> Job:
     """Build one emitted ``Job`` from its raw spec, applying inheritance.
 
     ``name`` is the spec's table key. The job inherits the (resolved) generator's
@@ -561,7 +563,7 @@ def _build_generated_job(*, generator: Job, name: str, spec: dict, run_names: se
     them, and records the generator in ``generated_by``. Raises GeneratedJobError
     on a name colliding with an existing job, a nested generator, or a job that
     fails validation."""
-    if name in run_names:
+    if name in run_names or name in all_config_names:
         raise GeneratedJobError(
             generator.name, f"emitted job {name!r} collides with an existing job"
         )
@@ -584,7 +586,7 @@ def _build_generated_job(*, generator: Job, name: str, spec: dict, run_names: se
 
 
 def _build_generated_jobs(
-    *, generator: Job, specs: dict[str, dict], run_names: set[str]
+    *, generator: Job, specs: dict[str, dict], run_names: set[str], all_config_names: set[str]
 ) -> list[Job]:
     """Turn a generator's raw specs into validated ``Job`` objects.
 
@@ -595,7 +597,13 @@ def _build_generated_jobs(
     ``generator`` must be resolved (its inherited fields filled in).
     """
     emitted = [
-        _build_generated_job(generator=generator, name=name, spec=spec, run_names=run_names)
+        _build_generated_job(
+            generator=generator,
+            name=name,
+            spec=spec,
+            run_names=run_names,
+            all_config_names=all_config_names,
+        )
         for name, spec in specs.items()
     ]
     allowed = run_names | {j.name for j in emitted}
@@ -787,6 +795,7 @@ def _dispatch_job(  # noqa: PLR0913
             summary=summary,
             blocked=blocked,
             run_names=run_names,
+            all_config_names={j.name for j in config.jobs},
             secret_env_names=secret_env_names,
         )
 
@@ -820,6 +829,7 @@ def _run_generator_job(  # noqa: PLR0913
     summary: RunSummary,
     blocked: set[str],
     run_names: set[str],
+    all_config_names: set[str],
     secret_env_names: frozenset[str],
 ) -> list[Job]:
     """Run a generator and return its emitted jobs (resolved ``job`` required).
@@ -833,7 +843,9 @@ def _run_generator_job(  # noqa: PLR0913
         specs = run_generator(
             job=job, parents=parents, repo_path=repo_path, secret_env_names=secret_env_names
         )
-        emitted = _build_generated_jobs(generator=job, specs=specs, run_names=run_names)
+        emitted = _build_generated_jobs(
+            generator=job, specs=specs, run_names=run_names, all_config_names=all_config_names
+        )
     except Exception as e:
         elapsed = e.elapsed if isinstance(e, CommandError) else time.monotonic() - start
         print(f"==> [{job.name}] failed: {e} ({elapsed:.1f}s)")
