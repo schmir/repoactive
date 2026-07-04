@@ -416,7 +416,7 @@ def _run_command(
             + (f":\n{detail}" if detail else ""),
             elapsed=elapsed,
         )
-    return CommandResult(output="".join(output_lines).strip(), elapsed=elapsed)
+    return CommandResult(output=detail, elapsed=elapsed)
 
 
 def _discard_empty_job(  # noqa: PLR0913
