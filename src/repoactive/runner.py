@@ -802,7 +802,7 @@ def _select_jobs(
                 selected.remove(j.name)
 
     if refresh_names:
-        selected.update(refresh_names & {j.name for j in jobs})
+        selected.update(refresh_names)
         _include_dependencies(jobs, selected)
 
     result = [j for j in jobs if j.name in selected]
