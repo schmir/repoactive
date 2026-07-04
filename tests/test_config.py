@@ -589,6 +589,16 @@ class TestLoadConfig:
             load_config([f])
         assert "must not set a 'name' field" in str(exc_info.value)
 
+    def test_generated_by_in_job_body_rejected(self, tmp_path: Path) -> None:
+        f = tmp_path / "generated_by.toml"
+        f.write_text(
+            '[platform.gitlab]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
+            '[job.a]\ngenerated_by = "gen"\ncommand = "cmd"\ntitle = "A"\n'
+        )
+        with pytest.raises(ConfigError, match=str(f)) as exc_info:
+            load_config([f])
+        assert "must not set 'generated_by'" in str(exc_info.value)
+
     def test_old_job_array_form_rejected_with_migration_hint(self, tmp_path: Path) -> None:
         f = tmp_path / "legacy.toml"
         f.write_text(

@@ -111,6 +111,19 @@ class JobNameInBodyError(ValueError):
         )
 
 
+class GeneratedByInBodyError(ValueError):
+    """Raised when a [job.<name>] table sets a 'generated_by' field.
+
+    'generated_by' is set by repoactive itself on jobs emitted by a generator;
+    it is not a user-facing config field."""
+
+    def __init__(self, name: str) -> None:
+        super().__init__(
+            f"job {name!r} must not set 'generated_by'; "
+            "that field is set by repoactive on generator-emitted jobs"
+        )
+
+
 class JobNotTableError(ValueError):
     """Raised when a [job.<name>] entry is not a table."""
 
@@ -405,6 +418,8 @@ class Config(BaseModel):
                 raise JobNotTableError(name)
             if "name" in body:
                 raise JobNameInBodyError(name)
+            if "generated_by" in body:
+                raise GeneratedByInBodyError(name)
             jobs.append({**body, "name": name})
         return jobs
 
