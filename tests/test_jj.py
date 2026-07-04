@@ -124,7 +124,14 @@ class TestBookmarkExists:
         assert _jj().bookmark_exists("rschmitt/foo") is False
 
 
-_TEMPLATE = 'if(self.remote(), "", if(self.normal_target(), self.normal_target().change_id() ++ " " ++ self.name() ++ "\\n", ""))'
+_TEMPLATE = """
+        if(self.remote(), "",
+           if(self.normal_target(),
+              self.normal_target().change_id() ++ " " ++ self.name() ++ "\\n",
+              ""
+           )
+        )
+        """
 _BOOKMARKS_OUTPUT = (
     "uxpywmluxktrqztvnqywwlpzwvnyrlzk main\n"
     "klmkpoomqllrzxynwkoozmypqowtpyys rschmitt/alpine\n"

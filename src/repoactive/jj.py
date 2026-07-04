@@ -235,12 +235,15 @@ class JJ:
         self._run("bookmark", "track", *bookmarks)
 
     def bookmark_list(self) -> list[Bookmark]:
-        output = self._run(
-            "bookmark",
-            "list",
-            "-T",
-            'if(self.remote(), "", if(self.normal_target(), self.normal_target().change_id() ++ " " ++ self.name() ++ "\\n", ""))',
+        template = """
+        if(self.remote(), "",
+           if(self.normal_target(),
+              self.normal_target().change_id() ++ " " ++ self.name() ++ "\\n",
+              ""
+           )
         )
+        """
+        output = self._run("bookmark", "list", "-T", template)
         result = []
         for line in output.splitlines():
             if line:
