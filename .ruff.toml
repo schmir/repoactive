@@ -9,6 +9,7 @@ lint.ignore = ["E501"]
 lint.select = [
     "A",      # flake8-builtins
     "ANN",    # flake8-annotations
+    "ARG",    # flake8-unused-arguments
     "B",      # flake8-bugbear
     "C4",     # flake8-comprehensions
     "C90",    # mccabe (complexity)
@@ -16,17 +17,22 @@ lint.select = [
     "D205",   # pydocstyle: 1 blank line required between summary line and description
     "D209",   # pydocstyle: multi-line docstring closing quotes on separate line
     "D401",   # pydocstyle: first line should be in imperative mood
+    "D415",   # pydocstyle: first line should end with punctuation
+    "DTZ",    # flake8-datetimez: require timezone-aware datetimes
     "E",      # pycodestyle error
     "ERA",    # eradicate (commented-out code)
     "EXE",    # flake8-executable
     "F",      # pyflakes
     "FBT",    # flake8-boolean-trap
+    "FLY",    # flynt: use f-strings over str.join / % / .format
     "FURB",   # refurb
     "G",      # flake8-logging-format
     "I",      # isort
+    "LOG",    # flake8-logging: correct logging API usage
     "ISC",    # flake8-implicit-str-concat
     "N",      # pep8-naming
     "PGH004", # disallow blanket noqa
+    "PERF",   # perflint: performance anti-patterns
     "PIE",    # flake8-pie
     "PL",     # pylint
     "PT",     # flake8-pytest-style
@@ -36,6 +42,8 @@ lint.select = [
     "RUF",    # Ruff-specific rules
     "S108",   # flake8-bandit: hardcoded temp file/directory paths
     "SIM",    # flake8-simplify
+    "SLOT",   # flake8-slots: require __slots__ on fixed-layout subclasses
+    "T10",    # flake8-debugger: ban debugger calls
     "TID",    # flake8-tidy-imports
     "TRY003", # raise-vanilla-args
     "UP",     # pyupgrade
@@ -45,6 +53,10 @@ lint.select = [
 
 lint.per-file-ignores."src/repoactive/cli.py" = [
     "FBT", # Typer requires boolean default parameters for flags
+]
+
+lint.per-file-ignores."tests/**" = [
+    "ARG", # mock.patch injects args that are only needed for their patching side effect
 ]
 
 lint.mccabe.max-complexity = 10
