@@ -69,3 +69,7 @@ it.
   old commits (in-place mutation, same change-id) so jj auto-rebases
   dependent branches not in this run. The rejected alternative — skip absorb
   and push new commits directly — would lose change-id continuity.
+- [0013 — `run_only_if_changed` gates a job on upstream diffs](0013-run-only-if-changed.md)
+  — Accepted. A job listing upstream job names in `run_only_if_changed` is
+  skipped (with a no-op result, not a block) when none of those jobs
+  produced a diff in the current run.
