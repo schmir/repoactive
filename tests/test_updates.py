@@ -6,8 +6,23 @@ from repoactive.updates import (
     MRLink,
     MRUpdate,
     UpdatePlan,
+    _fenced,
     build_mr_description,
 )
+
+
+class TestFenced:
+    def test_plain_text_uses_triple_backtick_fence(self) -> None:
+        assert _fenced("hello") == "```\nhello\n```"
+
+    def test_triple_backticks_in_text_uses_four_backtick_fence(self) -> None:
+        assert _fenced("a\n```\nb") == "````\na\n```\nb\n````"
+
+    def test_fence_length_matches_longest_run_plus_one(self) -> None:
+        assert _fenced("a\n````\nb") == "`````\na\n````\nb\n`````"
+
+    def test_backticks_not_at_line_start_still_counted(self) -> None:
+        assert _fenced("use `````code````` here") == "``````\nuse `````code````` here\n``````"
 
 
 def _mr(
@@ -73,6 +88,14 @@ class TestBuildMrDescription:
             _mr(description="Details."), [MRLink("Dep A", "https://example.com/mr/1")]
         )
         assert result == "Details.\n\nDepends on:\n- [Dep A](https://example.com/mr/1)"
+
+    def test_command_output_with_triple_backticks_uses_longer_fence(self) -> None:
+        result = build_mr_description(_mr(command_output="before\n```\nafter"), [])
+        assert result == "````\n$ cmd-x\nbefore\n```\nafter\n````"
+
+    def test_command_output_with_longer_backtick_run_uses_even_longer_fence(self) -> None:
+        result = build_mr_description(_mr(command_output="a\n````\nb"), [])
+        assert result == "`````\n$ cmd-x\na\n````\nb\n`````"
 
     def test_dep_urls_before_command_output(self) -> None:
         result = build_mr_description(

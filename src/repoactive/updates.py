@@ -11,6 +11,7 @@ dependency MR URLs it carries are known.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from pydantic import BaseModel, Field
@@ -75,6 +76,17 @@ class MRLink:
     url: str
 
 
+def _fenced(text: str) -> str:
+    """Wrap ``text`` in a markdown fenced code block.
+
+    The fence length is one longer than the longest backtick run inside ``text``
+    (minimum three), so the fence is never closed prematurely.
+    """
+    longest = max((len(m.group()) for m in re.finditer(r"`+", text)), default=0)
+    fence = "`" * max(longest + 1, 3)
+    return f"{fence}\n{text}\n{fence}"
+
+
 def build_mr_description(mr: MRUpdate, dependency_links: list[MRLink]) -> str:
     """Assemble an MR description from its parts.
 
@@ -90,5 +102,5 @@ def build_mr_description(mr: MRUpdate, dependency_links: list[MRLink]) -> str:
     if mr.command_output:
         if description:
             description += "\n\n"
-        description += f"```\n$ {mr.command}\n{mr.command_output}\n```"
+        description += _fenced(f"$ {mr.command}\n{mr.command_output}")
     return description
