@@ -68,7 +68,12 @@ def _job(  # noqa: PLR0913
 
 
 def _result(job: Job, *, revsets: list[str], produced: bool = True) -> JobResult:
-    return JobResult(job=job, effective_revsets=revsets, produced_diff=produced)
+    return JobResult(
+        job=job,
+        effective_revsets=revsets,
+        produced_diff=produced,
+        new_change_id="new-cid" if produced else None,
+    )
 
 
 def _mock_popen(mock_popen: MagicMock, *, output: str = "", returncode: int = 0) -> MagicMock:
@@ -342,6 +347,7 @@ def _mock_repo(unmerged: set[str] | None = None) -> MagicMock:
     """A JJ stub whose unmerged_job_names returns the given set."""
     repo = MagicMock()
     repo.unmerged_job_names.return_value = unmerged or set()
+    repo.children_job_names.return_value = set()
     return repo
 
 
@@ -407,7 +413,6 @@ class TestRunOneJob:
         job_b = config.jobs[1]
         summary = RunSummary()
         blocked = {"a"}
-        plan = UpdatePlan()
         with patch("repoactive.runner.run_job") as mock_run_job:
             _dispatch_job(
                 job=job_b,
@@ -415,7 +420,6 @@ class TestRunOneJob:
                 repo_path=REPO,
                 summary=summary,
                 blocked=blocked,
-                plan=plan,
                 run_names={job_b.name},
             )
         assert summary.skipped == {"b"}
@@ -427,7 +431,6 @@ class TestRunOneJob:
         config = _config(_job("a"))
         job_a = config.jobs[0]
         summary = RunSummary()
-        plan = UpdatePlan()
         with (
             patch("repoactive.runner._on_cooldown", return_value=True),
             patch("repoactive.runner.run_job") as mock_run_job,
@@ -438,14 +441,12 @@ class TestRunOneJob:
                 repo_path=REPO,
                 summary=summary,
                 blocked=set(),
-                plan=plan,
                 run_names={"a"},
             )
         assert summary.on_cooldown == {"a"}
         # A no-op result is recorded so dependents proceed on the base branch.
         assert summary.results["a"].produced_diff is False
         assert summary.results["a"].effective_revsets == ["trunk()"]
-        assert plan.updates == []
         mock_run_job.assert_not_called()
 
     def test_success_records_result(self) -> None:
@@ -453,7 +454,6 @@ class TestRunOneJob:
         job_a = config.jobs[0]
         result = JobResult(job=job_a, effective_revsets=["repoactive/a"], produced_diff=True)
         summary = RunSummary()
-        plan = UpdatePlan()
         with (
             patch("repoactive.runner._on_cooldown", return_value=False),
             patch("repoactive.runner.run_job", return_value=result) as mock_run_job,
@@ -464,41 +464,12 @@ class TestRunOneJob:
                 repo_path=REPO,
                 summary=summary,
                 blocked=set(),
-                plan=plan,
                 run_names={"a"},
             )
         assert summary.results["a"] is result
-        assert plan.updates == []
         # The resolved job (with defaults applied) is run with computed parents.
         _, kwargs = mock_run_job.call_args
         assert kwargs["parents"] == ["trunk()"]
-
-    def test_success_with_update_appends_to_plan(self) -> None:
-        config = _config(_job("a"))
-        job_a = config.jobs[0]
-        update = _push_update("a")
-        result = JobResult(
-            job=job_a,
-            effective_revsets=["repoactive/a"],
-            produced_diff=True,
-            update=update,
-        )
-        summary = RunSummary()
-        plan = UpdatePlan()
-        with (
-            patch("repoactive.runner._on_cooldown", return_value=False),
-            patch("repoactive.runner.run_job", return_value=result),
-        ):
-            _dispatch_job(
-                job=job_a,
-                config=config,
-                repo_path=REPO,
-                summary=summary,
-                blocked=set(),
-                plan=plan,
-                run_names={"a"},
-            )
-        assert plan.updates == [update]
 
     def test_command_failure_records_and_blocks(self) -> None:
         config = _config(_job("a"))
@@ -516,7 +487,6 @@ class TestRunOneJob:
                 repo_path=REPO,
                 summary=summary,
                 blocked=blocked,
-                plan=UpdatePlan(),
                 run_names={"a"},
             )
         assert summary.failed == {"a": err}
@@ -539,7 +509,6 @@ class TestRunOneJob:
                 repo_path=REPO,
                 summary=summary,
                 blocked=blocked,
-                plan=UpdatePlan(),
                 run_names={"a"},
             )
         assert summary.failed == {"a": err}
@@ -807,29 +776,27 @@ class TestRunJob:
     def test_produces_output(self, mock_sub: MagicMock, mock_jj_cls: MagicMock) -> None:
         mock_jj = _mock_jj(mock_jj_cls)
         _mock_popen(mock_sub)
-        mock_jj.bookmark_exists.return_value = False
         mock_jj.is_empty.return_value = False
         job = _job("foo")
 
         result = run_job(job=job, parents=["trunk()"], repo_path=REPO)
 
+        # Phase 1 always uses new(); bookmark_set is done in the absorb phase.
         mock_jj.new.assert_called_once_with("trunk()")
-        mock_jj.bookmark_set.assert_called_once_with("repoactive/foo")
+        mock_jj.bookmark_set.assert_not_called()
         mock_jj.describe.assert_called_once_with("Change foo\n\nRepoactive-Job: foo")
-        # The push is recorded for the apply phase, not performed during the run.
         mock_jj.git_push_bookmarks.assert_not_called()
         mock_jj.abandon.assert_not_called()
         assert result.produced_diff is True
-        assert result.effective_revsets == ["repoactive/foo"]
-        assert result.update is not None
-        assert result.update.push == BookmarkPush(bookmark="repoactive/foo")
+        # Dependents use the new change-id directly as their parent revset.
+        assert result.effective_revsets == [mock_jj.change_id.return_value]
+        assert result.new_change_id == mock_jj.change_id.return_value
 
     @patch("repoactive.runner.JJ")
     @patch("repoactive.runner.subprocess.Popen")
     def test_describe_includes_body(self, mock_sub: MagicMock, mock_jj_cls: MagicMock) -> None:
         mock_jj = _mock_jj(mock_jj_cls)
         _mock_popen(mock_sub)
-        mock_jj.bookmark_exists.return_value = False
         mock_jj.is_empty.return_value = False
         job = _job("foo", description="Body text.")
 
@@ -844,7 +811,6 @@ class TestRunJob:
     ) -> None:
         mock_jj = _mock_jj(mock_jj_cls)
         _mock_popen(mock_sub, output="did stuff\n")
-        mock_jj.bookmark_exists.return_value = False
         mock_jj.is_empty.return_value = False
         job = _job("foo")
 
@@ -861,7 +827,6 @@ class TestRunJob:
     ) -> None:
         mock_jj = _mock_jj(mock_jj_cls)
         _mock_popen(mock_sub, output="did stuff\n")
-        mock_jj.bookmark_exists.return_value = False
         mock_jj.is_empty.return_value = False
         job = Job(
             name="foo",
@@ -883,7 +848,6 @@ class TestRunJob:
     ) -> None:
         mock_jj = _mock_jj(mock_jj_cls)
         _mock_popen(mock_sub)
-        mock_jj.bookmark_exists.return_value = False
         mock_jj.is_empty.return_value = False
 
         run_job(
@@ -901,7 +865,6 @@ class TestRunJob:
     ) -> None:
         mock_jj = _mock_jj(mock_jj_cls)
         _mock_popen(mock_sub)
-        mock_jj.bookmark_exists.return_value = False
         mock_jj.is_empty.return_value = True
 
         result = run_job(job=_job("foo"), parents=["trunk()"], repo_path=REPO)
@@ -915,26 +878,26 @@ class TestRunJob:
 
     @patch("repoactive.runner.JJ")
     @patch("repoactive.runner.subprocess.Popen")
-    def test_no_output_existing_bookmark_deleted(
+    def test_no_output_existing_bookmark_not_deleted_during_run(
         self, mock_sub: MagicMock, mock_jj_cls: MagicMock
     ) -> None:
+        # When an existing bookmark's job produces no diff, the bookmark is NOT
+        # deleted during phase 1 — deletion happens in the absorb phase. The
+        # old_change_id is recorded so the absorb phase knows to delete.
         mock_jj = _mock_jj(mock_jj_cls)
         _mock_popen(mock_sub)
-        mock_jj.bookmark_exists.return_value = True
+        mock_jj.bookmark_change_id.return_value = "old-change-id"
         mock_jj.is_empty.return_value = True
 
         result = run_job(job=_job("foo"), parents=["trunk()"], repo_path=REPO)
 
         mock_jj.abandon.assert_called_once_with()
-        mock_jj.bookmark_delete.assert_called_once_with("repoactive/foo")
-        # The remote deletion is deferred: recorded as a delete push, not pushed now.
-        mock_jj.git_push_bookmarks.assert_not_called()
+        mock_jj.bookmark_delete.assert_not_called()
         mock_jj.bookmark_set.assert_not_called()
+        mock_jj.git_push_bookmarks.assert_not_called()
         assert result.produced_diff is False
         assert result.effective_revsets == ["trunk()"]
-        assert result.update is not None
-        assert result.update.push == BookmarkPush(bookmark="repoactive/foo", delete=True)
-        assert result.update.mr is None
+        assert result.old_change_id == "old-change-id"
 
     @patch("repoactive.runner.JJ")
     @patch("repoactive.runner.subprocess.Popen")
@@ -943,7 +906,6 @@ class TestRunJob:
     ) -> None:
         mock_jj = _mock_jj(mock_jj_cls)
         _mock_popen(mock_sub)
-        mock_jj.bookmark_exists.return_value = False
         mock_jj.is_empty.return_value = True
 
         result = run_job(
@@ -961,7 +923,6 @@ class TestRunJob:
     ) -> None:
         mock_jj = _mock_jj(mock_jj_cls)
         _mock_popen(mock_sub, output="boom\n", returncode=1)
-        mock_jj.bookmark_exists.return_value = False
         with pytest.raises(CommandError, match="command failed"):
             run_job(
                 job=_job("foo"),
@@ -980,7 +941,6 @@ class TestRunJob:
     ) -> None:
         mock_jj = _mock_jj(mock_jj_cls)
         _mock_popen(mock_sub)
-        mock_jj.bookmark_exists.return_value = False
         mock_jj.is_empty.return_value = False
         job = Job(
             name="foo",
@@ -1018,7 +978,6 @@ class TestRunJob:
         # group; by the time _spawn's cleanup polls, wait() has reaped it (so it is
         # not killed a second time).
         proc.poll.side_effect = [None, -signal.SIGKILL]
-        mock_jj.bookmark_exists.return_value = False
         job = Job(
             name="foo",
             command="cmd-foo",
@@ -1052,7 +1011,6 @@ class TestRunJob:
         mock_jj = _mock_jj(mock_jj_cls)
         proc = _mock_popen(mock_sub, output="done\n")
         proc.poll.side_effect = [None, 0]
-        mock_jj.bookmark_exists.return_value = False
         mock_jj.is_empty.return_value = False
         job = Job(
             name="foo",
@@ -1077,7 +1035,6 @@ class TestRunJob:
     ) -> None:
         mock_jj = _mock_jj(mock_jj_cls)
         _mock_popen(mock_sub)
-        mock_jj.bookmark_exists.return_value = False
         mock_jj.is_empty.return_value = False
 
         # _job has no timeout, so no watchdog timer is armed.
@@ -1093,7 +1050,6 @@ class TestRunJob:
     ) -> None:
         mock_jj = _mock_jj(mock_jj_cls)
         _mock_popen(mock_sub)
-        mock_jj.bookmark_exists.return_value = False
         mock_jj.is_empty.return_value = False
         job = Job(
             name="foo",
@@ -1111,49 +1067,40 @@ class TestRunJob:
 
     @patch("repoactive.runner.JJ")
     @patch("repoactive.runner.subprocess.Popen")
-    def test_command_output_in_mr_update(
+    def test_command_output_recorded_for_absorb_phase(
         self, mock_sub: MagicMock, mock_jj_cls: MagicMock
     ) -> None:
         mock_jj = _mock_jj(mock_jj_cls)
         _mock_popen(mock_sub, output="Copied file foo -> bar\n")
-        mock_jj.bookmark_exists.return_value = False
         mock_jj.is_empty.return_value = False
 
         result = run_job(job=_job("foo"), parents=["trunk()"], repo_path=REPO)
 
-        # The MR is not created during the run; the command output is recorded
-        # for the apply phase to render.
-        assert result.update is not None
-        assert result.update.mr is not None
-        assert result.update.mr.command == "cmd-foo"
-        assert result.update.mr.command_output == "Copied file foo -> bar"
+        # Command output is stored on the result for the absorb/apply phase to use.
+        assert result.command_output == "Copied file foo -> bar"
 
     @patch("repoactive.runner.JJ")
     @patch("repoactive.runner.subprocess.Popen")
-    def test_records_mr_update(self, mock_sub: MagicMock, mock_jj_cls: MagicMock) -> None:
-        mock_jj = _mock_jj(mock_jj_cls)
-        _mock_popen(mock_sub)
-        mock_jj.bookmark_exists.return_value = False
-        mock_jj.is_empty.return_value = False
-
-        result = run_job(job=_job("foo"), parents=["trunk()"], repo_path=REPO)
-
-        # The collect phase has no platform; it always records the MR for the
-        # apply phase to act on, with the target branch left unresolved.
-        assert result.mr_url is None
-        assert result.update is not None
-        assert result.update.mr is not None
-        assert result.update.mr.source_branch == "repoactive/foo"
-        assert result.update.mr.target_branch is None
-
-    @patch("repoactive.runner.JJ")
-    @patch("repoactive.runner.subprocess.Popen")
-    def test_create_mr_never_records_no_mr(
+    def test_produces_diff_no_mr_url_yet(
         self, mock_sub: MagicMock, mock_jj_cls: MagicMock
     ) -> None:
         mock_jj = _mock_jj(mock_jj_cls)
         _mock_popen(mock_sub)
-        mock_jj.bookmark_exists.return_value = False
+        mock_jj.is_empty.return_value = False
+
+        result = run_job(job=_job("foo"), parents=["trunk()"], repo_path=REPO)
+
+        # MR is not created during the run; mr_url is filled in at apply time.
+        assert result.produced_diff is True
+        assert result.mr_url is None
+
+    @patch("repoactive.runner.JJ")
+    @patch("repoactive.runner.subprocess.Popen")
+    def test_create_mr_never_still_produces_diff(
+        self, mock_sub: MagicMock, mock_jj_cls: MagicMock
+    ) -> None:
+        mock_jj = _mock_jj(mock_jj_cls)
+        _mock_popen(mock_sub)
         mock_jj.is_empty.return_value = False
         job = Job(
             name="foo",
@@ -1166,38 +1113,36 @@ class TestRunJob:
 
         result = run_job(job=job, parents=["trunk()"], repo_path=REPO)
 
-        assert result.mr_url is None
         assert result.produced_diff is True
-        # A push is still recorded, but with no MR.
-        assert result.update is not None
-        assert result.update.push == BookmarkPush(bookmark="repoactive/foo")
-        assert result.update.mr is None
+        assert result.mr_url is None
 
     @patch("repoactive.runner.JJ")
     @patch("repoactive.runner.subprocess.Popen")
-    def test_existing_bookmark_uses_edit_restore_rebase(
+    def test_always_uses_new_regardless_of_existing_bookmark(
         self, mock_sub: MagicMock, mock_jj_cls: MagicMock
     ) -> None:
+        # Phase 1 always creates a fresh commit. Old bookmarks are untouched
+        # so a failed command cannot destroy them.
         mock_jj = _mock_jj(mock_jj_cls)
         _mock_popen(mock_sub)
-        mock_jj.bookmark_exists.return_value = True
+        mock_jj.bookmark_change_id.return_value = "old-change-id"
         mock_jj.is_empty.return_value = False
 
-        run_job(job=_job("foo"), parents=["trunk()"], repo_path=REPO)
+        result = run_job(job=_job("foo"), parents=["trunk()"], repo_path=REPO)
 
-        mock_jj.new.assert_not_called()
-        mock_jj.edit.assert_called_once_with("repoactive/foo")
-        mock_jj.restore.assert_called_once_with("repoactive/foo")
-        mock_jj.rebase.assert_called_once_with("trunk()")
+        mock_jj.new.assert_called_once_with("trunk()")
+        mock_jj.edit.assert_not_called()
+        mock_jj.rebase.assert_not_called()
+        mock_jj.bookmark_set.assert_not_called()
+        assert result.old_change_id == "old-change-id"
 
     @patch("repoactive.runner.JJ")
     @patch("repoactive.runner.subprocess.Popen")
-    def test_existing_bookmark_multiple_parents_rebase(
+    def test_always_uses_new_multiple_parents(
         self, mock_sub: MagicMock, mock_jj_cls: MagicMock
     ) -> None:
         mock_jj = _mock_jj(mock_jj_cls)
         _mock_popen(mock_sub)
-        mock_jj.bookmark_exists.return_value = True
         mock_jj.is_empty.return_value = False
 
         run_job(
@@ -1206,24 +1151,8 @@ class TestRunJob:
             repo_path=REPO,
         )
 
-        mock_jj.new.assert_not_called()
-        mock_jj.rebase.assert_called_once_with("repoactive/a", "repoactive/b")
-
-    @patch("repoactive.runner.JJ")
-    @patch("repoactive.runner.subprocess.Popen")
-    def test_no_existing_bookmark_uses_new(
-        self, mock_sub: MagicMock, mock_jj_cls: MagicMock
-    ) -> None:
-        mock_jj = _mock_jj(mock_jj_cls)
-        _mock_popen(mock_sub)
-        mock_jj.bookmark_exists.return_value = False
-        mock_jj.is_empty.return_value = False
-
-        run_job(job=_job("foo"), parents=["trunk()"], repo_path=REPO)
-
-        mock_jj.new.assert_called_once_with("trunk()")
+        mock_jj.new.assert_called_once_with("repoactive/a", "repoactive/b")
         mock_jj.edit.assert_not_called()
-        mock_jj.restore.assert_not_called()
         mock_jj.rebase.assert_not_called()
 
 
@@ -1422,7 +1351,6 @@ class TestDualTrailer:
     ) -> None:
         mock_jj = _mock_jj(mock_jj_cls)
         _mock_popen(mock_sub)
-        mock_jj.bookmark_exists.return_value = False
         mock_jj.is_empty.return_value = False
         job = Job(
             name="child",
@@ -1748,8 +1676,11 @@ class TestRunAll:
             patch("repoactive.runner.JJ") as cls,
         ):
             cls.return_value.unmerged_job_names.return_value = set()
+            cls.return_value.children_job_names.return_value = set()
             cls.return_value.has_recent_job_commit.return_value = False
             cls.return_value.op_id.return_value = "OP-START"
+            # temp_workspace returns a no-op context manager for the absorb phase.
+            cls.return_value.temp_workspace.return_value.__enter__.return_value = cls.return_value
             yield cls
 
     @patch("repoactive.runner.run_job")
@@ -1783,9 +1714,7 @@ class TestRunAll:
     @patch("repoactive.runner.run_job")
     def test_collected_plan_is_applied(self, mock_run_job: MagicMock, mock_jj: MagicMock) -> None:
         a = _job("a")
-        result = _result(a, revsets=["repoactive/a"])
-        result.update = _mr_update("a")
-        mock_run_job.return_value = result
+        mock_run_job.return_value = _result(a, revsets=["repoactive/a"])
         platform = MagicMock()
         platform.ensure_mr.return_value = "https://example.com/mr/a"
 
@@ -1793,6 +1722,7 @@ class TestRunAll:
             config=_config(a), repo_path=REPO, platform=platform, mode=RunMode.publish
         )
 
+        # The absorb phase sets the bookmark and builds the plan; apply pushes it.
         mock_jj.return_value.git_push_bookmarks.assert_called_once_with("repoactive/a")
         platform.ensure_mr.assert_called_once()
         # The MR URL is written back into the summary by the apply phase.
@@ -1803,9 +1733,7 @@ class TestRunAll:
         self, mock_run_job: MagicMock, mock_jj: MagicMock, capsys: pytest.CaptureFixture[str]
     ) -> None:
         a = _job("a")
-        result = _result(a, revsets=["repoactive/a"])
-        result.update = _mr_update("a")
-        mock_run_job.return_value = result
+        mock_run_job.return_value = _result(a, revsets=["repoactive/a"])
         platform = MagicMock()
         boom = RuntimeError("boom")
         platform.ensure_mr.side_effect = boom
@@ -1830,9 +1758,7 @@ class TestRunAll:
         a = _job("a", create_mr=CreateMR.unless_superseded)
         b = _job("b", depends_on=["a"])
         result_a = _result(a, revsets=["repoactive/a"])
-        result_a.update = _mr_update("a")
         result_b = _result(b, revsets=["repoactive/b"])
-        result_b.update = _mr_update("b", depends_on=["a"])
         mock_run_job.side_effect = [result_a, result_b]
         platform = MagicMock()
         platform.ensure_mr.return_value = "https://example.com/mr/b"
@@ -1974,7 +1900,7 @@ class TestRunAll:
     def test_requesting_disabled_job_runs_it(self, mock_run_job: MagicMock) -> None:
         a = Job(name="a", command="cmd", title="A", disabled=True)
         b = _job("b")
-        mock_run_job.return_value = _result(a, revsets=["repoactive/a"])
+        mock_run_job.return_value = _result(a.resolve(JobDefaults()), revsets=["repoactive/a"])
 
         run_all(config=_config(a, b), repo_path=REPO, requested_names=["a"])
 
@@ -1985,7 +1911,10 @@ class TestRunAll:
     def test_requesting_job_pulls_in_disabled_dependency(self, mock_run_job: MagicMock) -> None:
         a = Job(name="a", command="cmd", title="A", disabled=True)
         b = _job("b", depends_on=["a"])
-        mock_run_job.return_value = _result(b, revsets=["repoactive/b"])
+        mock_run_job.side_effect = [
+            _result(a.resolve(JobDefaults()), revsets=["repoactive/a"]),
+            _result(b, revsets=["repoactive/b"]),
+        ]
 
         run_all(config=_config(a, b), repo_path=REPO, requested_names=["b"])
 

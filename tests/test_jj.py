@@ -416,6 +416,112 @@ class TestUnmergedJobNames:
         assert "~(::trunk())" in args
 
 
+class TestAbandonRevision:
+    @patch("repoactive.jj.subprocess.run")
+    def test_abandons_specific_revision(self, mock_run: MagicMock) -> None:
+        mock_run.return_value.stdout = ""
+        _jj().abandon_revision("abc123")
+        assert mock_run.call_args == _call("abandon", "abc123")
+
+
+class TestDiffContent:
+    @patch("repoactive.jj.subprocess.run")
+    def test_returns_diff_for_revision(self, mock_run: MagicMock) -> None:
+        mock_run.return_value.stdout = "diff --git a/foo b/foo\n+content\n"
+        result = _jj().diff_content("abc123")
+        assert result == "diff --git a/foo b/foo\n+content\n"
+        assert mock_run.call_args == _call("diff", "-r", "abc123")
+
+    @patch("repoactive.jj.subprocess.run")
+    def test_defaults_to_working_copy(self, mock_run: MagicMock) -> None:
+        mock_run.return_value.stdout = ""
+        _jj().diff_content()
+        assert mock_run.call_args == _call("diff", "-r", "@")
+
+
+class TestBookmarkChangeId:
+    @patch("repoactive.jj.subprocess.run")
+    def test_returns_change_id_for_existing_bookmark(self, mock_run: MagicMock) -> None:
+        mock_run.return_value.stdout = "zzzzabc repoactive/foo\n"
+        assert _jj().bookmark_change_id("repoactive/foo") == "zzzzabc"
+
+    @patch("repoactive.jj.subprocess.run")
+    def test_returns_none_for_missing_bookmark(self, mock_run: MagicMock) -> None:
+        mock_run.return_value.stdout = "zzzzabc repoactive/other\n"
+        assert _jj().bookmark_change_id("repoactive/foo") is None
+
+    @patch("repoactive.jj.subprocess.run")
+    def test_returns_none_when_no_bookmarks(self, mock_run: MagicMock) -> None:
+        mock_run.return_value.stdout = ""
+        assert _jj().bookmark_change_id("repoactive/foo") is None
+
+
+class TestRebaseRevision:
+    @patch("repoactive.jj.subprocess.run")
+    def test_single_parent(self, mock_run: MagicMock) -> None:
+        mock_run.return_value.stdout = ""
+        _jj().rebase_revision("abc123", "trunk()")
+        assert mock_run.call_args == _call("rebase", "-r", "abc123", "--onto", "trunk()")
+
+    @patch("repoactive.jj.subprocess.run")
+    def test_multiple_parents(self, mock_run: MagicMock) -> None:
+        mock_run.return_value.stdout = ""
+        _jj().rebase_revision("abc123", "repoactive/a", "repoactive/b")
+        assert mock_run.call_args == _call(
+            "rebase", "-r", "abc123", "--onto", "repoactive/a", "--onto", "repoactive/b"
+        )
+
+
+class TestDescribeRevision:
+    @patch("repoactive.jj.subprocess.run")
+    def test_sets_message_on_specific_revision(self, mock_run: MagicMock) -> None:
+        mock_run.return_value.stdout = ""
+        _jj().describe_revision("abc123", "chore: update deps")
+        assert mock_run.call_args == _call(
+            "describe", "-r", "abc123", "--message", "chore: update deps"
+        )
+
+
+class TestChildrenJobNames:
+    @patch("repoactive.jj.subprocess.run")
+    def test_returns_empty_set_for_empty_input(self, mock_run: MagicMock) -> None:
+        result = _jj().children_job_names([])
+        assert result == set()
+        mock_run.assert_not_called()
+
+    @patch("repoactive.jj.subprocess.run")
+    def test_parses_single_job_name(self, mock_run: MagicMock) -> None:
+        mock_run.return_value.stdout = "my-job\n"
+        result = _jj().children_job_names(["repoactive/a"])
+        assert result == {"my-job"}
+
+    @patch("repoactive.jj.subprocess.run")
+    def test_parses_multiple_job_names_from_multiple_commits(self, mock_run: MagicMock) -> None:
+        mock_run.return_value.stdout = "job-b\njob-c\n"
+        result = _jj().children_job_names(["repoactive/a"])
+        assert result == {"job-b", "job-c"}
+
+    @patch("repoactive.jj.subprocess.run")
+    def test_splits_comma_separated_trailers(self, mock_run: MagicMock) -> None:
+        mock_run.return_value.stdout = "child,generator\n"
+        result = _jj().children_job_names(["repoactive/a"])
+        assert result == {"child", "generator"}
+
+    @patch("repoactive.jj.subprocess.run")
+    def test_wraps_each_bookmark_in_present(self, mock_run: MagicMock) -> None:
+        mock_run.return_value.stdout = ""
+        _jj().children_job_names(["repoactive/a", "repoactive/b"])
+        args = mock_run.call_args[0][0]
+        assert "present(repoactive/a)" in " ".join(args)
+        assert "present(repoactive/b)" in " ".join(args)
+
+    @patch("repoactive.jj.subprocess.run")
+    def test_returns_empty_set_when_no_output(self, mock_run: MagicMock) -> None:
+        mock_run.return_value.stdout = ""
+        result = _jj().children_job_names(["repoactive/a"])
+        assert result == set()
+
+
 class TestJjTimestamp:
     def test_strips_microseconds(self) -> None:
         dt = datetime(2024, 3, 15, 10, 30, 45, 123456, tzinfo=UTC)

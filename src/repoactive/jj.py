@@ -260,6 +260,52 @@ class JJ:
     def abandon(self) -> None:
         self._run("abandon", "@")
 
+    def abandon_revision(self, revision: str) -> None:
+        """Abandon a specific revision (not the working copy)."""
+        self._run("abandon", revision)
+
+    def diff_content(self, revision: str = "@") -> str:
+        """Return the full diff of ``revision`` relative to its parents."""
+        return self._run("diff", "-r", revision)
+
+    def bookmark_change_id(self, name: str) -> str | None:
+        """Return the change-id of the local bookmark ``name``, or None if absent."""
+        return next((b.change_id for b in self.bookmark_list() if b.name == name), None)
+
+    def rebase_revision(self, revision: str, *onto: str) -> None:
+        """Rebase a specific revision onto ``onto`` without touching ``@``."""
+        onto_args = [arg for parent in onto for arg in ("--onto", parent)]
+        self._run("rebase", "-r", revision, *onto_args)
+
+    def describe_revision(self, revision: str, message: str) -> None:
+        """Set the commit message of a specific revision without touching ``@``."""
+        self._run("describe", "-r", revision, "--message", message)
+
+    def children_job_names(self, bookmarks: list[str]) -> set[str]:
+        """Job names from unmerged commits that are direct children of any of ``bookmarks``.
+
+        Uses ``present()`` so non-existent bookmarks are silently skipped. Returns
+        an empty set when ``bookmarks`` is empty.
+        """
+        if not bookmarks:
+            return set()
+        revset_parts = " | ".join(f"present({b})" for b in bookmarks)
+        revset = f"children({revset_parts}) & ~(::trunk())"
+        template = f"""
+        if(trailers.contains_key("{JOB_TRAILER_KEY}"),
+           trailers.filter(|t| t.key() == "{JOB_TRAILER_KEY}").map(|t| t.value()).join(",")
+             ++ "\\n",
+           ""
+        )
+        """
+        output = self._run("log", "--no-graph", "-r", revset, "-T", template)
+        return {
+            name.strip()
+            for line in output.splitlines()
+            for name in line.split(",")
+            if name.strip()
+        }
+
     def diff_stat(self) -> str:
         return self._run("log", "--no-graph", "-r", "@", "-T", "self.diff().stat(50)").strip()
 
