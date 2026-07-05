@@ -1,3 +1,5 @@
+"""GitLab platform implementation using python-gitlab."""
+
 import gitlab
 from gitlab.exceptions import GitlabError
 

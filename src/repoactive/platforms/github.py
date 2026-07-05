@@ -1,3 +1,5 @@
+"""GitHub platform implementation using PyGithub."""
+
 from github import Github, GithubException
 
 from repoactive.platforms.base import MRParams, Platform, PlatformError

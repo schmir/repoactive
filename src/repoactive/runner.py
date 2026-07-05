@@ -1,3 +1,5 @@
+"""Job orchestration: select, run, commit, push, and publish MRs for each job."""
+
 import contextlib
 import logging
 import os
@@ -84,8 +86,11 @@ class CommandResult:
 
 
 class CommandError(RuntimeError):
-    """A job command exited non-zero. Carries the command's wall time so the
-    failure can be reported with the same elapsed semantics as a success."""
+    """A job command exited non-zero.
+
+    Carries the command's wall time so the failure can be reported with the same
+    elapsed semantics as a success.
+    """
 
     def __init__(self, message: str, elapsed: float) -> None:
         super().__init__(message)
@@ -104,15 +109,18 @@ class UnknownTagsError(ValueError):
 
     A tag only exists as a value on jobs, so a tag matching nothing is
     indistinguishable from a typo; failing loudly keeps a mistyped --tag in a
-    crontab from silently running zero jobs."""
+    crontab from silently running zero jobs.
+    """
 
     def __init__(self, unknown: set[str]) -> None:
         super().__init__(f"unknown tag(s): {', '.join(sorted(unknown))}")
 
 
 class GeneratedJobError(ValueError):
-    """Raised when a generator emits an invalid job set (collision, recursion,
-    unknown dependency, or a job that fails validation)."""
+    """Raised when a generator emits an invalid job set.
+
+    Invalid means collision, recursion, unknown dependency, or a job that fails validation.
+    """
 
     def __init__(self, generator: str, message: str) -> None:
         super().__init__(f"generator {generator!r}: {message}")
@@ -186,7 +194,8 @@ def _kill_process_group(proc: subprocess.Popen[str]) -> None:
 
     The command is started with ``start_new_session=True`` so it leads its own
     process group; killing the group reaps any children the command spawned, not
-    just the top-level shell."""
+    just the top-level shell.
+    """
     with contextlib.suppress(ProcessLookupError):
         os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
 
@@ -194,7 +203,7 @@ def _kill_process_group(proc: subprocess.Popen[str]) -> None:
 def _command_env(
     *, extra_env: dict[str, str] | None, secret_env_names: frozenset[str]
 ) -> dict[str, str]:
-    """The environment a job command runs in.
+    """Build the environment a job command runs in.
 
     Starts from the inherited environment (so the command still sees PATH etc.),
     drops the platform token variables (``secret_env_names``) so a command cannot read
@@ -358,18 +367,20 @@ def _boxquote(msg: str, title: str = "") -> str:
 
     The first line is ``,----[ title ]`` (or just ``,----`` when ``title`` is
     empty), each line of ``msg`` is prefixed with ``| ``, and the box closes
-    with ``` `---- ```."""
+    with ``` `---- ```.
+    """
     top = f",----[ {title} ]" if title else ",----"
     body = "\n".join(f"| {line}" for line in msg.splitlines())
     return f"{top}\n{body}\n`----"
 
 
 def _build_commit_message(job: Job, command_result: CommandResult) -> str:
-    """The commit message recorded for a job's change.
+    """Build the commit message recorded for a job's change.
 
     The title, an optional description, the command output rendered in a
     boxquote.el-style box (when ``output_in_commit`` is set), and finally the
-    ``Repoactive-Job`` trailer(s)."""
+    ``Repoactive-Job`` trailer(s).
+    """
     message = f"{job.commit_title_prefix}{job.title}"
     if job.description:
         message += f"\n\n{job.description}"
@@ -534,7 +545,8 @@ def _build_generated_job(
     tags, ``depends_on`` and the ``_INHERITED_FIELDS`` unless the spec overrides
     them, and records the generator in ``generated_by``. Raises GeneratedJobError
     on a name colliding with an existing job, a nested generator, or a job that
-    fails validation."""
+    fails validation.
+    """
     if name in run_names or name in all_config_names:
         raise GeneratedJobError(
             generator.name, f"emitted job {name!r} collides with an existing job"
@@ -620,7 +632,8 @@ def _validate_selection(
 
     run_all calls this before taking the run lock or touching the repository,
     so a mistyped selection fails before any state changes - and before the
-    undo hint is printed, which would be noise for a run that did nothing."""
+    undo hint is printed, which would be noise for a run that did nothing.
+    """
     unknown = requested_names - {j.name for j in jobs}
     if unknown:
         raise UnknownJobsError(unknown)
@@ -633,7 +646,8 @@ def _include_dependencies(jobs: list[Job], selected: set[str]) -> None:
     """Add the transitive dependencies of every selected job to ``selected``.
 
     ``jobs`` must be topologically sorted; iterating in reverse propagates
-    dependencies of dependencies in a single pass."""
+    dependencies of dependencies in a single pass.
+    """
     for j in reversed(jobs):
         if j.name in selected:
             selected.update(j.depends_on)
@@ -659,7 +673,8 @@ def _select_jobs(
     ``refresh_names`` names the jobs that currently have an unmerged branch;
     they are force-included regardless of tag, along with their dependencies,
     so the default run keeps unmerged branches rebased on trunk rather than
-    waiting for the job's next run."""
+    waiting for the job's next run.
+    """
     requested_tags = requested_tags or set()
     refresh_names = refresh_names or set()
     jobs = topological_sort(jobs)
@@ -764,7 +779,8 @@ def _dispatch_job(  # noqa: PLR0913
     empty list for an ordinary job or a generator that emitted nothing/was
     skipped. ``run_names`` is the set of job names already in this run, used to
     reject an emitted job that collides with an existing name. The plan is built
-    in the absorb phase (phase 2), not here."""
+    in the absorb phase (phase 2), not here.
+    """
     blocking_deps = [d for d in job.depends_on if d in blocked]
     if blocking_deps:
         print(f"==> [{job.name}] skipped (dependency failed: {', '.join(blocking_deps)})")
@@ -837,7 +853,8 @@ def _run_generator_job(  # noqa: PLR0913
     The generator itself produces no diff; a no-op ``JobResult`` is recorded so
     its emitted jobs (which depend on it) compute their parents through it. A
     failure to run or to build the emitted set blocks the generator's
-    dependents, exactly like an ordinary job failure."""
+    dependents, exactly like an ordinary job failure.
+    """
     start = time.monotonic()
     try:
         specs = run_generator(
@@ -1066,8 +1083,7 @@ def _run_jobs(
 
 
 def _suppress_superseded_mrs(*, plan: UpdatePlan, results: dict[str, JobResult]) -> None:
-    """Drop the MR of every ``create_mr = "unless-superseded"`` job whose changes
-    a dependent's MR already contains.
+    """Drop the MR of every ``create_mr = "unless-superseded"`` job whose changes a dependent's MR already contains.
 
     A dependent's change is stacked on its dependencies' branches
     (``_compute_parents``), so a dependent's MR diff already includes this job's
@@ -1181,7 +1197,8 @@ def _apply_plan_push(plan: UpdatePlan, *, repo_path: Path) -> None:
     """Push every bookmark recorded in the plan in a single jj call.
 
     A no-op when the plan records no pushes (git_push_bookmarks ignores an empty
-    bookmark list)."""
+    bookmark list).
+    """
     bookmarks = [update.push.bookmark for update in plan.updates if update.push is not None]
     JJ(repo_path).git_push_bookmarks(*bookmarks)
 

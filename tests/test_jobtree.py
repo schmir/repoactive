@@ -1,3 +1,5 @@
+"""Tests for job tree rendering."""
+
 from io import StringIO
 
 from rich.console import Console

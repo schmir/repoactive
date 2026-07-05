@@ -1,3 +1,5 @@
+"""Tests for dependency graph topological sorting and cycle detection."""
+
 import pytest
 
 from repoactive.config import Job

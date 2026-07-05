@@ -69,8 +69,7 @@ class UpdatePlan(BaseModel):
 
 @dataclass(frozen=True)
 class MRLink:
-    """A dependency's MR, as linked from the "Depends on" section of a
-    dependent's MR description."""
+    """A dependency's MR linked from a dependent's "Depends on" section."""
 
     title: str
     url: str

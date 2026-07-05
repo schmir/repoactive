@@ -12,6 +12,10 @@ lint.select = [
     "B",      # flake8-bugbear
     "C4",     # flake8-comprehensions
     "C90",    # mccabe (complexity)
+    "D100",   # pydocstyle: missing docstring in public module
+    "D205",   # pydocstyle: 1 blank line required between summary line and description
+    "D209",   # pydocstyle: multi-line docstring closing quotes on separate line
+    "D401",   # pydocstyle: first line should be in imperative mood
     "E",      # pycodestyle error
     "ERA",    # eradicate (commented-out code)
     "EXE",    # flake8-executable

@@ -1,3 +1,5 @@
+"""Tests for the UpdatePlan and its bookmark/MR application logic."""
+
 from repoactive.updates import (
     BookmarkPush,
     JobUpdate,

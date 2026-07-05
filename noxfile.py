@@ -1,4 +1,5 @@
 #!/usr/bin/env -S uv run nox --noxfile
+"""Nox sessions for CI: tests, type checking, config validation, and schema checks."""
 
 import re
 import tempfile

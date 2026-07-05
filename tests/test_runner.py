@@ -1,3 +1,5 @@
+"""Tests for job orchestration and runner logic."""
+
 import io
 import os
 import signal
@@ -344,7 +346,7 @@ class TestSelectJobs:
 
 
 def _mock_repo(unmerged: set[str] | None = None) -> MagicMock:
-    """A JJ stub whose unmerged_job_names returns the given set."""
+    """Return a JJ stub whose unmerged_job_names returns the given set."""
     repo = MagicMock()
     repo.unmerged_job_names.return_value = unmerged or set()
     repo.children_job_names.return_value = set()
@@ -1159,7 +1161,7 @@ class TestRunJob:
 def _gen(
     name: str = "gen", *, tags: list[str] | None = None, cooldown_period: str | None = None
 ) -> Job:
-    """A resolved generator job (emits_jobs=True) for inheritance tests."""
+    """Return a resolved generator job (emits_jobs=True) for inheritance tests."""
     return Job(
         name=name,
         command="discover",

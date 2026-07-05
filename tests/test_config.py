@@ -1,3 +1,5 @@
+"""Tests for config loading, merging, and validation."""
+
 from datetime import timedelta
 from pathlib import Path
 

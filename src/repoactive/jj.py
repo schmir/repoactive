@@ -1,3 +1,5 @@
+"""Wrapper around the jj (Jujutsu) CLI for managing colocated jj+git repositories."""
+
 import contextlib
 import logging
 import shutil
@@ -156,7 +158,8 @@ class JJ:
         """Run ``program`` with ``args``, raising CommandFailedError on a non-zero exit.
 
         ``global_args`` are inserted between the program and ``args`` but kept out
-        of logs and error messages, which show only the caller's ``args``."""
+        of logs and error messages, which show only the caller's ``args``.
+        """
         run_cwd = cwd or self.cwd
         logger.debug("%s %s (cwd=%s)", program, " ".join(args), run_cwd)
         start = time.monotonic()
@@ -190,7 +193,7 @@ class JJ:
         return self._exec("jj", args, global_args=("--no-pager", "--color=never"))
 
     def op_id(self) -> str:
-        """The current operation id.
+        """Return the current operation id.
 
         Captured at the start of a run for the debug log and, on a local run, to
         tell the user the exact ``jj op restore`` command that rolls the

@@ -1,3 +1,5 @@
+"""Tests for the progress/status display."""
+
 import io
 from typing import cast
 

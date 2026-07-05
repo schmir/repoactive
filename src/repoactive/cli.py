@@ -1,3 +1,5 @@
+"""Command-line interface for repoactive."""
+
 import json
 import logging
 from datetime import UTC, datetime

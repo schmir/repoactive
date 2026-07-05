@@ -1,3 +1,5 @@
+"""Tests for the per-repository run lock."""
+
 import os
 import subprocess
 import sys
@@ -10,7 +12,7 @@ from repoactive.lock import LOCK_FILENAME, RunLockHeldError, run_lock
 
 
 def _repo(tmp_path: Path) -> Path:
-    """A fake repo root with the .jj directory the lock file lives in."""
+    """Return a fake repo root with the .jj directory the lock file lives in."""
     (tmp_path / ".jj").mkdir()
     return tmp_path
 

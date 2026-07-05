@@ -1,3 +1,5 @@
+"""Abstract base class and shared types for platform integrations (GitHub, GitLab)."""
+
 from __future__ import annotations
 
 import re
@@ -6,9 +8,10 @@ from dataclasses import dataclass
 
 
 class PlatformError(Exception):
-    """Raised when the platform API rejects a request (bad token, unknown
-    repository, insufficient permissions), wrapping the client library's own
-    exception so callers need not know about PyGithub/python-gitlab types."""
+    """Raised when the platform API rejects a request (bad token, unknown repository, insufficient permissions).
+
+    Wraps the client library's own exception so callers need not know about PyGithub/python-gitlab types.
+    """
 
     def __init__(self, platform: str, repo: str, error: Exception) -> None:
         super().__init__(f"{platform}: cannot access repository {repo!r}: {error}")

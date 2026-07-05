@@ -1,3 +1,5 @@
+"""Tests for the CLI commands."""
+
 import json
 import logging
 import re

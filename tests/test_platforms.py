@@ -1,3 +1,5 @@
+"""Tests for platform selection and MR parameter handling."""
+
 from __future__ import annotations
 
 from pathlib import Path

@@ -1,3 +1,5 @@
+"""Pydantic config models and multi-source TOML merging for repoactive."""
+
 from __future__ import annotations
 
 import itertools
@@ -97,7 +99,8 @@ class JobNameInBodyError(ValueError):
     """Raised when a [job.<name>] table also sets a 'name' field.
 
     The job's name is the table key; repeating it in the body is redundant and
-    could disagree with the key."""
+    could disagree with the key.
+    """
 
     def __init__(self, name: str) -> None:
         super().__init__(
@@ -109,7 +112,8 @@ class GeneratedByInBodyError(ValueError):
     """Raised when a [job.<name>] table sets a 'generated_by' field.
 
     'generated_by' is set by repoactive itself on jobs emitted by a generator;
-    it is not a user-facing config field."""
+    it is not a user-facing config field.
+    """
 
     def __init__(self, name: str) -> None:
         super().__init__(
@@ -156,7 +160,8 @@ class DuplicatePlatformHostError(ValueError):
     """Raised when two platforms resolve to the same host.
 
     Platforms are matched to a repository by host (see platforms._match_platform),
-    so two entries sharing a host are ambiguous — only the first would ever be used."""
+    so two entries sharing a host are ambiguous — only the first would ever be used.
+    """
 
     def __init__(self, host: str, first_url: str, second_url: str) -> None:
         super().__init__(
@@ -315,8 +320,10 @@ class Job(BaseModel):
         return self
 
     def effective_tags(self) -> set[str]:
-        """Tags driving selection: explicit tags, else DISABLED_TAG if disabled,
-        else DEFAULT_TAG. ``disabled`` and ``tags`` are mutually exclusive."""
+        """Tags driving selection: explicit tags, else DISABLED_TAG if disabled, else DEFAULT_TAG.
+
+        ``disabled`` and ``tags`` are mutually exclusive.
+        """
         if self.disabled:
             return {DISABLED_TAG}
         if self.tags:
@@ -331,7 +338,7 @@ class Job(BaseModel):
         return parse_duration(self.cooldown_period) if self.cooldown_period is not None else None
 
     def timeout_seconds(self) -> float | None:
-        """The command timeout in seconds, or None for no timeout.
+        """Return the command timeout in seconds, or None for no timeout.
 
         A zero duration (e.g. ``"0s"``) also means no timeout: TOML cannot
         express null, so this is how a job opts out of a timeout set in
@@ -342,11 +349,12 @@ class Job(BaseModel):
         return parse_duration(self.timeout).total_seconds() or None
 
     def commit_trailers(self) -> list[str]:
-        """The ``Repoactive-Job`` trailer lines recorded on this job's commit.
+        """Return the ``Repoactive-Job`` trailer lines recorded on this job's commit.
 
         A job produced by a generator records a second trailer with the
         generator's name, giving the generator a cooldown over the whole
-        fan-out (ADR 0004)."""
+        fan-out (ADR 0004).
+        """
         lines = [f"{JOB_TRAILER_KEY}: {self.name}"]
         if self.generated_by:
             lines.append(f"{JOB_TRAILER_KEY}: {self.generated_by}")
@@ -375,7 +383,8 @@ class Config(BaseModel):
 
         TOML stores jobs as a table keyed by name; the name comes from the key
         and is injected into each job. A non-mapping value (e.g. an already-built
-        ``list[Job]`` passed programmatically) passes through unchanged."""
+        ``list[Job]`` passed programmatically) passes through unchanged.
+        """
         if not isinstance(value, dict):
             return value
         jobs: list[dict] = []
@@ -398,7 +407,8 @@ class Config(BaseModel):
         TOML stores platforms as a table keyed by name; the name is only a label
         (platforms are matched by ``url``), so it is dropped here. A non-mapping
         value (e.g. an already-built ``list`` passed programmatically) passes
-        through unchanged."""
+        through unchanged.
+        """
         if not isinstance(value, dict):
             return value
         platforms: list[dict] = []
@@ -437,7 +447,7 @@ class Config(BaseModel):
         return [job.resolve(self.job_defaults) for job in self.jobs]
 
     def bookmark_names(self) -> set[str]:
-        """The branch/bookmark names repoactive manages, one per job.
+        """Return the branch/bookmark names repoactive manages, one per job.
 
         Each is the job's resolved ``branch_prefix`` followed by its name (see
         ``Job.branch_name``). When we start working on a repository these are the
@@ -447,7 +457,7 @@ class Config(BaseModel):
         return {job.branch_name() for job in self._resolved_jobs()}
 
     def base_branches(self) -> set[str]:
-        """All branches a job uses as base_branch"""
+        """All branches a job uses as base_branch."""
         return {job.base_branch for job in self._resolved_jobs() if job.base_branch}
 
     def token_env_names(self) -> set[str]:
@@ -465,7 +475,8 @@ def jobs_table(value: object) -> dict:
 
     TOML parses ``[job.<name>]`` tables into a dict keyed by name; an array of
     tables (the format used before) parses into a list, which is no longer
-    accepted."""
+    accepted.
+    """
     if not isinstance(value, dict):
         raise JobsNotTableError
     return value
@@ -476,7 +487,8 @@ def platforms_table(value: object) -> dict:
 
     TOML parses ``[platform.<name>]`` tables into a dict keyed by name; an array
     of tables (the format used before) parses into a list, which is no longer
-    accepted."""
+    accepted.
+    """
     if not isinstance(value, dict):
         raise PlatformsNotTableError
     return value
@@ -497,7 +509,8 @@ def _merge_named_tables(*, base: dict, override: dict) -> dict:
 
     Order is preserved (base names first, new override names appended) and
     override fields win field-by-field, the same semantics as the per-source
-    table merge."""
+    table merge.
+    """
     result: dict[str, dict] = {name: dict(body) for name, body in base.items()}
     for name, body in override.items():
         if name in result:

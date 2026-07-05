@@ -55,7 +55,7 @@ class ProgressView:
             self._live.update(self._render())
 
     def tail(self) -> list[str]:
-        """The most recent lines kept (the last ``max_lines`` fed)."""
+        """Return the most recent lines kept (the last ``max_lines`` fed)."""
         return list(self._tail_lines)
 
     def _render(self) -> Group:

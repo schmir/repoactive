@@ -1,3 +1,5 @@
+"""Tests for the JJ wrapper class."""
+
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from subprocess import CalledProcessError
