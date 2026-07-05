@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.2.1 - unreleased
+
+- **Bug fix:** a failed job command no longer destroys the job's existing
+  branch. Previously, `ws.abandon()` on failure removed the bookmark commit
+  and left dependent branches orphaned. Jobs now run on a fresh commit; on
+  failure only that throwaway commit is discarded, leaving the existing
+  branch and all dependents untouched (ADR 0012).
+- When a job re-runs and already has a branch, repoactive now preserves the
+  existing commit's change-id (absorbing the new result into it) so that
+  dependent commits not selected in the current run are automatically kept
+  correctly parented by jj. Previously the branch was mutated in place but
+  without this guarantee in the failure path.
+- When a job is selected, any job whose existing commit is a direct child of
+  that job's branch is automatically force-included in the run, keeping the
+  whole stack fresh in a single pass without manual selection.
+- **Bug fix:** a timeout was falsely reported when a command exited cleanly
+  just as the watchdog fired. A false kill of an already-exited process left
+  a non-zero returncode that was misread as a timeout; the check now
+  requires the command to still be running at the moment of the watchdog's
+  poll.
+- `timeout = "0s"` in a job now means _no timeout_, letting a job opt out of
+  a timeout set in `job-defaults` (TOML has no null literal).
+- **Bug fix:** a generator could emit a job whose name matched a disabled or
+  untagged config job, silently overwriting its branch. The collision check
+  now covers all configured jobs, not only selected ones.
+- Setting `generated_by` in a `[job.<name>]` config table is now rejected
+  with a clear error; the field is set by repoactive internally on
+  generator-emitted jobs and is not user-facing.
+
 ## 0.2.0 - 2026-07-03
 
 - **Breaking:** platforms are now configured as name-keyed tables
