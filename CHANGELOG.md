@@ -2,6 +2,13 @@
 
 ## 0.2.1 - unreleased
 
+- **Bug fix:** running with `-mpush` after a previous `-mlocal` run no
+  longer leaves a stale remote bookmark when a job produces no diff.
+  Previously, the `-mlocal` run deleted the local bookmark but did not push
+  the deletion; the subsequent `-mpush` run saw no local bookmark and
+  skipped the delete push entirely. The fix checks for a remote-tracking
+  bookmark and schedules the deletion push even when the local bookmark is
+  already gone.
 - **Bug fix:** a failed job command no longer destroys the job's existing
   branch. Previously, `ws.abandon()` on failure removed the bookmark commit
   and left dependent branches orphaned. Jobs now run on a fresh commit; on

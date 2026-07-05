@@ -126,6 +126,25 @@ class TestBookmarkExists:
         assert _jj().bookmark_exists("rschmitt/foo") is False
 
 
+class TestRemoteBookmarkExists:
+    @patch("repoactive.jj.subprocess.run")
+    def test_returns_true_when_remote_bookmark_found(self, mock_run: MagicMock) -> None:
+        mock_run.return_value.stdout = "1\n"
+        assert _jj().remote_bookmark_exists("repoactive/foo") is True
+
+    @patch("repoactive.jj.subprocess.run")
+    def test_returns_false_when_no_remote_bookmark(self, mock_run: MagicMock) -> None:
+        mock_run.return_value.stdout = ""
+        assert _jj().remote_bookmark_exists("repoactive/foo") is False
+
+    @patch("repoactive.jj.subprocess.run")
+    def test_passes_name_in_template(self, mock_run: MagicMock) -> None:
+        mock_run.return_value.stdout = ""
+        _jj().remote_bookmark_exists("repoactive/my-job")
+        template = mock_run.call_args[0][0][-1]
+        assert '"repoactive/my-job"' in template
+
+
 _TEMPLATE = """
         if(self.remote(), "",
            if(self.normal_target(),

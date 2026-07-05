@@ -231,6 +231,12 @@ class JJ:
     def bookmark_exists(self, name: str) -> bool:
         return any(b.name == name for b in self.bookmark_list())
 
+    def remote_bookmark_exists(self, name: str) -> bool:
+        """Return True if a remote-tracking bookmark for ``name`` exists."""
+        template = f'if(self.remote() && self.name() == "{name}", "1\\n", "")'
+        output = self._run("bookmark", "list", "-T", template)
+        return bool(output.strip())
+
     def bookmark_track(self, *bookmarks: str) -> None:
         """Track the given remote bookmarks so local bookmarks follow them."""
         if not bookmarks:

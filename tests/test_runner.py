@@ -1680,6 +1680,7 @@ class TestRunAll:
             cls.return_value.unmerged_job_names.return_value = set()
             cls.return_value.children_job_names.return_value = set()
             cls.return_value.has_recent_job_commit.return_value = False
+            cls.return_value.remote_bookmark_exists.return_value = False
             cls.return_value.op_id.return_value = "OP-START"
             # temp_workspace returns a no-op context manager for the absorb phase.
             cls.return_value.temp_workspace.return_value.__enter__.return_value = cls.return_value
@@ -1887,6 +1888,22 @@ class TestRunAll:
         run_all(config=_config(a), repo_path=REPO, mode=RunMode.push)
 
         mock_apply_plan.assert_called_once()
+
+    @patch("repoactive.runner.run_job")
+    def test_remote_bookmark_deleted_when_local_already_gone(
+        self, mock_run_job: MagicMock, mock_jj: MagicMock
+    ) -> None:
+        # Regression: if a -mlocal run deleted the local bookmark without
+        # applying the plan, a subsequent -mpush run must still push the
+        # deletion to the remote (old_change_id is None, but remote has it).
+        a = _job("a")
+        mock_run_job.return_value = _result(a, revsets=["trunk()"], produced=False)
+        mock_jj.return_value.remote_bookmark_exists.return_value = True
+
+        run_all(config=_config(a), repo_path=REPO, mode=RunMode.push)
+
+        mock_jj.return_value.bookmark_delete.assert_not_called()
+        mock_jj.return_value.git_push_bookmarks.assert_called_once_with("repoactive/a")
 
     def test_publish_without_platform_is_rejected(self) -> None:
         a = _job("a")

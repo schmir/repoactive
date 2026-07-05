@@ -876,6 +876,27 @@ def _run_generator_job(  # noqa: PLR0913
     return emitted
 
 
+def _absorb_no_diff_bookmark(
+    job: Job, result: JobResult, bookmark: str, *, repo: JJ, plan: UpdatePlan
+) -> None:
+    """Delete the local bookmark (if present) and schedule a remote delete push.
+
+    Schedules the push when either the local bookmark was just deleted, or the
+    remote still has it from a previous push (e.g. after a -mlocal run that
+    deleted the local bookmark without applying the plan).
+    """
+    if result.old_change_id:
+        repo.bookmark_delete(bookmark)
+    if result.old_change_id or repo.remote_bookmark_exists(bookmark):
+        plan.updates.append(
+            JobUpdate(
+                job_name=job.name,
+                title=result.job.title,
+                push=BookmarkPush(bookmark=bookmark, delete=True),
+            )
+        )
+
+
 def _absorb_results(
     *,
     ordered_jobs: list[Job],
@@ -930,15 +951,8 @@ def _absorb_results(
                 # Only delete the bookmark when the command ran and produced no
                 # diff. Cooldown is an intentional skip — leave its bookmark
                 # alone so the branch is not destroyed.
-                if result.old_change_id and job.name not in summary.on_cooldown:
-                    repo.bookmark_delete(bookmark)
-                    plan.updates.append(
-                        JobUpdate(
-                            job_name=job.name,
-                            title=result.job.title,
-                            push=BookmarkPush(bookmark=bookmark, delete=True),
-                        )
-                    )
+                if job.name not in summary.on_cooldown:
+                    _absorb_no_diff_bookmark(job, result, bookmark, repo=repo, plan=plan)
                 continue
 
             assert result.new_change_id is not None
