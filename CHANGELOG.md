@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.1 - unreleased
+## 0.2.1 - 2026-07-05
 
 - **Bug fix:** running with `-mpush` after a previous `-mlocal` run no
   longer leaves a stale remote bookmark when a job produces no diff.
