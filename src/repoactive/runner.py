@@ -788,6 +788,24 @@ def _dispatch_job(  # noqa: PLR0913
         blocked.add(job.name)
         return []
 
+    if job.run_only_if_changed:
+        any_changed = any(
+            r.produced_diff
+            for d in job.run_only_if_changed
+            if (r := summary.results.get(d)) is not None
+        )
+        if not any_changed:
+            resolved_job = job.resolve(config.job_defaults)
+            parents = _compute_parents(resolved_job, summary.results)
+            print(
+                f"==> [{job.name}] skipped"
+                f" (run_only_if_changed: none of {job.run_only_if_changed} produced changes)"
+            )
+            summary.results[job.name] = JobResult(
+                job=resolved_job, effective_revsets=parents, produced_diff=False
+            )
+            return []
+
     resolved_job = job.resolve(config.job_defaults)
     parents = _compute_parents(resolved_job, summary.results)
     logger.debug("[%s] computed parents: %s", job.name, parents)

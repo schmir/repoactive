@@ -23,6 +23,7 @@ and (with `--mode publish`) the full MR lifecycle.
 - [Configuration](#configuration)
 - [Selecting jobs with tags](#selecting-jobs-with-tags)
 - [Disabling jobs](#disabling-jobs)
+- [Gating jobs with `run_only_if_changed`](#gating-jobs-with-run_only_if_changed)
 - [Throttling jobs with `cooldown_period`](#throttling-jobs-with-cooldown_period)
 - [Limiting job runtime with `timeout`](#limiting-job-runtime-with-timeout)
 - [Generating jobs dynamically](#generating-jobs-dynamically)
@@ -480,6 +481,11 @@ disabled = false
 # Optional: override branch_prefix/mr_title_prefix/commit_title_prefix from
 # job-defaults for this job only.
 mr_title_prefix = "[api] "
+# Optional: only run this job if at least one of the named jobs produced a
+# diff in the current run. If none of them changed anything, this job is
+# skipped (with a no-op result so dependents still run). Names need not be
+# in depends_on; any job that ran before this one can be listed.
+# run_only_if_changed = ["other-job"]
 # Optional: minimum time between landed changes for this job. If a commit
 # from this job landed on the base branch within this window, the job is
 # skipped. Format: <number><unit>, unit one of s, m, h, d, w (e.g. "7d").
@@ -723,6 +729,45 @@ so a wrapper can treat "already running" as benign:
 The lock is an advisory `flock` on `.jj/repoactive.lock`; the OS releases it
 automatically if a run is killed, so a crashed run never leaves the
 repository locked.
+
+## Gating jobs with `run_only_if_changed`
+
+`run_only_if_changed` lets a job declare that it should only run when
+specific upstream jobs actually produced a diff. If none of the named jobs
+changed anything in the current run, the job is skipped.
+
+```toml
+[job.prek-autoupdate]
+command = "./scripts/prek.sh autoupdate"
+title = "ci: update pre-commit hooks"
+tags = ["weekly"]
+
+[job.prek-run-all]
+command = "sh -c './scripts/prek.sh run -a; true'"
+title = "ci: apply pre-commit fixes"
+depends_on = ["prek-autoupdate"]
+run_only_if_changed = ["prek-autoupdate"]
+tags = ["weekly"]
+```
+
+Here `prek-run-all` is only useful when `prek-autoupdate` changed something:
+if `prek-autoupdate` found no hooks to update, running `prek-run-all` would
+produce an empty diff anyway. With `run_only_if_changed`, the skip is
+explicit and immediate — `prek-run-all` never even starts.
+
+Key behaviour:
+
+- **At least one must have changed.** The job runs if any named job produced
+  a diff; it is skipped only when _all_ of them were empty.
+- **Missing results count as no diff.** If a named job failed or was itself
+  skipped, it is treated as having produced no diff.
+- **Dependents are unaffected.** A skipped job records a no-op result (like
+  a job on cooldown), so any job that `depends_on` it still runs on the base
+  branch — the skip does not cascade.
+- **No ordering constraint.** Names in `run_only_if_changed` do not have to
+  appear in `depends_on`. Any job that runs before this one in topological
+  order can be listed; in practice most usages name a direct dependency, as
+  in the example above.
 
 ## Throttling jobs with `cooldown_period`
 

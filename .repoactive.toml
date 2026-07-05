@@ -37,4 +37,5 @@ cooldown_period = "14d"
 command = "sh -c './scripts/prek.sh run -a; true'"
 title = "ci: apply pre-commit fixes"
 depends_on = ["prek-autoupdate"]
+run_only_if_changed = ["prek-autoupdate"]
 tags = ["weekly"]

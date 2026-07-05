@@ -46,6 +46,7 @@ def _job(  # noqa: PLR0913
     name: str,
     *,
     depends_on: list[str] | None = None,
+    run_only_if_changed: list[str] | None = None,
     base_branch: str | None = None,
     description: str | None = None,
     labels: list[str] | None = None,
@@ -59,6 +60,7 @@ def _job(  # noqa: PLR0913
         command=f"cmd-{name}",
         title=f"Change {name}",
         depends_on=depends_on or [],
+        run_only_if_changed=run_only_if_changed or [],
         base_branch=base_branch,
         description=description,
         labels=labels or [],
@@ -133,6 +135,7 @@ def _config(*jobs: Job) -> Config:
                     "command": j.command,
                     "title": j.title,
                     "depends_on": j.depends_on,
+                    "run_only_if_changed": j.run_only_if_changed,
                     "disabled": j.disabled,
                     "tags": j.tags,
                     "create_mr": j.create_mr,
@@ -515,6 +518,72 @@ class TestRunOneJob:
             )
         assert summary.failed == {"a": err}
         assert blocked == {"a"}
+
+    def test_run_only_if_changed_skips_when_none_changed(self) -> None:
+        # b gates on a, but a produced no diff — b is skipped with a no-op result.
+        job_a = _job("a")
+        job_b = _job("b", depends_on=["a"], run_only_if_changed=["a"])
+        config = _config(job_a, job_b)
+        summary = RunSummary()
+        summary.results["a"] = JobResult(
+            job=job_a, effective_revsets=["trunk()"], produced_diff=False
+        )
+        with patch("repoactive.runner.run_job") as mock_run_job:
+            _dispatch_job(
+                job=config.jobs[1],
+                config=config,
+                repo_path=REPO,
+                summary=summary,
+                blocked=set(),
+                run_names={"a", "b"},
+            )
+        assert "b" in summary.results
+        assert summary.results["b"].produced_diff is False
+        assert "b" not in summary.skipped
+        assert mock_run_job.call_count == 0
+
+    def test_run_only_if_changed_runs_when_dep_changed(self) -> None:
+        job_a = _job("a")
+        job_b = _job("b", depends_on=["a"], run_only_if_changed=["a"])
+        config = _config(job_a, job_b)
+        result_b = JobResult(job=job_b, effective_revsets=["repoactive/b"], produced_diff=True)
+        summary = RunSummary()
+        summary.results["a"] = JobResult(
+            job=job_a, effective_revsets=["repoactive/a"], produced_diff=True
+        )
+        with (
+            patch("repoactive.runner._on_cooldown", return_value=False),
+            patch("repoactive.runner.run_job", return_value=result_b) as mock_run_job,
+        ):
+            _dispatch_job(
+                job=config.jobs[1],
+                config=config,
+                repo_path=REPO,
+                summary=summary,
+                blocked=set(),
+                run_names={"a", "b"},
+            )
+        assert summary.results["b"] is result_b
+        mock_run_job.assert_called_once()
+
+    def test_run_only_if_changed_skips_when_dep_result_missing(self) -> None:
+        # a failed/was skipped — not in summary.results — treated as no diff.
+        job_a = _job("a")
+        job_b = _job("b", run_only_if_changed=["a"])
+        config = _config(job_a, job_b)
+        summary = RunSummary()
+        with patch("repoactive.runner.run_job") as mock_run_job:
+            _dispatch_job(
+                job=config.jobs[1],
+                config=config,
+                repo_path=REPO,
+                summary=summary,
+                blocked=set(),
+                run_names={"a", "b"},
+            )
+        assert "b" in summary.results
+        assert summary.results["b"].produced_diff is False
+        assert mock_run_job.call_count == 0
 
 
 class TestBoxquote:

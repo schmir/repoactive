@@ -95,6 +95,15 @@ class UnknownDependencyError(ValueError):
         super().__init__(f"job '{name}' depends_on unknown jobs: {unknown}")
 
 
+class UnknownRunOnlyIfChangedError(ValueError):
+    """Raised when run_only_if_changed references a job that does not exist."""
+
+    def __init__(self, name: str, unknown: list[str]) -> None:
+        super().__init__(
+            f"job '{name}' run_only_if_changed references unknown job(s): {', '.join(unknown)}"
+        )
+
+
 class JobNameInBodyError(ValueError):
     """Raised when a [job.<name>] table also sets a 'name' field.
 
@@ -279,6 +288,7 @@ class Job(BaseModel):
     disabled: bool = False
     tags: list[str] = Field(default_factory=list)
     depends_on: list[str] = Field(default_factory=list)
+    run_only_if_changed: list[str] = Field(default_factory=list)
     output_in_commit: bool = True
     # When true, the command does not produce a diff to commit; instead it writes
     # one or more *.toml job fragments into the directory named by the
@@ -441,6 +451,15 @@ class Config(BaseModel):
             if unknown:
                 raise UnknownDependencyError(job.name, sorted(unknown))
         detect_dependency_cycle(self.jobs)
+        return self
+
+    @model_validator(mode="after")
+    def validate_run_only_if_changed(self) -> Config:
+        names = {j.name for j in self.jobs}
+        for job in self.jobs:
+            unknown = sorted(set(job.run_only_if_changed) - names)
+            if unknown:
+                raise UnknownRunOnlyIfChangedError(job.name, unknown)
         return self
 
     def _resolved_jobs(self) -> list[Job]:

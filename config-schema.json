@@ -84,6 +84,13 @@
           "title": "Depends On",
           "type": "array"
         },
+        "run_only_if_changed": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Run Only If Changed",
+          "type": "array"
+        },
         "output_in_commit": {
           "default": true,
           "title": "Output In Commit",

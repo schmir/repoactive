@@ -223,6 +223,36 @@ class TestDependsOnValidation:
             )
 
 
+class TestRunOnlyIfChangedValidation:
+    def test_valid_run_only_if_changed(self) -> None:
+        cfg = _config(
+            jobs=[
+                _job("a"),
+                _job("b", run_only_if_changed=["a"]),
+            ]
+        )
+        assert cfg.jobs[1].run_only_if_changed == ["a"]
+
+    def test_unknown_name_raises(self) -> None:
+        with pytest.raises(ValueError, match="unknown job"):
+            _config(jobs=[_job("a", run_only_if_changed=["nonexistent"])])
+
+    def test_multiple_unknown_names_reported(self) -> None:
+        with pytest.raises(ValueError, match="unknown job"):
+            _config(jobs=[_job("a", run_only_if_changed=["x", "y"])])
+
+    def test_does_not_require_depends_on(self) -> None:
+        # run_only_if_changed names need not be in depends_on
+        cfg = _config(
+            jobs=[
+                _job("a"),
+                _job("b", run_only_if_changed=["a"]),
+            ]
+        )
+        assert cfg.jobs[1].depends_on == []
+        assert cfg.jobs[1].run_only_if_changed == ["a"]
+
+
 class TestJobDefaults:
     def test_branch_prefix_default(self) -> None:
         cfg = _config()
