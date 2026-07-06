@@ -500,6 +500,43 @@ class TestLoadConfig:
         cfg = load_config([base, override])
         assert cfg.jobs[0].draft is True
 
+    def test_merge_jobs_disabled_overrides_tags(self, tmp_path: Path) -> None:
+        base = tmp_path / "base.toml"
+        base.write_text(
+            '[platform.gitlab]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
+            '[job.a]\ncommand = "cmd"\ntitle = "A"\ntags = ["weekly"]\n'
+        )
+        override = tmp_path / "override.toml"
+        override.write_text("[job.a]\ndisabled = true\n")
+        cfg = load_config([base, override])
+        assert cfg.jobs[0].disabled is True
+        assert cfg.jobs[0].tags == []
+
+    def test_merge_jobs_tags_override_disabled(self, tmp_path: Path) -> None:
+        base = tmp_path / "base.toml"
+        base.write_text(
+            '[platform.gitlab]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
+            '[job.a]\ncommand = "cmd"\ntitle = "A"\ndisabled = true\n'
+        )
+        override = tmp_path / "override.toml"
+        override.write_text('[job.a]\ntags = ["weekly"]\n')
+        cfg = load_config([base, override])
+        assert cfg.jobs[0].disabled is False
+        assert cfg.jobs[0].tags == ["weekly"]
+
+    def test_merge_jobs_override_with_both_disabled_and_tags_rejected(
+        self, tmp_path: Path
+    ) -> None:
+        base = tmp_path / "base.toml"
+        base.write_text(
+            '[platform.gitlab]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
+            '[job.a]\ncommand = "cmd"\ntitle = "A"\n'
+        )
+        override = tmp_path / "override.toml"
+        override.write_text('[job.a]\ndisabled = true\ntags = ["weekly"]\n')
+        with pytest.raises(ConfigError, match="both 'disabled' and 'tags'"):
+            load_config([base, override])
+
     def test_platform_always_includes_defaults(self, tmp_path: Path) -> None:
         f = tmp_path / ".repoactive.toml"
         f.write_text('[job-defaults]\nbranch_prefix = "x/"\n')

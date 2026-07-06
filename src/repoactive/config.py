@@ -540,8 +540,21 @@ def _merge_named_tables(*, base: dict, override: dict) -> dict:
 
 
 def merge_jobs(*, base: dict, override: dict) -> dict:
-    """Merge two job tables keyed by name (see ``_merge_named_tables``)."""
-    return _merge_named_tables(base=base, override=override)
+    """Merge two job tables keyed by name (see ``_merge_named_tables``).
+
+    When the override sets ``disabled = true``, any ``tags`` carried over from
+    the base are removed, and when the override sets ``tags``, any ``disabled``
+    carried over from the base is removed.  This keeps the mutual-exclusion
+    invariant intact across multi-source merges.
+    """
+    result = _merge_named_tables(base=base, override=override)
+    for name, override_body in override.items():
+        merged_body = result[name]
+        if override_body.get("disabled") and "tags" not in override_body:
+            merged_body.pop("tags", None)
+        elif override_body.get("tags") and "disabled" not in override_body:
+            merged_body.pop("disabled", None)
+    return result
 
 
 def merge_platforms(*, base: dict, override: dict) -> dict:
