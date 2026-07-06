@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.2.2 - 2026-07-06
+
+- A new `run_only_if_changed` field on a job lists the names of other jobs
+  that must have produced a diff in the current run for this job to execute.
+  If none of the listed jobs changed, the job is skipped rather than run.
+  Unknown names in `run_only_if_changed` are rejected at config load time.
+- When a job re-runs with unchanged content but a different `title` or
+  `commit_title_prefix`, the existing commit's description is now updated to
+  reflect the new message. Previously the description was only updated when
+  the content itself changed.
+- **Bug fix:** merging job config from multiple sources no longer fails when
+  one source sets `disabled = true` and another sets `tags` on the same job.
+  The conflicting field from the lower-priority source is now dropped so the
+  mutual-exclusion rule is still enforced only against what the user
+  explicitly wrote in each source. This also means that
+  `--set 'job.upgrade-deps.disabled = true'` now works to disable a job that
+  carries tags in the base config.
+- Newline characters in `title`, `commit_title_prefix`, and
+  `mr_title_prefix` are now rejected at config load time with a clear error,
+  rather than silently producing malformed commit or MR titles.
+
 ## 0.2.1 - 2026-07-05
 
 - **Bug fix:** running with `-mpush` after a previous `-mlocal` run no
