@@ -20,6 +20,7 @@ from pydantic import (
     ConfigDict,
     Field,
     ValidationError,
+    ValidationInfo,
     field_validator,
     model_validator,
 )
@@ -76,6 +77,13 @@ class InvalidTagError(ValueError):
 
     def __init__(self, tag: str) -> None:
         super().__init__(f"invalid tag {tag!r}: only letters, digits, '-', and '_' are allowed")
+
+
+class NewlineInTitleError(ValueError):
+    """Raised when a title or prefix field contains a newline character."""
+
+    def __init__(self, field: str, value: str) -> None:
+        super().__init__(f"{field} must not contain newline characters, got {value!r}")
 
 
 class DisabledAndTagsError(ValueError):
@@ -262,6 +270,14 @@ class JobDefaults(BaseModel):
     cooldown_period: _Duration | None = None
     timeout: _Duration | None = "2m"
 
+    @field_validator("mr_title_prefix", "commit_title_prefix")
+    @classmethod
+    def _check_no_newline(cls, value: str, info: ValidationInfo) -> str:
+        if "\n" in value:
+            assert info.field_name is not None
+            raise NewlineInTitleError(info.field_name, value)
+        return value
+
 
 # Fields Job.resolve fills in from JobDefaults when the job does not set them
 # itself. labels is absent on purpose: it is merged, not replaced (see resolve).
@@ -313,6 +329,14 @@ class Job(BaseModel):
     def _check_name(cls, value: str) -> str:
         if not _JOB_NAME_RE.match(value):
             raise InvalidJobNameError(value)
+        return value
+
+    @field_validator("title", "commit_title_prefix")
+    @classmethod
+    def _check_no_newline(cls, value: str, info: ValidationInfo) -> str:
+        if "\n" in value:
+            assert info.field_name is not None
+            raise NewlineInTitleError(info.field_name, value)
         return value
 
     @field_validator("tags")

@@ -755,6 +755,40 @@ class TestDefaultConfigPaths:
             default_config_paths(tmp_path)
 
 
+class TestNewlineValidation:
+    def test_job_title_with_newline_rejected(self) -> None:
+        with pytest.raises(ValueError, match="newline"):
+            Job(name="x", command="cmd", title="bad\ntitle")
+
+    def test_job_title_without_newline_accepted(self) -> None:
+        job = Job(name="x", command="cmd", title="good title")
+        assert job.title == "good title"
+
+    def test_job_commit_title_prefix_with_newline_rejected(self) -> None:
+        with pytest.raises(ValueError, match="newline"):
+            Job(name="x", command="cmd", title="T", commit_title_prefix="bad\nprefix")
+
+    def test_job_commit_title_prefix_without_newline_accepted(self) -> None:
+        job = Job(name="x", command="cmd", title="T", commit_title_prefix="[ok] ")
+        assert job.commit_title_prefix == "[ok] "
+
+    def test_defaults_mr_title_prefix_with_newline_rejected(self) -> None:
+        with pytest.raises(ValueError, match="newline"):
+            JobDefaults(mr_title_prefix="bad\nprefix")
+
+    def test_defaults_mr_title_prefix_without_newline_accepted(self) -> None:
+        defaults = JobDefaults(mr_title_prefix="[mr] ")
+        assert defaults.mr_title_prefix == "[mr] "
+
+    def test_defaults_commit_title_prefix_with_newline_rejected(self) -> None:
+        with pytest.raises(ValueError, match="newline"):
+            JobDefaults(commit_title_prefix="bad\nprefix")
+
+    def test_defaults_commit_title_prefix_without_newline_accepted(self) -> None:
+        defaults = JobDefaults(commit_title_prefix="[ok] ")
+        assert defaults.commit_title_prefix == "[ok] "
+
+
 class TestTags:
     @pytest.mark.parametrize("tag", ["weekly", "nightly-build", "tier_1", "Weekly2"])
     def test_valid_tags_accepted(self, tag: str) -> None:
