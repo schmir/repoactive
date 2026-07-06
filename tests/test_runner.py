@@ -33,6 +33,7 @@ from repoactive.runner import (
     _select_jobs,
     _select_run_jobs,
     _spawn,
+    _strip_boxquote_and_trailers,
     _suppress_superseded_mrs,
     apply_plan,
     run_all,
@@ -626,6 +627,50 @@ class TestBuildCommitMessage:
         job = _job("a").model_copy(update={"generated_by": "gen"})
         msg = _build_commit_message(job, CommandResult(output="", elapsed=1.0))
         assert msg == "Change a\n\nRepoactive-Job: a\nRepoactive-Job: gen"
+
+
+class TestStripBoxquoteAndTrailers:
+    def _msg(self, job: Job, output: str = "out") -> str:
+        return _build_commit_message(job, CommandResult(output=output, elapsed=0.0))
+
+    def test_strips_boxquote_and_trailers(self) -> None:
+        job = _job("a", description="Desc")
+        assert _strip_boxquote_and_trailers(self._msg(job)) == "Change a\n\nDesc"
+
+    def test_strips_trailers_when_no_boxquote(self) -> None:
+        job = _job("a").model_copy(update={"output_in_commit": False})
+        assert _strip_boxquote_and_trailers(self._msg(job, output="")) == "Change a"
+
+    def test_strips_trailers_with_description_and_no_boxquote(self) -> None:
+        job = _job("a", description="Desc").model_copy(update={"output_in_commit": False})
+        assert _strip_boxquote_and_trailers(self._msg(job, output="")) == "Change a\n\nDesc"
+
+    def test_same_job_compares_equal(self) -> None:
+        job = _job("a", description="Desc")
+        assert _strip_boxquote_and_trailers(
+            self._msg(job, output="old")
+        ) == _strip_boxquote_and_trailers(self._msg(job, output="new"))
+
+    def test_changed_title_compares_unequal(self) -> None:
+        old = _job("a")
+        new = old.model_copy(update={"title": "New title"})
+        assert _strip_boxquote_and_trailers(self._msg(old)) != _strip_boxquote_and_trailers(
+            self._msg(new)
+        )
+
+    def test_changed_prefix_compares_unequal(self) -> None:
+        old = _job("a", commit_title_prefix="[old] ")
+        new = old.model_copy(update={"commit_title_prefix": "[new] "})
+        assert _strip_boxquote_and_trailers(self._msg(old)) != _strip_boxquote_and_trailers(
+            self._msg(new)
+        )
+
+    def test_added_description_compares_unequal(self) -> None:
+        without = _job("a", description=None)
+        with_ = without.model_copy(update={"description": "Now set"})
+        assert _strip_boxquote_and_trailers(self._msg(without)) != _strip_boxquote_and_trailers(
+            self._msg(with_)
+        )
 
 
 class TestComputeParents:

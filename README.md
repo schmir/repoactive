@@ -119,7 +119,13 @@ need to write is the script that produces the change.
 2. It runs the job's script against the working tree.
 3. If the script produced a diff, it records the change. With `--mode push`
    or `--mode publish`, it pushes the branch; with `--mode publish`, it also
-   creates or updates the merge request.
+   creates or updates the merge request. On a re-run, if the diff matches
+   what is already on the branch, the commit and branch are left untouched —
+   avoiding an unnecessary push that would re-trigger CI pipelines. The
+   commit is updated (and the branch pushed) only when the diff itself
+   changes or when `title`/`commit_title_prefix` changed. Command output
+   alone changing does not update the commit. The MR title and description
+   are always brought up to date, including any changed command output.
 4. If the script produced no diff, the empty commit is discarded and no MR
    is opened. A branch left over from an earlier run that did produce a diff
    is now stale, so it is deleted; with `--mode push` or `--mode publish`,

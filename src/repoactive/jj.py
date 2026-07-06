@@ -290,6 +290,10 @@ class JJ:
         """Set the commit message of a specific revision without touching ``@``."""
         self._run("describe", "-r", revision, "--message", message)
 
+    def get_description(self, revision: str) -> str:
+        """Return the commit message of a specific revision."""
+        return self._run("log", "--no-graph", "-r", revision, "-T", "description")
+
     def children_job_names(self, bookmarks: list[str]) -> set[str]:
         """Job names from unmerged commits that are direct children of any of ``bookmarks``.
 

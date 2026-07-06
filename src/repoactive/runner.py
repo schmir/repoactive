@@ -26,6 +26,7 @@ from repoactive.config import (
     jobs_table,
     merge_jobs,
 )
+from repoactive.constants import JOB_TRAILER_KEY
 from repoactive.graph import CircularDependencyError, detect_dependency_cycle, topological_sort
 from repoactive.jj import JJ, workspace_name
 from repoactive.jobtree import format_job_forest, print_job_table
@@ -372,6 +373,19 @@ def _boxquote(msg: str, title: str = "") -> str:
     top = f",----[ {title} ]" if title else ",----"
     body = "\n".join(f"| {line}" for line in msg.splitlines())
     return f"{top}\n{body}\n`----"
+
+
+def _strip_boxquote_and_trailers(message: str) -> str:
+    """Strip the boxquote section and trailers paragraph from a commit message.
+
+    Returns only the title line and description field.
+    Note: inaccurate when the description itself contains a ,---- boxquote (ignored edge case).
+    """
+    if "\n\n,----" in message:
+        return message[: message.index("\n\n,----")]
+    if f"\n\n{JOB_TRAILER_KEY}" in message:
+        return message[: message.index(f"\n\n{JOB_TRAILER_KEY}")]
+    return message
 
 
 def _build_commit_message(job: Job, command_result: CommandResult) -> str:
@@ -939,12 +953,6 @@ def _absorb_results(
     with contextlib.ExitStack() as stack:
         abs_ws: JJ | None = None
 
-        def _get_abs_ws() -> JJ:
-            nonlocal abs_ws
-            if abs_ws is None:
-                abs_ws = stack.enter_context(repo.temp_workspace("repoactive-absorb"))
-            return abs_ws
-
         # Maps each phase-1 new_change_id to the canonical change-id post-absorb so
         # dependent jobs are rebased onto the right commit, not the abandoned fresh one.
         absorbed: dict[str, str] = {}
@@ -994,9 +1002,14 @@ def _absorb_results(
                     "unchanged" if content_unchanged else "differs, restoring",
                 )
                 if not content_unchanged:
-                    ws = _get_abs_ws()
-                    ws.edit(old_cid)
-                    ws.restore(new_cid)
+                    if abs_ws is None:
+                        abs_ws = stack.enter_context(repo.temp_workspace("repoactive-absorb"))
+                    abs_ws.edit(old_cid)
+                    abs_ws.restore(new_cid)
+                    repo.describe_revision(old_cid, message)
+                elif _strip_boxquote_and_trailers(
+                    repo.get_description(old_cid)
+                ) != _strip_boxquote_and_trailers(message):
                     repo.describe_revision(old_cid, message)
                 repo.abandon_revision(new_cid)
                 # No bookmark_set needed: the bookmark follows old_cid through
