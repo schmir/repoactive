@@ -260,6 +260,54 @@ class TestAbandon:
         assert not repo.bookmark_exists("to-abandon")
 
 
+class TestSameContent:
+    def test_identical_commits_return_true(self, repo: JJ) -> None:
+        (repo.cwd / "file.txt").write_text("hello")
+        repo.describe("first")
+        repo.bookmark_set("first")
+        repo.new("first")
+        (repo.cwd / "file.txt").write_text("hello")
+        repo.describe("second")
+        assert repo.same_content("first", "@") is True
+
+    def test_different_commits_return_false(self, repo: JJ) -> None:
+        (repo.cwd / "file.txt").write_text("hello")
+        repo.describe("first")
+        repo.bookmark_set("first")
+        repo.new("first")
+        (repo.cwd / "file.txt").write_text("world")
+        repo.describe("second")
+        assert repo.same_content("first", "@") is False
+
+    def test_extra_symlink_detected(self, repo: JJ) -> None:
+        (repo.cwd / "file.txt").write_text("hello")
+        repo.describe("first")
+        repo.bookmark_set("first")
+        repo.new("first")
+        (repo.cwd / "file.txt").write_text("hello")
+        (repo.cwd / "link.txt").symlink_to("file.txt")
+        repo.describe("second")
+        assert repo.same_content("first", "@") is False
+
+    def test_identical_binary_files_return_true(self, repo: JJ) -> None:
+        (repo.cwd / "data.bin").write_bytes(b"\x00\x01\x02\xff\xfe")
+        repo.describe("first")
+        repo.bookmark_set("first")
+        repo.new("first")
+        (repo.cwd / "data.bin").write_bytes(b"\x00\x01\x02\xff\xfe")
+        repo.describe("second")
+        assert repo.same_content("first", "@") is True
+
+    def test_different_binary_files_return_false(self, repo: JJ) -> None:
+        (repo.cwd / "data.bin").write_bytes(b"\x00\x01\x02\xff\xfe")
+        repo.describe("first")
+        repo.bookmark_set("first")
+        repo.new("first")
+        (repo.cwd / "data.bin").write_bytes(b"\x00\x01\x02\xff\x00")
+        repo.describe("second")
+        assert repo.same_content("first", "@") is False
+
+
 class TestBookmarkSet:
     def test_creates_bookmark_at_working_copy(self, repo: JJ) -> None:
         repo.bookmark_set("mybranch")

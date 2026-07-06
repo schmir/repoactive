@@ -273,9 +273,9 @@ class JJ:
         """Abandon a specific revision (not the working copy)."""
         self._run("abandon", revision)
 
-    def diff_content(self, revision: str = "@") -> str:
-        """Return the full diff of ``revision`` relative to its parents."""
-        return self._run("diff", "-r", revision)
+    def same_content(self, rev1: str, rev2: str) -> bool:
+        """Return True if ``rev1`` and ``rev2`` have identical tree contents."""
+        return not self._run("diff", "--git", "--from", rev1, "--to", rev2).strip()
 
     def bookmark_change_id(self, name: str) -> str | None:
         """Return the change-id of the local bookmark ``name``, or None if absent."""

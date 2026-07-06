@@ -445,19 +445,17 @@ class TestAbandonRevision:
         assert mock_run.call_args == _call("abandon", "abc123")
 
 
-class TestDiffContent:
+class TestSameContent:
     @patch("repoactive.jj.subprocess.run")
-    def test_returns_diff_for_revision(self, mock_run: MagicMock) -> None:
-        mock_run.return_value.stdout = "diff --git a/foo b/foo\n+content\n"
-        result = _jj().diff_content("abc123")
-        assert result == "diff --git a/foo b/foo\n+content\n"
-        assert mock_run.call_args == _call("diff", "-r", "abc123")
+    def test_returns_true_when_diff_is_empty(self, mock_run: MagicMock) -> None:
+        mock_run.return_value.stdout = ""
+        assert _jj().same_content("abc123", "def456") is True
+        assert mock_run.call_args == _call("diff", "--git", "--from", "abc123", "--to", "def456")
 
     @patch("repoactive.jj.subprocess.run")
-    def test_defaults_to_working_copy(self, mock_run: MagicMock) -> None:
-        mock_run.return_value.stdout = ""
-        _jj().diff_content()
-        assert mock_run.call_args == _call("diff", "-r", "@")
+    def test_returns_false_when_diff_is_nonempty(self, mock_run: MagicMock) -> None:
+        mock_run.return_value.stdout = "diff --git a/foo b/foo\n+content\n"
+        assert _jj().same_content("abc123", "def456") is False
 
 
 class TestBookmarkChangeId:

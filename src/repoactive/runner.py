@@ -985,16 +985,15 @@ def _absorb_results(
             if result.old_change_id:
                 old_cid = result.old_change_id
                 repo.rebase_revision(old_cid, *canonical_parents)
-                old_diff = repo.diff_content(old_cid)
-                new_diff = repo.diff_content(new_cid)
+                content_unchanged = repo.same_content(old_cid, new_cid)
                 logger.debug(
                     "absorb: [%s] rebased %s onto %s, content %s",
                     job.name,
                     old_cid,
                     canonical_parents,
-                    "unchanged" if old_diff == new_diff else "differs, restoring",
+                    "unchanged" if content_unchanged else "differs, restoring",
                 )
-                if old_diff != new_diff:
+                if not content_unchanged:
                     ws = _get_abs_ws()
                     ws.edit(old_cid)
                     ws.restore(new_cid)
