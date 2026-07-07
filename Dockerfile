@@ -19,11 +19,9 @@ RUN ARCH=$(uname -m) && \
 # --- Install repoactive
 RUN --mount=type=bind,target=/app <<EOF
     set -eu
-    export HOME=/usr/local/uv-home
     uv --no-cache tool install --compile-bytecode /app
 EOF
 
 WORKDIR /src
-ENV HOME="/tmp/"
 
 ENTRYPOINT ["repoactive"]
