@@ -1,2 +1,3 @@
-printWidth = 76
-proseWrap = "always"
+[[overrides]]
+files = "*.md"
+options = { printWidth = 76, proseWrap = "always" }
