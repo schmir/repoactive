@@ -188,9 +188,9 @@ class JJ:
             )
             raise CommandFailedError(program, args, e.stderr) from e
         logger.debug(
-            "%s %s -> %d bytes in %.3fs",
+            "%s %s ... -> %d bytes in %.3fs",
             program,
-            " ".join(args),
+            " ".join(args[:1]),
             len(result.stdout),
             time.monotonic() - start,
         )
