@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.4
+
+- **Bug fix:** when `auto_merge = true` is set on GitLab and the branch has
+  conflicts, repoactive now prints a warning instead of failing the entire
+  run. The MR URL is still returned and remaining MR updates continue
+  unaffected.
+- **Bug fix:** restoring job results into an existing conflicted commit no
+  longer fails silently. The previous `jj restore --changes-in` did not work
+  against a conflicted destination; the fix switches to `--from`/`--into` so
+  content is transferred correctly in all cases.
+- Debug log messages for jj sub-commands are less verbose: on success, only
+  the sub-command name is logged rather than the full argument list (which
+  could include lengthy jj log templates).
+
 ## 0.2.3 - 2026-07-08
 
 - Jobs can now set `auto_merge = true` to have their merge request or pull
