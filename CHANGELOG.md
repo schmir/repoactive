@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.4
+## 0.2.4 - 2026-07-08
 
 - **Bug fix:** when `auto_merge = true` is set on GitLab and the branch has
   conflicts, repoactive now prints a warning instead of failing the entire
