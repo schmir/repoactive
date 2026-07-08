@@ -744,13 +744,27 @@ def _select_jobs(
     return result
 
 
+@dataclass
+class JobSelection:
+    """The outcome of ``_select_run_jobs``: the ordered jobs and the refresh subset.
+
+    ``refreshed`` names the jobs pulled in because they have an unmerged branch
+    (empty for explicit selection). It lets the run bypass the cooldown skip for
+    those jobs so their branches are rebased (ADR 0003) without a second
+    unmerged-branch query.
+    """
+
+    jobs: list[Job]
+    refreshed: frozenset[str]
+
+
 def _select_run_jobs(
     *,
     config: Config,
     repo: JJ,
     requested_names: list[str] | None,
     requested_tags: list[str] | None,
-) -> list[Job]:
+) -> JobSelection:
     """Pick and order the jobs to run, accounting for unmerged-branch refresh and successors.
 
     After the initial selection, expands the set by force-including any job
@@ -759,6 +773,10 @@ def _select_run_jobs(
     sits on A's bookmark, B is included so its result is rebuilt on top of A's
     new output rather than left structurally correct but semantically stale.
     See docs/adr/0012-two-phase-commit-run-then-absorb.md.
+
+    Returns a ``JobSelection`` carrying the ordered jobs and the refreshed
+    subset; the caller reuses ``refreshed`` so a job being refreshed bypasses
+    the cooldown skip (ADR 0003) without a second unmerged-branch query.
     """
     # On the bare default run, also refresh jobs with an unmerged branch so a
     # stale branch is rebased on trunk now rather than at the job's next run.
@@ -796,7 +814,7 @@ def _select_run_jobs(
         )
         selected_names = {j.name for j in selected}
 
-    return selected
+    return JobSelection(jobs=selected, refreshed=frozenset(refresh_names))
 
 
 def _dispatch_job(  # noqa: PLR0913
@@ -807,6 +825,7 @@ def _dispatch_job(  # noqa: PLR0913
     summary: RunSummary,
     blocked: set[str],
     run_names: set[str],
+    open_branches: frozenset[str] = frozenset(),
 ) -> list[Job]:
     """Run a single job, recording its outcome in ``summary``/``blocked``.
 
@@ -814,7 +833,9 @@ def _dispatch_job(  # noqa: PLR0913
     skipped in turn. Returns the jobs a generator (``emits_jobs``) produced — an
     empty list for an ordinary job or a generator that emitted nothing/was
     skipped. ``run_names`` is the set of job names already in this run, used to
-    reject an emitted job that collides with an existing name. The plan is built
+    reject an emitted job that collides with an existing name. ``open_branches``
+    names the jobs that already have an unmerged branch; such a job is never
+    cooldown-skipped, so its branch is refreshed (ADR 0003). The plan is built
     in the absorb phase (phase 2), not here.
     """
     blocking_deps = [d for d in job.depends_on if d in blocked]
@@ -845,11 +866,18 @@ def _dispatch_job(  # noqa: PLR0913
     resolved_job = job.resolve(config.job_defaults)
     parents = _compute_parents(resolved_job, summary.results)
     logger.debug("[%s] computed parents: %s", job.name, parents)
+    # Cooldown only throttles *starting fresh work*. A job that already has an
+    # open (unmerged) branch must always run so it is rebased on the latest trunk
+    # and, when its change is now redundant, produces an empty diff that
+    # self-closes the MR via the empty-diff path; skipping it here would leave the
+    # branch un-rebased and orphan its MR, defeating the refresh guarantee of
+    # ADR 0003.
+    #
     # Checked before the emits_jobs branch on purpose: a generator on cooldown
     # emits nothing, throttling its whole fan-out as a unit (the dual trailer
-    # records a recent child landing as the generator's). See
-    # docs/adr/0004-job-generators.md.
-    if last_run := _on_cooldown(resolved_job, repo_path):
+    # records a recent child landing as the generator's); a generator has no
+    # branch, so it is never in open_branches. See docs/adr/0004-job-generators.md.
+    if job.name not in open_branches and (last_run := _on_cooldown(resolved_job, repo_path)):
         elapsed = datetime.now(UTC) - last_run
         elapsed_str = _format_duration(elapsed.total_seconds())
         print(
@@ -1104,13 +1132,14 @@ def _prepare_repo(*, config: Config, repo_path: Path) -> Generator[JJ]:
         )
 
 
-def _run_jobs(
+def _run_jobs(  # noqa: PLR0913
     *,
     ordered_jobs: list[Job],
     config: Config,
     repo: JJ,
     repo_path: Path,
     summary: RunSummary,
+    open_branches: frozenset[str] = frozenset(),
 ) -> list[Job]:
     """Run ``ordered_jobs`` in topological order, expanding generators in place.
 
@@ -1125,6 +1154,10 @@ def _run_jobs(
     Results are recorded in ``summary`` in place. Returns the final job list
     including generator-emitted jobs, still topologically sorted — the absorb
     phase must iterate this list, not the caller's original selection.
+
+    ``open_branches`` names the jobs being refreshed because they already have an
+    unmerged branch; they bypass the cooldown skip so their branches are rebased
+    (ADR 0003). Empty for explicit selection, which does not refresh (ADR 0003).
     """
     # Names of jobs that failed or were skipped - their dependents are blocked.
     blocked: set[str] = set()
@@ -1142,6 +1175,7 @@ def _run_jobs(
             summary=summary,
             blocked=blocked,
             run_names={j.name for j in ordered_jobs},
+            open_branches=open_branches,
         )
         if emitted:
             # Track the new jobs' bookmarks so a branch an earlier run already
@@ -1217,14 +1251,13 @@ def run_all(  # noqa: PLR0913
             requested_tags,
         )
 
-        ordered_jobs = list(
-            _select_run_jobs(
-                config=config,
-                repo=repo,
-                requested_names=requested_names,
-                requested_tags=requested_tags,
-            )
+        selection = _select_run_jobs(
+            config=config,
+            repo=repo,
+            requested_names=requested_names,
+            requested_tags=requested_tags,
         )
+        ordered_jobs = list(selection.jobs)
         summary = RunSummary()
 
         print(f"Running {len(ordered_jobs)} job(s):")
@@ -1234,13 +1267,15 @@ def run_all(  # noqa: PLR0913
         print()
         # Phase 1: run every job on a fresh commit; old bookmarks are untouched.
         # The returned list includes generator-emitted jobs so the absorb phase
-        # processes them too.
+        # processes them too. Jobs pulled in for refresh bypass the cooldown skip
+        # so their branches are rebased (ADR 0003).
         ordered_jobs = _run_jobs(
             ordered_jobs=ordered_jobs,
             config=config,
             repo=repo,
             repo_path=repo_path,
             summary=summary,
+            open_branches=selection.refreshed,
         )
 
         # Phase 2: absorb fresh commits into old commits (preserving change-ids),

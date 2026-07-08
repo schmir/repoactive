@@ -365,7 +365,7 @@ class TestSelectRunJobs:
         result = _select_run_jobs(
             config=config, repo=repo, requested_names=None, requested_tags=None
         )
-        assert _names(result) == ["a"]
+        assert _names(result.jobs) == ["a"]
 
     def test_bare_run_refreshes_unmerged_branches(self) -> None:
         # A weekly job (out of the default run) with an unmerged branch is pulled in.
@@ -374,7 +374,9 @@ class TestSelectRunJobs:
         result = _select_run_jobs(
             config=config, repo=repo, requested_names=None, requested_tags=None
         )
-        assert _names(result) == ["a", "b"]
+        assert _names(result.jobs) == ["a", "b"]
+        # The refreshed subset is reported so the run can bypass cooldown for it.
+        assert result.refreshed == frozenset({"b"})
 
     def test_bare_run_ignores_unmerged_names_not_in_config(self) -> None:
         # A trailer for a removed/renamed job must not affect selection.
@@ -383,7 +385,7 @@ class TestSelectRunJobs:
         result = _select_run_jobs(
             config=config, repo=repo, requested_names=None, requested_tags=None
         )
-        assert _names(result) == ["a"]
+        assert _names(result.jobs) == ["a"]
 
     def test_requested_jobs_skip_unmerged_query(self) -> None:
         # Explicit selection does not consult unmerged branches.
@@ -392,7 +394,8 @@ class TestSelectRunJobs:
         result = _select_run_jobs(
             config=config, repo=repo, requested_names=["b"], requested_tags=None
         )
-        assert _names(result) == ["b"]
+        assert _names(result.jobs) == ["b"]
+        assert result.refreshed == frozenset()
         repo.unmerged_job_names.assert_not_called()
 
     def test_requested_tags_skip_unmerged_query(self) -> None:
@@ -401,7 +404,7 @@ class TestSelectRunJobs:
         result = _select_run_jobs(
             config=config, repo=repo, requested_names=None, requested_tags=["weekly"]
         )
-        assert _names(result) == ["a"]
+        assert _names(result.jobs) == ["a"]
         repo.unmerged_job_names.assert_not_called()
 
     def test_unknown_requested_job_raises(self) -> None:
@@ -455,6 +458,39 @@ class TestRunOneJob:
         assert summary.results["a"].produced_diff is False
         assert summary.results["a"].effective_revsets == ["trunk()"]
         mock_run_job.assert_not_called()
+
+    def test_cooldown_does_not_skip_job_with_unmerged_branch(self) -> None:
+        # Regression: a job that is on cooldown but still has an open (unmerged)
+        # branch must be refreshed, not skipped. Cooldown gates only the start of
+        # fresh work; vetoing the refresh leaves the branch un-rebased and orphans
+        # its MR instead of letting it self-close via the empty-diff path, which
+        # defeats the refresh guarantee of ADR 0003. The two conditions co-occur
+        # after a rebase/squash merge, where the landed copy carries the trailer
+        # while the local bookmark commit is no longer a trunk ancestor.
+        config = _config(_job("a"))
+        job_a = config.jobs[0]
+        result = JobResult(job=job_a, effective_revsets=["repoactive/a"], produced_diff=True)
+        summary = RunSummary()
+        with (
+            patch(
+                "repoactive.runner._on_cooldown",
+                return_value=datetime(2026, 1, 1, tzinfo=UTC),
+            ),
+            patch("repoactive.runner.run_job", return_value=result) as mock_run_job,
+        ):
+            _dispatch_job(
+                job=job_a,
+                config=config,
+                repo_path=REPO,
+                summary=summary,
+                blocked=set(),
+                run_names={"a"},
+                # The job already has an open branch, so it is being refreshed.
+                open_branches=frozenset({"a"}),
+            )
+        assert "a" not in summary.on_cooldown
+        mock_run_job.assert_called_once()
+        assert summary.results["a"] is result
 
     def test_success_records_result(self) -> None:
         config = _config(_job("a"))
