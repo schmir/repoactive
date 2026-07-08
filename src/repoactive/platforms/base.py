@@ -25,6 +25,7 @@ class MRParams:
     description: str
     labels: list[str]
     draft: bool
+    auto_merge: bool = False
 
 
 class Platform(ABC):

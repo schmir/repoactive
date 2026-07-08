@@ -201,6 +201,39 @@ class TestGitHubEnsureMR:
 
         repo.create_pull.return_value.set_labels.assert_not_called()
 
+    @patch("repoactive.platforms.github.Github")
+    def test_auto_merge_calls_enable_automerge_on_existing(self, mock_github: MagicMock) -> None:
+        platform, repo = self._platform(mock_github)
+        pr = MagicMock()
+        pr.html_url = "https://example.com/pull/1"
+        repo.get_pulls.return_value = [pr]
+
+        platform.ensure_mr(_mr_params(auto_merge=True))
+
+        pr.enable_automerge.assert_called_once_with()
+
+    @patch("repoactive.platforms.github.Github")
+    def test_auto_merge_calls_enable_automerge_on_new(self, mock_github: MagicMock) -> None:
+        platform, repo = self._platform(mock_github)
+        repo.get_pulls.return_value = []
+        pr = repo.create_pull.return_value
+        pr.html_url = "https://example.com/pull/2"
+
+        platform.ensure_mr(_mr_params(auto_merge=True))
+
+        pr.enable_automerge.assert_called_once_with()
+
+    @patch("repoactive.platforms.github.Github")
+    def test_no_auto_merge_skips_enable_automerge(self, mock_github: MagicMock) -> None:
+        platform, repo = self._platform(mock_github)
+        pr = MagicMock()
+        pr.html_url = "https://example.com/pull/1"
+        repo.get_pulls.return_value = [pr]
+
+        platform.ensure_mr(_mr_params(auto_merge=False))
+
+        pr.enable_automerge.assert_not_called()
+
 
 class TestGitLabEnsureMR:
     def _platform(self, mock_gitlab: MagicMock) -> tuple[GitLabPlatform, MagicMock]:
@@ -256,6 +289,39 @@ class TestGitLabEnsureMR:
             }
         )
         assert url == "https://example.com/mr/2"
+
+    @patch("repoactive.platforms.gitlab.gitlab")
+    def test_auto_merge_calls_merge_on_existing(self, mock_gitlab: MagicMock) -> None:
+        platform, project = self._platform(mock_gitlab)
+        mr = MagicMock()
+        mr.web_url = "https://example.com/mr/1"
+        project.mergerequests.list.return_value = [mr]
+
+        platform.ensure_mr(_mr_params(auto_merge=True))
+
+        mr.merge.assert_called_once_with(merge_when_pipeline_succeeds=True)
+
+    @patch("repoactive.platforms.gitlab.gitlab")
+    def test_auto_merge_calls_merge_on_new(self, mock_gitlab: MagicMock) -> None:
+        platform, project = self._platform(mock_gitlab)
+        project.mergerequests.list.return_value = []
+        new_mr = project.mergerequests.create.return_value
+        new_mr.web_url = "https://example.com/mr/2"
+
+        platform.ensure_mr(_mr_params(auto_merge=True))
+
+        new_mr.merge.assert_called_once_with(merge_when_pipeline_succeeds=True)
+
+    @patch("repoactive.platforms.gitlab.gitlab")
+    def test_no_auto_merge_skips_merge_call(self, mock_gitlab: MagicMock) -> None:
+        platform, project = self._platform(mock_gitlab)
+        mr = MagicMock()
+        mr.web_url = "https://example.com/mr/1"
+        project.mergerequests.list.return_value = [mr]
+
+        platform.ensure_mr(_mr_params(auto_merge=False))
+
+        mr.merge.assert_not_called()
 
 
 REPO = Path("/repo")

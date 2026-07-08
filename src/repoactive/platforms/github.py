@@ -59,4 +59,6 @@ class GitHubPlatform(Platform):
             )
             if params.labels:
                 pr.set_labels(*params.labels)
+        if params.auto_merge:
+            pr.enable_automerge()
         return pr.html_url

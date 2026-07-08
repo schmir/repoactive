@@ -49,4 +49,6 @@ class GitLabPlatform(Platform):
                     "labels": params.labels,
                 }
             )
+        if params.auto_merge:
+            mr.merge(merge_when_pipeline_succeeds=True)
         return mr.web_url

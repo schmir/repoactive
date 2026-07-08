@@ -179,6 +179,18 @@
           ],
           "default": null,
           "title": "Timeout"
+        },
+        "auto_merge": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Auto Merge"
         }
       },
       "required": [
@@ -249,6 +261,11 @@
           ],
           "default": "2m",
           "title": "Timeout"
+        },
+        "auto_merge": {
+          "default": false,
+          "title": "Auto Merge",
+          "type": "boolean"
         }
       },
       "title": "JobDefaults",

@@ -269,6 +269,7 @@ class JobDefaults(BaseModel):
     base_branch: str | None = None
     cooldown_period: _Duration | None = None
     timeout: _Duration | None = "2m"
+    auto_merge: bool = False
 
     @field_validator("mr_title_prefix", "commit_title_prefix")
     @classmethod
@@ -288,6 +289,7 @@ _DEFAULTED_FIELDS = (
     "base_branch",
     "cooldown_period",
     "timeout",
+    "auto_merge",
 )
 
 
@@ -323,6 +325,7 @@ class Job(BaseModel):
     labels: list[str] = Field(default_factory=list)
     cooldown_period: _Duration | None = None
     timeout: _Duration | None = None
+    auto_merge: bool | None = None
 
     @field_validator("name")
     @classmethod

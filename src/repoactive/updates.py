@@ -46,6 +46,7 @@ class MRUpdate(BaseModel):
     command_output: str
     labels: list[str]
     draft: bool
+    auto_merge: bool = False
     depends_on: list[str] = Field(default_factory=list)
 
 

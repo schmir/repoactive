@@ -63,6 +63,7 @@ _INHERITED_FIELDS = (
     "commit_title_prefix",
     "draft",
     "create_mr",
+    "auto_merge",
 )
 
 
@@ -1033,6 +1034,7 @@ def _absorb_results(
                     command_output=result.command_output,
                     labels=result.job.labels,
                     draft=result.job.draft,
+                    auto_merge=result.job.auto_merge or False,
                     depends_on=list(result.job.depends_on),
                 )
             plan.updates.append(
@@ -1287,6 +1289,7 @@ def _apply_plan_publish(
                 description=build_mr_description(update.mr, dependency_links),
                 labels=update.mr.labels,
                 draft=update.mr.draft,
+                auto_merge=update.mr.auto_merge,
             )
             url = platform.ensure_mr(params)
         except Exception as e:
