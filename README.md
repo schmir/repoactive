@@ -10,10 +10,11 @@ and (with `--mode publish`) the full MR lifecycle.
 
 ## Contents
 
+- [Use cases](#use-cases)
 - [Installation](#installation)
 - [Quick start](#quick-start)
 - [How it works](#how-it-works)
-- [Use cases](#use-cases)
+  - [Keeping the local clone current](#keeping-the-local-clone-current)
 - [Usage](#usage)
   - [Environment variables](#environment-variables)
 - [Inspecting repoactive commits](#inspecting-repoactive-commits)
@@ -24,11 +25,15 @@ and (with `--mode publish`) the full MR lifecycle.
   - [`[job-defaults]`](#job-defaults)
   - [`[job.<name>]`](#jobname)
   - [Stacking MRs](#stacking-mrs)
+  - [Example](#example)
   - [`[platform.<name>]`](#platformname)
   - [Config file locations](#config-file-locations)
   - [Overriding values on the command line](#overriding-values-on-the-command-line)
 - [Selecting jobs with tags](#selecting-jobs-with-tags)
+  - [Keeping unmerged branches current](#keeping-unmerged-branches-current)
 - [Disabling jobs](#disabling-jobs)
+- [Running a job on a schedule](#running-a-job-on-a-schedule)
+  - [One run at a time per repository](#one-run-at-a-time-per-repository)
 - [Gating jobs with `run_only_if_changed`](#gating-jobs-with-run_only_if_changed)
 - [Throttling jobs with `cooldown_period`](#throttling-jobs-with-cooldown_period)
 - [Limiting job runtime with `timeout`](#limiting-job-runtime-with-timeout)
@@ -36,6 +41,15 @@ and (with `--mode publish`) the full MR lifecycle.
 - [Requirements](#requirements)
 - [Appendix](#appendix)
   - [jj revset aliases](#jj-revset-aliases)
+
+## Use cases
+
+- Keeping generated files (API clients, protobuf bindings, lock files) in
+  sync with their sources
+- Applying organization-wide refactors or policy changes across many
+  repositories
+- Automating any periodic code transformation that should go through a
+  review process
 
 ## Installation
 
@@ -79,7 +93,7 @@ needs a GitHub or GitLab API token in the environment. See
    ```
 
 4. **Run the job locally.** In the default `local` mode nothing is pushed
-   and no MR is created — repoactive just records the diff your script
+   and no MR is created - repoactive just records the diff your script
    produced on the branch `repoactive/uv-lock-upgrade` and prints a
    `jj op restore` command to undo the run:
 
@@ -90,7 +104,7 @@ needs a GitHub or GitLab API token in the environment. See
 5. **Publish it.** Put the API token your platform uses in the environment
    (`GITHUB_TOKEN` for GitHub.com, `GITLAB_TOKEN` for GitLab.com by
    default), fetch the latest base branch, then let repoactive push the
-   branch and open — or update — the merge request:
+   branch and open - or update - the merge request:
 
    ```bash
    jj git fetch          # repoactive never fetches on its own
@@ -128,7 +142,7 @@ need to write is the script that produces the change.
 3. If the script produced a diff, it records the change. With `--mode push`
    or `--mode publish`, it pushes the branch; with `--mode publish`, it also
    creates or updates the merge request. On a re-run, if the diff matches
-   what is already on the branch, the commit and branch are left untouched —
+   what is already on the branch, the commit and branch are left untouched -
    avoiding an unnecessary push that would re-trigger CI pipelines. The
    commit is updated (and the branch pushed) only when the diff itself
    changes or when `title`/`commit_title_prefix` changed. Command output
@@ -142,7 +156,7 @@ need to write is the script that produces the change.
 > **jj commits the whole working tree.** Because `repoactive` uses jj, every
 > new file your script creates inside the working directory is added to the
 > commit unless it is git-ignored. There is no way to select which
-> working-tree changes become part of the commit — they all will. Keep
+> working-tree changes become part of the commit - they all will. Keep
 > `.gitignore` up to date so build artifacts, caches, and other stray files
 > your script produces do not end up in the diff.
 
@@ -156,20 +170,11 @@ local clone advances past it.
 
 **Fetch before each run.** Run `jj git fetch` (or `git fetch --prune`) in
 the same cron job or CI pipeline that invokes `repoactive`, before it. If
-you do not, jobs rebase onto a stale base and — most importantly —
+you do not, jobs rebase onto a stale base and - most importantly -
 [`cooldown_period`](#throttling-jobs-with-cooldown_period) never engages,
 because the commit that would trigger it has not reached the local base
 branch. See
 [ADR 0005](docs/adr/0005-local-repository-is-the-source-of-truth.md).
-
-## Use cases
-
-- Keeping generated files (API clients, protobuf bindings, lock files) in
-  sync with their sources
-- Applying organization-wide refactors or policy changes across many
-  repositories
-- Automating any periodic code transformation that should go through a
-  review process
 
 ## Usage
 
@@ -331,12 +336,8 @@ code 1.
 Validation checks include unknown keys, missing required fields, invalid
 `depends_on` references, and circular job dependencies.
 
-| Option             | Short | Description                                                                                                                  |
-| ------------------ | ----- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `--config PATH`    | `-c`  | Config file or directory of `*.toml` files; repeat to merge. Default: `.repoactive.d/` and `.repoactive.toml` under `--repo` |
-| `--set NAME=VALUE` | `-s`  | Override a config value (repeatable); `NAME` is a dotted TOML key, `VALUE` a TOML expression. Wins over `--config`           |
-| `--repo PATH`      | `-r`  | jj repository path (default: `.`)                                                                                            |
-| `--debug`          | `-d`  | Enable debug logging                                                                                                         |
+The command accepts the same `--config`, `--set`, `--repo`, and `--debug`
+options as [`repoactive run`](#usage).
 
 ## Listing jobs
 
@@ -362,12 +363,8 @@ build           Build the project   enabled
     └── deploy  Deploy to staging   nightly, risky
 ```
 
-| Option             | Short | Description                                                                                                                  |
-| ------------------ | ----- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `--config PATH`    | `-c`  | Config file or directory of `*.toml` files; repeat to merge. Default: `.repoactive.d/` and `.repoactive.toml` under `--repo` |
-| `--set NAME=VALUE` | `-s`  | Override a config value (repeatable); `NAME` is a dotted TOML key, `VALUE` a TOML expression. Wins over `--config`           |
-| `--repo PATH`      | `-r`  | jj repository path (default: `.`)                                                                                            |
-| `--debug`          | `-d`  | Enable debug logging                                                                                                         |
+The command accepts the same `--config`, `--set`, `--repo`, and `--debug`
+options as [`repoactive run`](#usage).
 
 ## Listing tags
 
@@ -376,7 +373,7 @@ repoactive info tags [OPTIONS]
 ```
 
 Group the configured jobs by tag and print each tag with the jobs carrying
-it. Jobs are grouped by their effective tags — the tags driving job
+it. Jobs are grouped by their effective tags - the tags driving job
 selection: a job's explicit `tags`, or the implicit `enabled`/`disabled` tag
 when it has none. Within each tag, jobs are shown as a dependency tree in
 topological order: a job is nested under its `depends_on` targets carrying
@@ -401,12 +398,8 @@ nightly:
   benchmark            Run nightly benchmarks  nightly
 ```
 
-| Option             | Short | Description                                                                                                                  |
-| ------------------ | ----- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `--config PATH`    | `-c`  | Config file or directory of `*.toml` files; repeat to merge. Default: `.repoactive.d/` and `.repoactive.toml` under `--repo` |
-| `--set NAME=VALUE` | `-s`  | Override a config value (repeatable); `NAME` is a dotted TOML key, `VALUE` a TOML expression. Wins over `--config`           |
-| `--repo PATH`      | `-r`  | jj repository path (default: `.`)                                                                                            |
-| `--debug`          | `-d`  | Enable debug logging                                                                                                         |
+The command accepts the same `--config`, `--set`, `--repo`, and `--debug`
+options as [`repoactive run`](#usage).
 
 ## Configuration
 
@@ -431,31 +424,31 @@ block.
 
 **MR/PR options:**
 
-- **`labels`** (default: `[]`) — Labels applied to every MR/PR. Per-job
+- **`labels`** (default: `[]`) - Labels applied to every MR/PR. Per-job
   `labels` are merged with, not replaced by, this list.
-- **`auto_merge`** (default: `false`) — When `true`, enable auto-merge on
+- **`auto_merge`** (default: `false`) - When `true`, enable auto-merge on
   every MR/PR so it merges automatically once its pipeline passes. On
   GitHub, the repository must have "Allow auto-merge" enabled in its
   settings.
 
 **Branch and commit options:**
 
-- **`branch_prefix`** (default: `"repoactive/"`) — Prefix prepended to the
+- **`branch_prefix`** (default: `"repoactive/"`) - Prefix prepended to the
   job name to form the branch name.
-- **`mr_title_prefix`** (default: `"[repoactive] "`) — Prefix prepended to
+- **`mr_title_prefix`** (default: `"[repoactive] "`) - Prefix prepended to
   every MR/PR title. Set to `""` to disable.
-- **`commit_title_prefix`** (default: `"[repoactive] "`) — Prefix prepended
+- **`commit_title_prefix`** (default: `"[repoactive] "`) - Prefix prepended
   to every commit title. Set to `""` to disable.
-- **`base_branch`** (default: repo default) — Target branch for all jobs
+- **`base_branch`** (default: repo default) - Target branch for all jobs
   that do not set their own.
 
 **Run control:**
 
-- **`cooldown_period`** (default: none) — Minimum time between a landed
+- **`cooldown_period`** (default: none) - Minimum time between a landed
   change and the next run for any job. Format: `<number><unit>` where unit
   is `s`, `m`, `h`, `d`, or `w` (e.g. `"7d"`). See
   [Throttling jobs with `cooldown_period`](#throttling-jobs-with-cooldown_period).
-- **`timeout`** (default: `"2m"`) — Maximum runtime for a job's command.
+- **`timeout`** (default: `"2m"`) - Maximum runtime for a job's command.
   Same format as `cooldown_period`. See
   [Limiting job runtime with `timeout`](#limiting-job-runtime-with-timeout).
 
@@ -467,60 +460,60 @@ underscores.
 
 **Required:**
 
-- **`command`** — Shell command (or executable path) run in the repository
+- **`command`** - Shell command (or executable path) run in the repository
   working directory. A non-zero exit is a failure.
-- **`title`** — MR/PR title (also the commit subject, after
+- **`title`** - MR/PR title (also the commit subject, after
   `commit_title_prefix`).
 
 **MR/PR options:**
 
-- **`description`** — Body text of the MR/PR.
-- **`labels`** (default: `[]`) — Extra labels for this job's MR/PR, merged
+- **`description`** - Body text of the MR/PR.
+- **`labels`** (default: `[]`) - Extra labels for this job's MR/PR, merged
   with `job-defaults.labels`.
-- **`draft`** (default: `false`) — Open the MR/PR as a draft. On GitHub,
+- **`draft`** (default: `false`) - Open the MR/PR as a draft. On GitHub,
   draft state cannot be changed after creation.
-- **`create_mr`** (default: `true`) — Whether to create an MR/PR: `true`
+- **`create_mr`** (default: `true`) - Whether to create an MR/PR: `true`
   (always), `false` (push the branch but skip the MR), or
   `"unless-superseded"` (skip when a dependent's MR from the same run
-  already contains this job's changes — see [Stacking MRs](#stacking-mrs)).
-- **`auto_merge`** (default: inherited from `job-defaults`) — When `true`,
+  already contains this job's changes - see [Stacking MRs](#stacking-mrs)).
+- **`auto_merge`** (default: inherited from `job-defaults`) - When `true`,
   enable auto-merge on this job's MR/PR.
 
 **Branch and commit options:**
 
-- **`base_branch`** (default: inherited) — Target branch for this job's
+- **`base_branch`** (default: inherited) - Target branch for this job's
   MR/PR.
-- **`branch_prefix`** (default: inherited) — Override the branch-name prefix
+- **`branch_prefix`** (default: inherited) - Override the branch-name prefix
   for this job only.
-- **`mr_title_prefix`** (default: inherited) — Override the MR/PR title
+- **`mr_title_prefix`** (default: inherited) - Override the MR/PR title
   prefix for this job only.
-- **`commit_title_prefix`** (default: inherited) — Override the commit title
+- **`commit_title_prefix`** (default: inherited) - Override the commit title
   prefix for this job only.
-- **`output_in_commit`** (default: `true`) — Append the job's command and
+- **`output_in_commit`** (default: `true`) - Append the job's command and
   its captured output to the commit message. Set to `false` to keep the
   commit message clean.
 
 **Run control:**
 
-- **`disabled`** (default: `false`) — Exclude this job from the bare
+- **`disabled`** (default: `false`) - Exclude this job from the bare
   `repoactive run`. Sugar for `tags = ["disabled"]`; mutually exclusive with
   `tags`. See [Disabling jobs](#disabling-jobs).
-- **`tags`** (default: none) — Tags for job selection. A job with no tags
+- **`tags`** (default: none) - Tags for job selection. A job with no tags
   carries the implicit `enabled` tag and runs in the bare `repoactive run`;
   setting any explicit tag removes `enabled`. See
   [Selecting jobs with tags](#selecting-jobs-with-tags).
-- **`depends_on`** (default: `[]`) — Jobs whose output this job builds on.
+- **`depends_on`** (default: `[]`) - Jobs whose output this job builds on.
   See [Stacking MRs](#stacking-mrs).
-- **`run_only_if_changed`** (default: `[]`) — Only run this job if at least
+- **`run_only_if_changed`** (default: `[]`) - Only run this job if at least
   one listed job produced a diff in the current run. See
   [Gating jobs with `run_only_if_changed`](#gating-jobs-with-run_only_if_changed).
-- **`cooldown_period`** (default: inherited) — Minimum time between a landed
+- **`cooldown_period`** (default: inherited) - Minimum time between a landed
   change and the next run. See
   [Throttling jobs with `cooldown_period`](#throttling-jobs-with-cooldown_period).
-- **`timeout`** (default: inherited) — Maximum runtime for this job's
+- **`timeout`** (default: inherited) - Maximum runtime for this job's
   command. Set to `"0s"` to disable the timeout entirely. See
   [Limiting job runtime with `timeout`](#limiting-job-runtime-with-timeout).
-- **`emits_jobs`** (default: `false`) — Generator job: the command writes
+- **`emits_jobs`** (default: `false`) - Generator job: the command writes
   `*.toml` job fragments into `$REPOACTIVE_JOBS_DIR` instead of producing a
   diff. See [Generating jobs dynamically](#generating-jobs-dynamically).
 
@@ -537,11 +530,13 @@ dependency chain normally opens one MR per job that produced a diff. Setting
 `create_mr = "unless-superseded"` on the earlier jobs collapses that: such a
 job skips its MR when a dependent job produced an MR in the same run, so the
 chain yields a single MR on the topmost job that actually changed something
-— falling back to the job below it when the jobs above came up empty. The
-branch is still pushed either way. Only the current run counts: a dependent
-that is empty, failed, on cooldown, or not selected does not suppress
-anything. See [ADR 0009](docs/adr/0009-unless-superseded-mr-creation.md) for
-details and limitations.
+
+- falling back to the job below it when the jobs above came up empty. The
+  branch is still pushed either way. Only the current run counts: a
+  dependent that is empty, failed, on cooldown, or not selected does not
+  suppress anything. See
+  [ADR 0009](docs/adr/0009-unless-superseded-mr-creation.md) for details and
+  limitations.
 
 ### Example
 
@@ -578,14 +573,14 @@ timeout = "30m"
 ### `[platform.<name>]`
 
 For public GitHub.com or GitLab.com repositories no platform declaration is
-needed — `repoactive` detects the remote URL automatically. To use a
+needed - `repoactive` detects the remote URL automatically. To use a
 self-hosted instance, add a `[platform.<name>]` section (the name is a label
 of your choosing; platforms are matched to a repository by their `url`):
 
-- **`url`** — Base URL of the platform instance (e.g.
+- **`url`** - Base URL of the platform instance (e.g.
   `"https://gitlab.example.com"`).
-- **`type`** — `"github"` or `"gitlab"`.
-- **`token_env`** — Name of the environment variable holding the API token.
+- **`type`** - `"github"` or `"gitlab"`.
+- **`token_env`** - Name of the environment variable holding the API token.
 
 ```toml
 [platform.company-gitlab]
@@ -599,8 +594,8 @@ names rather than inline values. The token named by `token_env` is
 **stripped from the environment job commands run in**, so a script cannot
 read the credential `repoactive` uses to push and create MRs. A job that
 needs its own credential must be given a separate one. `repoactive`
-otherwise trusts job commands — they run arbitrary code against the working
-tree — so the trust boundary is the config that defines them; see
+otherwise trusts job commands - they run arbitrary code against the working
+tree - so the trust boundary is the config that defines them; see
 [ADR 0006](docs/adr/0006-job-commands-are-trusted.md).
 
 ### Config file locations
@@ -627,8 +622,8 @@ directory, not `--repo`.
 
 `--set NAME=VALUE`/`-s` tweaks individual config values without editing a
 file. It is merged as the last, highest-priority source, so it wins over
-everything discovered or passed with `--config`. `NAME` is a TOML key —
-dotted keys reach into tables — and `VALUE` is a TOML expression, so strings
+everything discovered or passed with `--config`. `NAME` is a TOML key -
+dotted keys reach into tables - and `VALUE` is a TOML expression, so strings
 need quoting:
 
 ```bash
@@ -653,7 +648,7 @@ which then needs the full set of fields (`url`, `type`, `token_env`).
 `--set` is available on `run`, `validate-config`, `info jobs`, and
 `info tags`. Each `--set` is validated as its own source (like a separate
 config file), so it can amend existing jobs but cannot introduce a brand-new
-job across several flags — put a new job's required fields in one expression
+job across several flags - put a new job's required fields in one expression
 (e.g. `--set 'job.x = {command = "…", title = "…"}'`) or a config file. An
 unknown key or malformed value is reported with the offending `--set`
 argument named.
@@ -666,14 +661,14 @@ a set of tags, with a smart default:
 - a plain job (no `tags`, not `disabled`) carries the implicit `enabled`
   tag;
 - `disabled = true` is sugar for `tags = ["disabled"]`;
-- setting `tags = [...]` uses exactly those tags — and, importantly, **drops
+- setting `tags = [...]` uses exactly those tags - and, importantly, **drops
   the implicit `enabled` tag** unless you list it yourself.
 
 `repoactive run` with no arguments is shorthand for
 `repoactive run --tag enabled`: it runs every job carrying `enabled`. Pass
 `--tag`/`-t` (repeatable) to select a different set; a job runs if it
 carries **any** of the requested tags. Naming jobs and passing tags can be
-combined — the selection is the union of the two.
+combined - the selection is the union of the two.
 
 ```bash
 # Run all jobs tagged "weekly" (regardless of whether they also have "enabled")
@@ -684,7 +679,7 @@ repoactive run --tag nightly regenerate-api-client
 ```
 
 Requesting a tag that no job carries is an error, exactly like naming an
-unknown job — a typo in a crontab's `--tag` fails loudly instead of silently
+unknown job - a typo in a crontab's `--tag` fails loudly instead of silently
 running zero jobs. This also means a scheduled entry whose tag has lost its
 last member fails until you remove the entry (or re-tag a job); a tag only
 exists as a value on jobs, so an empty tag is indistinguishable from a
@@ -694,9 +689,9 @@ Because assigning a tag removes the implicit `enabled` tag, **tags are
 load-bearing, not free-form labels**: tagging a job takes it out of the bare
 `repoactive run`. If you want a job to stay in the default run _and_ belong
 to a group, list both: `tags = ["enabled", "weekly"]`. (For MR/PR labels,
-use `labels` — a separate concept.)
+use `labels` - a separate concept.)
 
-Tag selection is _explicit_ selection, so — like naming a job — it ignores
+Tag selection is _explicit_ selection, so - like naming a job - it ignores
 the `enabled`/`disabled` defaults and force-includes dependencies. The bare
 `repoactive run` is _implicit_ selection: a job whose dependency is not
 itself selected is dropped
@@ -714,7 +709,7 @@ latest `trunk()` and the command is re-run against it. (With
 `--mode push` it is just a branch.)
 
 This means a job's schedule tag governs when a _new_ branch is created,
-while the default run keeps an existing branch rebased and current — you
+while the default run keeps an existing branch rebased and current - you
 don't have to wait for the next weekly run to resolve a conflict with
 `trunk()`. Once the branch lands, its commit becomes an ancestor of
 `trunk()`, so the job drops back to its normal tag-driven cadence. (A
@@ -742,13 +737,13 @@ disabled = true
   `repoactive run --tag disabled`, which runs everything currently turned
   off.
 
-### Running a job on a schedule
+## Running a job on a schedule
 
-`repoactive` is not a daemon and has no built-in scheduler — the cadence of
+`repoactive` is not a daemon and has no built-in scheduler - the cadence of
 a job is whatever cadence you invoke it with. To run a job on a fixed
 schedule, tag it and have an OS cron job select that tag. The tag keeps the
 job out of the bare `repoactive run`, and the crontab decides the membership
-in one place — add or remove `weekly` jobs by editing the config, not the
+in one place - add or remove `weekly` jobs by editing the config, not the
 crontab:
 
 ```toml
@@ -765,18 +760,18 @@ tags = ["weekly"]
 ```
 
 Because the cron is the sole trigger, the command runs exactly when cron
-fires — once, whether or not it produces a diff. This is more reliable than
+fires - once, whether or not it produces a diff. This is more reliable than
 inferring a schedule from `repoactive`'s own history: real cron is stateful
 and excludes the other days, whereas `repoactive` only ever sees what has
 _landed_ (see `cooldown_period` below).
 
-#### One run at a time per repository
+### One run at a time per repository
 
 A `repoactive run` takes an exclusive per-repository lock for its duration,
 so two runs against the same repository never interleave (and corrupt each
 other's branches and temporary workspaces). If a run is started while
-another is still in progress — a slow run overrunning the next cron tick,
-say — the second one **exits immediately with status code 2** instead of
+another is still in progress - a slow run overrunning the next cron tick,
+say - the second one **exits immediately with status code 2** instead of
 waiting or racing. That code is distinct from the generic failure code (1),
 so a wrapper can treat "already running" as benign:
 
@@ -811,7 +806,7 @@ tags = ["weekly"]
 Here `prek-run-all` is only useful when `prek-autoupdate` changed something:
 if `prek-autoupdate` found no hooks to update, running `prek-run-all` would
 produce an empty diff anyway. With `run_only_if_changed`, the skip is
-explicit and immediate — `prek-run-all` never even starts.
+explicit and immediate - `prek-run-all` never even starts.
 
 Key behaviour:
 
@@ -821,7 +816,7 @@ Key behaviour:
   skipped, it is treated as having produced no diff.
 - **Dependents are unaffected.** A skipped job records a no-op result (like
   a job on cooldown), so any job that `depends_on` it still runs on the base
-  branch — the skip does not cascade.
+  branch - the skip does not cascade.
 - **No ordering constraint.** Names in `run_only_if_changed` do not have to
   appear in `depends_on`. Any job that runs before this one in topological
   order can be listed; in practice most usages name a direct dependency, as
@@ -882,8 +877,8 @@ timeout = "0s"        # opt out of the timeout entirely
 
 ## Generating jobs dynamically
 
-Sometimes the useful set of jobs depends on the repository's contents — one
-job per package in a monorepo, one per entry in a manifest — and you don't
+Sometimes the useful set of jobs depends on the repository's contents - one
+job per package in a monorepo, one per entry in a manifest - and you don't
 want to hand-maintain them. A **generator** is an ordinary `[job.<name>]`
 with `emits_jobs = true`. Instead of producing a diff, its command writes
 one or more `*.toml` job fragments into the directory named by the
@@ -935,7 +930,7 @@ Key points:
 > only re-run when the generator re-emits it, and the generator is gated by
 > the same landed commits (via the shared trailer). So overriding an emitted
 > job's `cooldown_period` only matters when you make it **longer** than the
-> generator's — then the job stays throttled even after the generator has
+> generator's - then the job stays throttled even after the generator has
 > run again. Making it **shorter** has no effect: while the generator is on
 > its own cooldown the job is never re-emitted, and by the time the
 > generator runs again the job's shorter window has long since elapsed
