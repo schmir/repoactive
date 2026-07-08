@@ -34,6 +34,8 @@ and (with `--mode publish`) the full MR lifecycle.
 - [Limiting job runtime with `timeout`](#limiting-job-runtime-with-timeout)
 - [Generating jobs dynamically](#generating-jobs-dynamically)
 - [Requirements](#requirements)
+- [Appendix](#appendix)
+  - [jj revset aliases](#jj-revset-aliases)
 
 ## Installation
 
@@ -301,28 +303,6 @@ repoactive recent-commits --status unmerged
 | `--repo PATH`                      | `-r`  | jj repository path (default: `.`)                      |
 | `--status [all\|merged\|unmerged]` | `-s`  | Filter by merge status into trunk (default: `all`)     |
 | `--debug`                          | `-d`  | Enable debug logging                                   |
-
-### jj revset aliases
-
-To query repoactive commits directly in jj, add these aliases to your
-repository config (`jj config set --repo`) or your global config
-(`jj config set --user`):
-
-```toml
-[revset-aliases]
-'repoactive()' = 'description(regex:"(?m)^Repoactive-Job: ")'
-'repoactive_merged()' = 'repoactive() & ::trunk()'
-'repoactive_unmerged()' = 'repoactive() & ~(::trunk())'
-```
-
-Then use them directly in jj:
-
-```bash
-jj log -r 'repoactive()'
-jj log -r 'repoactive_unmerged()'
-jj log -r 'repoactive() & committer_date(after:"2025-01-01")'
-jj log -r 'repoactive() & description(regex:"(?m)^Repoactive-Job: uv-lock-upgrade$")'
-```
 
 ## Validating configuration
 
@@ -984,3 +964,27 @@ design.
 - A GitLab or GitHub API token exposed via the environment variable named in
   `platform.token_env` (default: `GITHUB_TOKEN` for GitHub.com,
   `GITLAB_TOKEN` for GitLab.com)
+
+## Appendix
+
+### jj revset aliases
+
+To query repoactive commits directly in jj, add these aliases to your
+repository config (`jj config set --repo`) or your global config
+(`jj config set --user`):
+
+```toml
+[revset-aliases]
+'repoactive()' = 'description(regex:"(?m)^Repoactive-Job: ")'
+'repoactive_merged()' = 'repoactive() & ::trunk()'
+'repoactive_unmerged()' = 'repoactive() & ~(::trunk())'
+```
+
+Then use them directly in jj:
+
+```bash
+jj log -r 'repoactive()'
+jj log -r 'repoactive_unmerged()'
+jj log -r 'repoactive() & committer_date(after:"2025-01-01")'
+jj log -r 'repoactive() & description(regex:"(?m)^Repoactive-Job: uv-lock-upgrade$")'
+```
