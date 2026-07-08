@@ -1,7 +1,7 @@
 """GitLab platform implementation using python-gitlab."""
 
 import gitlab
-from gitlab.exceptions import GitlabError
+from gitlab.exceptions import GitlabError, GitlabMRClosedError
 
 from repoactive.platforms.base import MRParams, Platform, PlatformError
 
@@ -50,5 +50,8 @@ class GitLabPlatform(Platform):
                 }
             )
         if params.auto_merge:
-            mr.merge(merge_when_pipeline_succeeds=True)
+            try:
+                mr.merge(merge_when_pipeline_succeeds=True)
+            except GitlabMRClosedError as e:
+                print(f"  warning: could not enable auto-merge ({e})")
         return mr.web_url
