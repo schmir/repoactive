@@ -571,6 +571,9 @@ base_branch = "main"
 labels = ["repoactive"]
 cooldown_period = "7d"
 auto_merge = true
+branch_prefix = "bot/"
+commit_title_prefix = "[bot] "
+timeout = "10m"
 
 [job.regenerate-api-client]
 command = "python scripts/regen_api.py"
@@ -583,11 +586,13 @@ create_mr = "unless-superseded"
 [job.sync-license-headers]
 command = "./scripts/add_license_headers.sh"
 title = "sync license headers"
+draft = true
 
 [job.integration-tests-update]
 command = "./scripts/update_integration_tests.py"
 title = "tests: update integration tests"
 depends_on = ["regenerate-api-client", "sync-license-headers"]
+timeout = "30m"
 ```
 
 ### `[platform.<name>]`
@@ -743,6 +748,13 @@ it out of normal runs; it is exactly sugar for `tags = ["disabled"]` (so the
 two are mutually exclusive). The flag only affects the bare
 `repoactive run`:
 
+```toml
+[job.experimental-refactor]
+command = "./scripts/refactor.sh"
+title = "chore: apply experimental refactor"
+disabled = true
+```
+
 - On `repoactive run`, disabled jobs are skipped, along with any job that
   `depends_on` one (its dependency would not be produced).
 - Naming a job explicitly overrides it: `repoactive run my-job` runs
@@ -872,6 +884,21 @@ per-job value overrides the default. The built-in default is `"2m"`; set
 zero duration (`timeout = "0s"`) disables the timeout entirely; since TOML
 has no null value, this is how a job opts out of a timeout set in
 `job-defaults`.
+
+```toml
+[job-defaults]
+timeout = "10m"       # raise the built-in 2m default for all jobs
+
+[job.slow-codegen]
+command = "./scripts/slow_codegen.sh"
+title = "chore: regenerate bindings"
+timeout = "30m"       # this job needs extra time
+
+[job.quick-lint]
+command = "ruff check ."
+title = "chore: fix lint"
+timeout = "0s"        # opt out of the timeout entirely
+```
 
 ## Generating jobs dynamically
 
