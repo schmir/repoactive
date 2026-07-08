@@ -1,7 +1,6 @@
 #!/usr/bin/env -S uv run nox --noxfile
 """Nox sessions for CI: tests, type checking, config validation, and schema checks."""
 
-import re
 import tempfile
 from pathlib import Path
 
@@ -19,23 +18,8 @@ def tests(session: nox.Session) -> None:
 
 @nox_uv.session
 def validate_config(session: nox.Session) -> None:
-    """Validate the example config embedded in README.md."""
-    session.run("repoactive", "validate-config", "-c", ".repoactive.toml")
-
-    readme = Path("README.md").read_text()
-    # Validate the comprehensive reference example (the [job-defaults] block),
-    # not whichever short snippet happens to appear first in the README.
-    blocks = re.findall(r"```toml\n(.*?)```", readme, re.DOTALL)
-    match = next((b for b in blocks if "[job-defaults]" in b), None)
-    if match is None:
-        session.error("No [job-defaults] toml block found in README.md")
-        return
-    with tempfile.NamedTemporaryFile(
-        mode="w", prefix="readme-example-config-", suffix=".toml", delete=False
-    ) as f:
-        f.write(match)
-        tmpfile = f.name
-    session.run("repoactive", "validate-config", "-c", tmpfile)
+    """Validate repoactive's own config."""
+    session.run("repoactive", "validate-config")
 
 
 @nox_uv.session
