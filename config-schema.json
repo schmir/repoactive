@@ -91,6 +91,13 @@
           "title": "Run Only If Changed",
           "type": "array"
         },
+        "cooldown_on": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Cooldown On",
+          "type": "array"
+        },
         "output_in_commit": {
           "default": true,
           "title": "Output In Commit",

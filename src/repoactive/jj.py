@@ -7,7 +7,7 @@ import shutil
 import subprocess
 import tempfile
 import time
-from collections.abc import Generator
+from collections.abc import Collection, Generator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -408,13 +408,15 @@ class JJ:
         }
 
     def last_job_commit_date(
-        self, *, job_name: str, base: str, since: datetime
+        self, *, job_names: Collection[str], base: str, since: datetime
     ) -> datetime | None:
         """Return the committer date of the most recent job commit on ``base``, or ``None``.
 
-        Matches commits that have a ``Repoactive-Job: <job_name>`` trailer and a
-        committer date at or after ``since``. Used to throttle jobs: a recent
-        landing on the base branch means the job is still on cooldown.
+        Matches commits that have a ``Repoactive-Job`` trailer whose value is any
+        of ``job_names`` and a committer date at or after ``since``. Used to
+        throttle jobs: a recent landing on the base branch means the job is still
+        on cooldown. Passing more than one name lets a job be throttled by a
+        superseding job's landing too (``cooldown_on``, ADR 0015).
 
         The trailer is matched via jj's trailer parsing, which only considers the
         final paragraph of the description, so a stray matching line in the body
@@ -422,9 +424,12 @@ class JJ:
 
         Returns the newest matching committer timestamp, or ``None`` if no match.
         """
+        # Job names are regex-restricted (config._JOB_NAME_RE), so interpolating
+        # them into the template is as safe as the single-name case.
+        name_match = " || ".join(f't.value() == "{name}"' for name in sorted(job_names))
         revset = f'::{base} & committer_date(after:"{_jj_timestamp(since)}")'
         template = f"""
-        if (trailers.any(|t| t.key() == "{JOB_TRAILER_KEY}" && t.value() == "{job_name}"),
+        if (trailers.any(|t| t.key() == "{JOB_TRAILER_KEY}" && ({name_match})),
              committer.timestamp().utc().format("%Y-%m-%dT%H:%M:%S") ++ "\\n",
              ""
         )

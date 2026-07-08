@@ -253,6 +253,44 @@ class TestRunOnlyIfChangedValidation:
         assert cfg.jobs[1].run_only_if_changed == ["a"]
 
 
+class TestCooldownOnValidation:
+    def test_valid_cooldown_on(self) -> None:
+        cfg = _config(
+            jobs=[
+                _job("full-lock", cooldown_period="7d"),
+                _job("dev-lock", cooldown_period="7d", cooldown_on=["full-lock"]),
+            ]
+        )
+        assert cfg.jobs[1].cooldown_on == ["full-lock"]
+
+    def test_cooldown_period_may_come_from_job_defaults(self) -> None:
+        cfg = _config(
+            jobs=[
+                _job("full-lock"),
+                _job("dev-lock", cooldown_on=["full-lock"]),
+            ],
+            **{"job-defaults": {"cooldown_period": "7d"}},
+        )
+        assert cfg.jobs[1].cooldown_on == ["full-lock"]
+
+    def test_unknown_target_raises(self) -> None:
+        with pytest.raises(ValueError, match="cooldown_on references unknown job"):
+            _config(jobs=[_job("a", cooldown_period="7d", cooldown_on=["nonexistent"])])
+
+    def test_self_reference_raises(self) -> None:
+        with pytest.raises(ValueError, match="cooldown_on lists itself"):
+            _config(jobs=[_job("a", cooldown_period="7d", cooldown_on=["a"])])
+
+    def test_without_cooldown_raises(self) -> None:
+        with pytest.raises(ValueError, match="no cooldown_period"):
+            _config(
+                jobs=[
+                    _job("full-lock"),
+                    _job("dev-lock", cooldown_on=["full-lock"]),
+                ]
+            )
+
+
 class TestJobDefaults:
     def test_branch_prefix_default(self) -> None:
         cfg = _config()

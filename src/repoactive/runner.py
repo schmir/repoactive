@@ -650,7 +650,10 @@ def _on_cooldown(job: Job, repo_path: Path) -> datetime | None:
         return None
     base = job.base_branch or "trunk()"
     since = datetime.now(UTC) - delta
-    last_run = JJ(repo_path).last_job_commit_date(job_name=job.name, base=base, since=since)
+    # A superseding job's landing also throttles this job (ADR 0015).
+    last_run = JJ(repo_path).last_job_commit_date(
+        job_names={job.name, *job.cooldown_on}, base=base, since=since
+    )
     logger.debug(
         "[%s] cooldown check: base=%s since=%s -> last_run=%s",
         job.name,

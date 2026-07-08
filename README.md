@@ -36,6 +36,7 @@ and (with `--mode publish`) the full MR lifecycle.
   - [One run at a time per repository](#one-run-at-a-time-per-repository)
 - [Gating jobs with `run_only_if_changed`](#gating-jobs-with-run_only_if_changed)
 - [Throttling jobs with `cooldown_period`](#throttling-jobs-with-cooldown_period)
+- [Throttling a job when a superset lands with `cooldown_on`](#throttling-a-job-when-a-superset-lands-with-cooldown_on)
 - [Limiting job runtime with `timeout`](#limiting-job-runtime-with-timeout)
 - [Generating jobs dynamically](#generating-jobs-dynamically)
 - [Requirements](#requirements)
@@ -510,6 +511,10 @@ underscores.
 - **`cooldown_period`** (default: inherited) - Minimum time between a landed
   change and the next run. See
   [Throttling jobs with `cooldown_period`](#throttling-jobs-with-cooldown_period).
+- **`cooldown_on`** (default: `[]`) - Broader jobs that subsume this one; a
+  recent landing of any of them also throttles this job. Requires a
+  `cooldown_period`. See
+  [Throttling a job when a superset lands with `cooldown_on`](#throttling-a-job-when-a-superset-lands-with-cooldown_on).
 - **`timeout`** (default: inherited) - Maximum runtime for this job's
   command. Set to `"0s"` to disable the timeout entirely. See
   [Limiting job runtime with `timeout`](#limiting-job-runtime-with-timeout).
@@ -844,6 +849,44 @@ The trailer must also be present in the _local_ base branch when the job
 runs: `repoactive` does not fetch, so a clone that has not pulled the merge
 will not see the cooldown and will re-run the job. See
 [Keeping the local clone current](#keeping-the-local-clone-current).
+
+## Throttling a job when a superset lands with `cooldown_on`
+
+Some jobs are strict supersets of others. `uv lock --upgrade` refreshes
+every dependency group, so its diff already contains everything
+`uv lock --upgrade-group=dev` would produce. Re-running the narrower job
+right after the broad one landed just opens a redundant MR.
+
+Listing the broader jobs in `cooldown_on` widens the narrow job's cooldown
+check: it is throttled when **its own trailer or any listed job's trailer**
+last landed within its `cooldown_period`. So once the full upgrade lands,
+the group-scoped job stays quiet for the cooldown window instead of
+re-running.
+
+```toml
+[job.full-lock]
+command = "uv lock --upgrade"
+title = "chore: update all dependencies"
+cooldown_period = "7d"
+
+[job.dev-lock]
+command = "uv lock --upgrade-group=dev"
+title = "chore: update dev dependencies"
+cooldown_period = "7d"
+cooldown_on = ["full-lock"]
+```
+
+`cooldown_on` requires a `cooldown_period` on the same job (its own or one
+inherited from `[job-defaults]`); without a window there is nothing to
+throttle against, so a config that sets one without the other is rejected.
+The relationship is one-directional and needs no change to the broad job -
+it still writes only its own trailer.
+
+This only suppresses _starting_ a redundant run. A narrow job that already
+has an open, unmerged branch is always refreshed regardless of cooldown (see
+[Keeping unmerged branches current](#keeping-unmerged-branches-current)), so
+its branch is rebased and, if the change is now redundant, self-closes on
+the next run.
 
 ## Limiting job runtime with `timeout`
 

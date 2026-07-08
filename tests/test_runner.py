@@ -2123,8 +2123,48 @@ class TestRunAll:
         run_all(config=self._cooldown_config("a", "7d"), repo_path=REPO)
 
         kwargs = mock_jj.return_value.last_job_commit_date.call_args.kwargs
-        assert kwargs["job_name"] == "a"
+        assert kwargs["job_names"] == {"a"}
         assert kwargs["base"] == "trunk()"
+
+    @patch("repoactive.runner.run_job")
+    def test_cooldown_query_includes_cooldown_on(
+        self, mock_run_job: MagicMock, mock_jj: MagicMock
+    ) -> None:
+        # The narrow job's cooldown check counts a superset's landing too, so it
+        # queries for its own trailer and every cooldown_on target (ADR 0015).
+        # Both jobs carry a cooldown_period so neither runs (avoids the absorb
+        # phase); assert dev-lock's query widened to include full-lock.
+        mock_jj.return_value.last_job_commit_date.return_value = datetime(2026, 1, 1, tzinfo=UTC)
+        config = Config.model_validate(
+            {
+                "platform": [{"url": "https://gitlab.com", "type": "gitlab", "token_env": "T"}],
+                "jobs": [
+                    {
+                        "name": "full-lock",
+                        "command": "cmd",
+                        "title": "full",
+                        "cooldown_period": "7d",
+                    },
+                    {
+                        "name": "dev-lock",
+                        "command": "cmd",
+                        "title": "dev",
+                        "cooldown_period": "7d",
+                        "cooldown_on": ["full-lock"],
+                    },
+                ],
+            }
+        )
+
+        summary = run_all(config=config, repo_path=REPO)
+
+        assert summary.on_cooldown == {"full-lock", "dev-lock"}
+        mock_run_job.assert_not_called()
+        queried = [
+            c.kwargs["job_names"] for c in mock_jj.return_value.last_job_commit_date.call_args_list
+        ]
+        assert {"dev-lock", "full-lock"} in queried
+        assert {"full-lock"} in queried
 
     @patch("repoactive.runner.run_job")
     def test_no_recent_commit_runs_job(self, mock_run_job: MagicMock, mock_jj: MagicMock) -> None:

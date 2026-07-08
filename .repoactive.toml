@@ -20,6 +20,7 @@ title = "discover per-dependency upgrade jobs"
 emits_jobs = true
 tags = ["demo"]
 cooldown_period = "14d"
+cooldown_on = ["uv-lock-upgrade"]
 
 [job.update-flake]
 command = "./scripts/update-flake.sh"

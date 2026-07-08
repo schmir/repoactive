@@ -509,7 +509,7 @@ class TestLastJobCommitDate:
     def test_finds_commit_with_trailer_in_window(self, repo: JJ) -> None:
         repo.describe("upgrade deps\n\nRepoactive-Job: my-job")
         assert (
-            repo.last_job_commit_date(job_name="my-job", base="@", since=self._day_ago())
+            repo.last_job_commit_date(job_names={"my-job"}, base="@", since=self._day_ago())
             is not None
         )
 
@@ -517,26 +517,45 @@ class TestLastJobCommitDate:
         repo.describe("upgrade deps\n\nRepoactive-Job: my-job")
         # since is in the future, so the just-made commit predates it
         assert (
-            repo.last_job_commit_date(job_name="my-job", base="@", since=self._day_ahead()) is None
+            repo.last_job_commit_date(job_names={"my-job"}, base="@", since=self._day_ahead())
+            is None
         )
 
     def test_commit_without_trailer_not_found(self, repo: JJ) -> None:
         repo.describe("upgrade deps")
         assert (
-            repo.last_job_commit_date(job_name="my-job", base="@", since=self._day_ago()) is None
+            repo.last_job_commit_date(job_names={"my-job"}, base="@", since=self._day_ago())
+            is None
         )
 
     def test_different_job_name_not_found(self, repo: JJ) -> None:
         repo.describe("upgrade deps\n\nRepoactive-Job: other-job")
         assert (
-            repo.last_job_commit_date(job_name="my-job", base="@", since=self._day_ago()) is None
+            repo.last_job_commit_date(job_names={"my-job"}, base="@", since=self._day_ago())
+            is None
+        )
+
+    def test_matches_any_of_several_names(self, repo: JJ) -> None:
+        # A commit carrying a superset's trailer is found when that name is among
+        # job_names (cooldown_on, ADR 0015), and not found when it is absent.
+        repo.describe("full upgrade\n\nRepoactive-Job: full-lock")
+        assert (
+            repo.last_job_commit_date(
+                job_names={"dev-lock", "full-lock"}, base="@", since=self._day_ago()
+            )
+            is not None
+        )
+        assert (
+            repo.last_job_commit_date(job_names={"dev-lock"}, base="@", since=self._day_ago())
+            is None
         )
 
     def test_trailer_like_body_line_not_matched(self, repo: JJ) -> None:
         # The matching line is in the body, not the final (trailer) paragraph.
         repo.describe("Repoactive-Job: my-job\n\nthe real body comes after")
         assert (
-            repo.last_job_commit_date(job_name="my-job", base="@", since=self._day_ago()) is None
+            repo.last_job_commit_date(job_names={"my-job"}, base="@", since=self._day_ago())
+            is None
         )
 
     def test_matches_only_on_given_base(self, repo: JJ) -> None:
@@ -548,11 +567,11 @@ class TestLastJobCommitDate:
         repo.bookmark_set("other")
         # the trailer is reachable from "main" but not from the sibling "other"
         assert (
-            repo.last_job_commit_date(job_name="my-job", base="main", since=self._day_ago())
+            repo.last_job_commit_date(job_names={"my-job"}, base="main", since=self._day_ago())
             is not None
         )
         assert (
-            repo.last_job_commit_date(job_name="my-job", base="other", since=self._day_ago())
+            repo.last_job_commit_date(job_names={"my-job"}, base="other", since=self._day_ago())
             is None
         )
 
@@ -563,7 +582,7 @@ class TestLastJobCommitDate:
         repo.describe("later unrelated work")
         # base "@" is the tip; the trailer lives one commit below it
         assert (
-            repo.last_job_commit_date(job_name="my-job", base="@", since=self._day_ago())
+            repo.last_job_commit_date(job_names={"my-job"}, base="@", since=self._day_ago())
             is not None
         )
 

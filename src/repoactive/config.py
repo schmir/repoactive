@@ -112,6 +112,33 @@ class UnknownRunOnlyIfChangedError(ValueError):
         )
 
 
+class UnknownCooldownOnError(ValueError):
+    """Raised when cooldown_on references a job that does not exist."""
+
+    def __init__(self, name: str, unknown: list[str]) -> None:
+        super().__init__(
+            f"job '{name}' cooldown_on references unknown job(s): {', '.join(unknown)}"
+        )
+
+
+class SelfCooldownOnError(ValueError):
+    """Raised when a job lists itself in cooldown_on."""
+
+    def __init__(self, name: str) -> None:
+        super().__init__(f"job '{name}' cooldown_on lists itself")
+
+
+class CooldownOnWithoutCooldownPeriodError(ValueError):
+    """Raised when cooldown_on is set but the job has no effective cooldown_period.
+
+    Without a cooldown window there is nothing to throttle against, so the
+    widened match would silently do nothing (ADR 0015).
+    """
+
+    def __init__(self, name: str) -> None:
+        super().__init__(f"job '{name}' sets cooldown_on but has no cooldown_period")
+
+
 class JobNameInBodyError(ValueError):
     """Raised when a [job.<name>] table also sets a 'name' field.
 
@@ -307,6 +334,11 @@ class Job(BaseModel):
     tags: list[str] = Field(default_factory=list)
     depends_on: list[str] = Field(default_factory=list)
     run_only_if_changed: list[str] = Field(default_factory=list)
+    # Names of broader jobs that subsume this one. This job's cooldown check also
+    # counts a recent landing of any named job, so once a superset lands this job
+    # is throttled for its cooldown_period. Requires a cooldown_period. See
+    # docs/adr/0015-cooldown-on-throttles-only-new-work.md.
+    cooldown_on: list[str] = Field(default_factory=list)
     output_in_commit: bool = True
     # When true, the command does not produce a diff to commit; instead it writes
     # one or more *.toml job fragments into the directory named by the
@@ -487,6 +519,23 @@ class Config(BaseModel):
             unknown = sorted(set(job.run_only_if_changed) - names)
             if unknown:
                 raise UnknownRunOnlyIfChangedError(job.name, unknown)
+        return self
+
+    @model_validator(mode="after")
+    def validate_cooldown_on(self) -> Config:
+        names = {j.name for j in self.jobs}
+        for job in self.jobs:
+            if not job.cooldown_on:
+                continue
+            unknown = sorted(set(job.cooldown_on) - names)
+            if unknown:
+                raise UnknownCooldownOnError(job.name, unknown)
+            if job.name in job.cooldown_on:
+                raise SelfCooldownOnError(job.name)
+            # cooldown_on only throttles against a cooldown window; without one
+            # (own or inherited) it would silently do nothing.
+            if job.cooldown_period is None and self.job_defaults.cooldown_period is None:
+                raise CooldownOnWithoutCooldownPeriodError(job.name)
         return self
 
     def _resolved_jobs(self) -> list[Job]:
