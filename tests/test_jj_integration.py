@@ -65,6 +65,19 @@ def _commit_id(jj: JJ, rev: str = "@") -> str:
     ).stdout.strip()
 
 
+def _has_conflict(jj: JJ, rev: str) -> bool:
+    return (
+        subprocess.run(
+            ["jj", "--no-pager", "log", "-r", rev, "--no-graph", "-T", "conflict"],
+            cwd=jj.cwd,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        == "true"
+    )
+
+
 def _git(cwd: Path, *args: str) -> str:
     return subprocess.run(
         ["git", *args],
@@ -233,8 +246,46 @@ class TestRestore:
     def test_discards_current_commits_own_changes(self, repo: JJ) -> None:
         (repo.cwd / "file.txt").write_text("hello")
         assert not repo.is_empty()
-        repo.restore("@")
+        repo.restore(source_rev="@-", destination_rev="@")
         assert repo.is_empty()
+
+    def test_copies_file_content_from_source_into_destination(self, repo: JJ) -> None:
+        (repo.cwd / "file.txt").write_text("from source")
+        repo.describe("source")
+        repo.bookmark_set("source")
+        repo.new("@")
+        (repo.cwd / "file.txt").write_text("from destination")
+        repo.describe("destination")
+        repo.bookmark_set("destination")
+        repo.new("@")
+        repo.restore(source_rev="source", destination_rev="destination")
+        repo.edit("destination")
+        assert (repo.cwd / "file.txt").read_text() == "from source"
+
+    def test_resolves_conflict_in_destination(self, repo: JJ) -> None:
+        # Simulate the bug: rebase causes a conflict in "old", then restore
+        # should copy "new"s content into "old" to resolve it.
+        (repo.cwd / "file.txt").write_text("base")
+        repo.describe("base")
+        repo.bookmark_set("base")
+
+        repo.new("base")
+        (repo.cwd / "file.txt").write_text("new content")
+        repo.describe("new")
+        repo.bookmark_set("new")
+
+        repo.new("base")
+        (repo.cwd / "file.txt").write_text("conflicting")
+        repo.describe("old")
+        repo.bookmark_set("old")
+
+        repo.rebase("new")
+        assert _has_conflict(repo, "old")
+
+        repo.restore(source_rev="new", destination_rev="old")
+        assert not _has_conflict(repo, "old")
+        repo.edit("old")
+        assert (repo.cwd / "file.txt").read_text() == "new content"
 
 
 class TestRebase:

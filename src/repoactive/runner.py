@@ -1031,8 +1031,7 @@ def _absorb_results(
                 if not content_unchanged:
                     if abs_ws is None:
                         abs_ws = stack.enter_context(repo.temp_workspace("repoactive-absorb"))
-                    abs_ws.edit(old_cid)
-                    abs_ws.restore(new_cid)
+                    abs_ws.restore(source_rev=new_cid, destination_rev=old_cid)
                     repo.describe_revision(old_cid, message)
                 elif _strip_boxquote_and_trailers(
                     repo.get_description(old_cid)

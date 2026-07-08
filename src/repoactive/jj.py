@@ -215,8 +215,8 @@ class JJ:
     def edit(self, revision: str) -> None:
         self._run("edit", revision)
 
-    def restore(self, source: str) -> None:
-        self._run("restore", "--changes-in", source)
+    def restore(self, *, source_rev: str, destination_rev: str) -> None:
+        self._run("restore", "--from", source_rev, "--into", destination_rev)
 
     def rebase(self, *onto: str) -> None:
         onto_args = [arg for parent in onto for arg in ("--onto", parent)]

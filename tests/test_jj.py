@@ -266,10 +266,10 @@ class TestEdit:
 
 class TestRestore:
     @patch("repoactive.jj.subprocess.run")
-    def test_restores_changes_in(self, mock_run: MagicMock) -> None:
+    def test_restores_from_source_into_destination(self, mock_run: MagicMock) -> None:
         mock_run.return_value.stdout = ""
-        _jj().restore("repoactive/foo")
-        assert mock_run.call_args == _call("restore", "--changes-in", "repoactive/foo")
+        _jj().restore(source_rev="repoactive/foo", destination_rev="@")
+        assert mock_run.call_args == _call("restore", "--from", "repoactive/foo", "--into", "@")
 
 
 class TestRebase:
