@@ -622,22 +622,43 @@ def _build_generated_jobs(
     return emitted
 
 
-def _on_cooldown(job: Job, repo_path: Path) -> bool:
-    """Whether the job landed on its base branch within its cooldown_period window."""
+def _format_duration(seconds: float) -> str:
+    """Format a duration in seconds as a human-readable string like '3d 2h' or '45m'."""
+    seconds = int(seconds)
+    days, seconds = divmod(seconds, 86400)
+    hours, seconds = divmod(seconds, 3600)
+    minutes, seconds = divmod(seconds, 60)
+    if days:
+        parts = [f"{days}d"]
+        if hours:
+            parts.append(f"{hours}h")
+        return " ".join(parts)
+    if hours:
+        parts = [f"{hours}h"]
+        if minutes:
+            parts.append(f"{minutes}m")
+        return " ".join(parts)
+    if minutes:
+        return f"{minutes}m"
+    return f"{seconds}s"
+
+
+def _on_cooldown(job: Job, repo_path: Path) -> datetime | None:
+    """Return the last-run timestamp if the job is still on cooldown, else None."""
     delta = job.cooldown_timedelta()
     if delta is None:
-        return False
+        return None
     base = job.base_branch or "trunk()"
     since = datetime.now(UTC) - delta
-    on_cooldown = JJ(repo_path).has_recent_job_commit(job_name=job.name, base=base, since=since)
+    last_run = JJ(repo_path).last_job_commit_date(job_name=job.name, base=base, since=since)
     logger.debug(
-        "[%s] cooldown check: base=%s since=%s -> on_cooldown=%s",
+        "[%s] cooldown check: base=%s since=%s -> last_run=%s",
         job.name,
         base,
         since.isoformat(),
-        on_cooldown,
+        last_run,
     )
-    return on_cooldown
+    return last_run
 
 
 def _validate_selection(
@@ -828,8 +849,13 @@ def _dispatch_job(  # noqa: PLR0913
     # emits nothing, throttling its whole fan-out as a unit (the dual trailer
     # records a recent child landing as the generator's). See
     # docs/adr/0004-job-generators.md.
-    if _on_cooldown(resolved_job, repo_path):
-        print(f"==> [{job.name}] on cooldown ({resolved_job.cooldown_period}), skipped")
+    if last_run := _on_cooldown(resolved_job, repo_path):
+        elapsed = datetime.now(UTC) - last_run
+        elapsed_str = _format_duration(elapsed.total_seconds())
+        print(
+            f"==> [{job.name}] on cooldown ({resolved_job.cooldown_period}),"
+            f" last run {elapsed_str} ago, skipped"
+        )
         summary.on_cooldown.add(job.name)
         # Treat like a no-op run so dependents proceed on the base branch.
         summary.results[job.name] = JobResult(

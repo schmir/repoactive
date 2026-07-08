@@ -8,7 +8,7 @@ import tempfile
 import time
 from collections.abc import Generator
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from repoactive.constants import JOB_TRAILER_KEY
@@ -400,8 +400,10 @@ class JJ:
             if name.strip()
         }
 
-    def has_recent_job_commit(self, *, job_name: str, base: str, since: datetime) -> bool:
-        """Whether ``base`` already carries a recent commit from the given job.
+    def last_job_commit_date(
+        self, *, job_name: str, base: str, since: datetime
+    ) -> datetime | None:
+        """Return the committer date of the most recent job commit on ``base``, or ``None``.
 
         Matches commits that have a ``Repoactive-Job: <job_name>`` trailer and a
         committer date at or after ``since``. Used to throttle jobs: a recent
@@ -410,16 +412,22 @@ class JJ:
         The trailer is matched via jj's trailer parsing, which only considers the
         final paragraph of the description, so a stray matching line in the body
         is correctly ignored.
+
+        Returns the newest matching committer timestamp, or ``None`` if no match.
         """
         revset = f'::{base} & committer_date(after:"{_jj_timestamp(since)}")'
         template = f"""
         if (trailers.any(|t| t.key() == "{JOB_TRAILER_KEY}" && t.value() == "{job_name}"),
-             "x",
+             committer.timestamp().utc().format("%Y-%m-%dT%H:%M:%S") ++ "\\n",
              ""
         )
         """
         output = self._run("log", "--no-graph", "-r", revset, "-T", template)
-        return bool(output.strip())
+        lines = [line.strip() for line in output.splitlines() if line.strip()]
+        if not lines:
+            return None
+        # jj log returns newest-first; take the first line.
+        return datetime.fromisoformat(lines[0]).replace(tzinfo=UTC)
 
     def git_push_bookmarks(self, *bookmarks: str) -> None:
         """Push bookmarks to the remote.

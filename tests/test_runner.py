@@ -5,6 +5,7 @@ import os
 import signal
 import time
 from collections.abc import Callable, Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -438,7 +439,7 @@ class TestRunOneJob:
         job_a = config.jobs[0]
         summary = RunSummary()
         with (
-            patch("repoactive.runner._on_cooldown", return_value=True),
+            patch("repoactive.runner._on_cooldown", return_value=datetime(2026, 1, 1, tzinfo=UTC)),
             patch("repoactive.runner.run_job") as mock_run_job,
         ):
             _dispatch_job(
@@ -1793,7 +1794,7 @@ class TestRunAll:
         ):
             cls.return_value.unmerged_job_names.return_value = set()
             cls.return_value.children_job_names.return_value = set()
-            cls.return_value.has_recent_job_commit.return_value = False
+            cls.return_value.last_job_commit_date.return_value = None
             cls.return_value.remote_bookmark_exists.return_value = False
             cls.return_value.op_id.return_value = "OP-START"
             # temp_workspace returns a no-op context manager for the absorb phase.
@@ -2068,7 +2069,7 @@ class TestRunAll:
 
     @patch("repoactive.runner.run_job")
     def test_cooldown_skips_job(self, mock_run_job: MagicMock, mock_jj: MagicMock) -> None:
-        mock_jj.return_value.has_recent_job_commit.return_value = True
+        mock_jj.return_value.last_job_commit_date.return_value = datetime(2026, 1, 1, tzinfo=UTC)
 
         summary = run_all(config=self._cooldown_config("a", "7d"), repo_path=REPO)
 
@@ -2081,17 +2082,17 @@ class TestRunAll:
     def test_cooldown_queries_base_branch(
         self, mock_run_job: MagicMock, mock_jj: MagicMock
     ) -> None:
-        mock_jj.return_value.has_recent_job_commit.return_value = True
+        mock_jj.return_value.last_job_commit_date.return_value = datetime(2026, 1, 1, tzinfo=UTC)
 
         run_all(config=self._cooldown_config("a", "7d"), repo_path=REPO)
 
-        kwargs = mock_jj.return_value.has_recent_job_commit.call_args.kwargs
+        kwargs = mock_jj.return_value.last_job_commit_date.call_args.kwargs
         assert kwargs["job_name"] == "a"
         assert kwargs["base"] == "trunk()"
 
     @patch("repoactive.runner.run_job")
     def test_no_recent_commit_runs_job(self, mock_run_job: MagicMock, mock_jj: MagicMock) -> None:
-        mock_jj.return_value.has_recent_job_commit.return_value = False
+        mock_jj.return_value.last_job_commit_date.return_value = None
         a = _job("a")
         mock_run_job.return_value = _result(a, revsets=["repoactive/a"])
 
@@ -2104,7 +2105,7 @@ class TestRunAll:
     def test_cooldown_dependent_falls_back_to_base(
         self, mock_run_job: MagicMock, mock_jj: MagicMock
     ) -> None:
-        mock_jj.return_value.has_recent_job_commit.return_value = True
+        mock_jj.return_value.last_job_commit_date.return_value = datetime(2026, 1, 1, tzinfo=UTC)
         b = _job("b", depends_on=["a"])
         mock_run_job.return_value = _result(b, revsets=["repoactive/b"])
         config = Config.model_validate(
@@ -2133,7 +2134,7 @@ class TestRunAll:
 
         run_all(config=_config(a), repo_path=REPO)
 
-        mock_jj.return_value.has_recent_job_commit.assert_not_called()
+        mock_jj.return_value.last_job_commit_date.assert_not_called()
 
     @patch("repoactive.runner.run_job")
     def test_run_all_resolves_jobs_with_defaults(self, mock_run_job: MagicMock) -> None:
@@ -2296,7 +2297,7 @@ class TestRunAll:
     ) -> None:
         # A landed child (dual trailer) puts the generator on cooldown; the whole
         # fan-out is skipped for this run.
-        mock_jj.return_value.has_recent_job_commit.return_value = True
+        mock_jj.return_value.last_job_commit_date.return_value = datetime(2026, 1, 1, tzinfo=UTC)
 
         summary = run_all(config=self._generator_config(cooldown_period="7d"), repo_path=REPO)
 
