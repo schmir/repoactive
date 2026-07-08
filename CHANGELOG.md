@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.3 - 2026-07-08
+
+- Jobs can now set `auto_merge = true` to have their merge request or pull
+  request automatically merged when the pipeline or checks pass. The flag is
+  also available in `[job-defaults]` to enable it for all jobs at once.
+  GitLab uses "merge when pipeline succeeds"; GitHub uses the native
+  auto-merge feature (requires PyGithub ≥ 2.9.1).
+- When a job is skipped due to its `cooldown_period`, the skip message now
+  includes how long ago the job last ran alongside the cooldown period, e.g.
+  `==> [uv-lock-upgrade] on cooldown (14d), last run 3d 5h ago, skipped`.
+- A Docker image is now publicly available at `ghcr.io/schmir/repoactive`.
+
 ## 0.2.2 - 2026-07-06
 
 - A new `run_only_if_changed` field on a job lists the names of other jobs
