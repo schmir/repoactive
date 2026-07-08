@@ -28,7 +28,7 @@ from repoactive.config import (
 )
 from repoactive.constants import JOB_TRAILER_KEY
 from repoactive.graph import CircularDependencyError, detect_dependency_cycle, topological_sort
-from repoactive.jj import JJ, workspace_name
+from repoactive.jj import JJ, Colocation, workspace_name
 from repoactive.jobtree import format_job_forest, print_job_table
 from repoactive.lock import run_lock
 from repoactive.platforms.base import MRParams, Platform
@@ -1030,7 +1030,9 @@ def _absorb_results(
                 )
                 if not content_unchanged:
                     if abs_ws is None:
-                        abs_ws = stack.enter_context(repo.temp_workspace("repoactive-absorb"))
+                        abs_ws = stack.enter_context(
+                            repo.temp_workspace("repoactive-absorb", Colocation.PLAIN)
+                        )
                     abs_ws.restore(source_rev=new_cid, destination_rev=old_cid)
                     repo.describe_revision(old_cid, message)
                 elif _strip_boxquote_and_trailers(

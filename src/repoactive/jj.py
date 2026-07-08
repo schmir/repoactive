@@ -1,6 +1,7 @@
 """Wrapper around the jj (Jujutsu) CLI for managing colocated jj+git repositories."""
 
 import contextlib
+import enum
 import logging
 import shutil
 import subprocess
@@ -14,6 +15,12 @@ from pathlib import Path
 from repoactive.constants import JOB_TRAILER_KEY
 
 logger = logging.getLogger(__name__)
+
+
+class Colocation(enum.Enum):
+    COLOCATED = "colocated"
+    PLAIN = "plain"
+
 
 # Prefix for the temporary workspaces repoactive creates for each job. It is not
 # configurable so that stale workspaces (left behind by a killed run) can always
@@ -472,7 +479,7 @@ class JJ:
         """Sync the colocated git checkout (HEAD and index) to the jj working copy.
 
         jj only exports git HEAD in the default workspace; workspaces colocated
-        via workspace_add() need this after the working copy moves (new, edit,
+        via _workspace_add() need this after the working copy moves (new, edit,
         rebase). No-op if the workspace is not colocated.
         """
         if not self.is_colocated():
@@ -508,9 +515,11 @@ class JJ:
         if stale:
             self.git_worktree_prune()
 
-    def workspace_add(self, name: str, path: Path) -> None:
+    def _workspace_add(
+        self, name: str, path: Path, colocation: Colocation = Colocation.COLOCATED
+    ) -> None:
         self._run("workspace", "add", "--name", name, str(path))
-        if self.is_colocated():
+        if colocation is Colocation.COLOCATED and self.is_colocated():
             self._colocate_workspace(name, path)
 
     def _colocate_workspace(self, name: str, path: Path) -> None:
@@ -541,7 +550,9 @@ class JJ:
         self._run("workspace", "forget", name)
 
     @contextlib.contextmanager
-    def temp_workspace(self, name: str) -> Generator["JJ"]:
+    def temp_workspace(
+        self, name: str, colocation: Colocation = Colocation.COLOCATED
+    ) -> Generator["JJ"]:
         """Create a workspace named ``name`` in a temp directory, cleaning up on exit.
 
         Adds a jj workspace inside a fresh temp directory and yields a JJ bound
@@ -552,7 +563,7 @@ class JJ:
         tmp_root = Path(tempfile.mkdtemp(prefix="repoactive-workspace-"))
         workspace_path = tmp_root / "workspace"
         logger.debug("adding workspace %s at %s", name, workspace_path)
-        self.workspace_add(name, workspace_path)
+        self._workspace_add(name, workspace_path, colocation)
         try:
             yield JJ(workspace_path)
         finally:
@@ -560,5 +571,6 @@ class JJ:
             with contextlib.suppress(JJError):
                 self.workspace_forget(name)
             shutil.rmtree(tmp_root, ignore_errors=True)
-            with contextlib.suppress(JJError):
-                self.git_worktree_prune()
+            if colocation is Colocation.COLOCATED:
+                with contextlib.suppress(JJError):
+                    self.git_worktree_prune()

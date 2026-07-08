@@ -764,7 +764,7 @@ class TestWorkspaceColocation:
     def test_workspace_is_colocated(self, repo: JJ, tmp_path: Path) -> None:
         self._commit(repo, "a.txt", "initial")
         ws_path = tmp_path / "ws"
-        repo.workspace_add("ws", ws_path)
+        repo._workspace_add("ws", ws_path)
         assert (ws_path / ".git").is_file()
         ws = JJ(ws_path)
         assert _git(ws_path, "rev-parse", "HEAD") == _commit_id(ws, "@-")
@@ -772,7 +772,7 @@ class TestWorkspaceColocation:
     def test_git_status_clean_in_new_workspace(self, repo: JJ, tmp_path: Path) -> None:
         self._commit(repo, "a.txt", "initial")
         ws_path = tmp_path / "ws"
-        repo.workspace_add("ws", ws_path)
+        repo._workspace_add("ws", ws_path)
         assert _git(ws_path, "status", "--porcelain") == ""
 
     def test_git_sync_head_after_moving_working_copy(self, repo: JJ, tmp_path: Path) -> None:
@@ -780,7 +780,7 @@ class TestWorkspaceColocation:
         repo.bookmark_set("base", "@-")
         self._commit(repo, "b.txt", "second")
         ws_path = tmp_path / "ws"
-        repo.workspace_add("ws", ws_path)
+        repo._workspace_add("ws", ws_path)
         ws = JJ(ws_path)
         ws.new("base")
         ws.git_sync_head()
@@ -789,12 +789,12 @@ class TestWorkspaceColocation:
 
     def test_git_sync_head_noop_without_git(self, repo: JJ, tmp_path: Path) -> None:
         ws_path = tmp_path / "ws"
-        repo.workspace_add("ws", ws_path)  # empty repo: colocation is skipped
+        repo._workspace_add("ws", ws_path)  # empty repo: colocation is skipped
         JJ(ws_path).git_sync_head()  # must not raise
 
     def test_empty_repo_workspace_not_colocated(self, repo: JJ, tmp_path: Path) -> None:
         ws_path = tmp_path / "ws"
-        repo.workspace_add("ws", ws_path)
+        repo._workspace_add("ws", ws_path)
         assert not (ws_path / ".git").exists()
         assert JJ(ws_path).is_empty() is True  # jj still works in the workspace
 
@@ -802,13 +802,13 @@ class TestWorkspaceColocation:
         repo = _init_repo(tmp_path / "plain", colocate=False)
         self._commit(repo, "a.txt", "initial")
         ws_path = tmp_path / "ws"
-        repo.workspace_add("ws", ws_path)
+        repo._workspace_add("ws", ws_path)
         assert not (ws_path / ".git").exists()
 
     def test_jj_and_git_agree_after_commit(self, repo: JJ, tmp_path: Path) -> None:
         self._commit(repo, "a.txt", "initial")
         ws_path = tmp_path / "ws"
-        repo.workspace_add("ws", ws_path)
+        repo._workspace_add("ws", ws_path)
         ws = JJ(ws_path)
         (ws_path / "b.txt").write_text("b")
         ws.describe("from workspace")
@@ -820,7 +820,7 @@ class TestWorkspaceColocation:
     def test_prune_after_forget(self, repo: JJ, tmp_path: Path) -> None:
         self._commit(repo, "a.txt", "initial")
         ws_path = tmp_path / "ws"
-        repo.workspace_add("ws", ws_path)
+        repo._workspace_add("ws", ws_path)
         repo.workspace_forget("ws")
         shutil.rmtree(ws_path)
         repo.git_worktree_prune()
@@ -828,14 +828,14 @@ class TestWorkspaceColocation:
 
     def test_workspace_names_lists_added_workspace(self, repo: JJ, tmp_path: Path) -> None:
         self._commit(repo, "a.txt", "initial")
-        repo.workspace_add("ws", tmp_path / "ws")
+        repo._workspace_add("ws", tmp_path / "ws")
         assert sorted(repo.workspace_names()) == ["default", "ws"]
 
     def test_forget_stale_workspaces_drops_only_prefixed(self, repo: JJ, tmp_path: Path) -> None:
         self._commit(repo, "a.txt", "initial")
         stale = f"{WORKSPACE_PREFIX}job"
-        repo.workspace_add(stale, tmp_path / "stale")
-        repo.workspace_add("mine", tmp_path / "mine")
+        repo._workspace_add(stale, tmp_path / "stale")
+        repo._workspace_add("mine", tmp_path / "mine")
         shutil.rmtree(tmp_path / "stale")
 
         repo.forget_stale_workspaces()
