@@ -21,6 +21,12 @@ and (with `--mode publish`) the full MR lifecycle.
 - [Listing jobs](#listing-jobs)
 - [Listing tags](#listing-tags)
 - [Configuration](#configuration)
+  - [`[job-defaults]`](#job-defaults)
+  - [`[job.<name>]`](#jobname)
+  - [Stacking MRs](#stacking-mrs)
+  - [`[platform.<name>]`](#platformname)
+  - [Config file locations](#config-file-locations)
+  - [Overriding values on the command line](#overriding-values-on-the-command-line)
 - [Selecting jobs with tags](#selecting-jobs-with-tags)
 - [Disabling jobs](#disabling-jobs)
 - [Gating jobs with `run_only_if_changed`](#gating-jobs-with-run_only_if_changed)
@@ -429,77 +435,150 @@ passed via `--config`). See [Config file locations](#config-file-locations)
 for how the defaults are discovered and how to split the config across
 several files.
 
+A minimal config with a single job:
+
+```toml
+[job.uv-lock-upgrade]
+command = "uv lock --upgrade"
+title = "build: upgrade dependencies"
+```
+
 Every key in `[job-defaults]` supplies the default for the matching per-job
 key; any job may override it by setting the same key in its `[job.<name>]`
 block.
 
+### `[job-defaults]`
+
+**MR/PR options:**
+
+- **`labels`** (default: `[]`) — Labels applied to every MR/PR. Per-job
+  `labels` are merged with, not replaced by, this list.
+- **`auto_merge`** (default: `false`) — When `true`, enable auto-merge on
+  every MR/PR so it merges automatically once its pipeline passes. On
+  GitHub, the repository must have "Allow auto-merge" enabled in its
+  settings.
+
+**Branch and commit options:**
+
+- **`branch_prefix`** (default: `"repoactive/"`) — Prefix prepended to the
+  job name to form the branch name.
+- **`mr_title_prefix`** (default: `"[repoactive] "`) — Prefix prepended to
+  every MR/PR title. Set to `""` to disable.
+- **`commit_title_prefix`** (default: `"[repoactive] "`) — Prefix prepended
+  to every commit title. Set to `""` to disable.
+- **`base_branch`** (default: repo default) — Target branch for all jobs
+  that do not set their own.
+
+**Run control:**
+
+- **`cooldown_period`** (default: none) — Minimum time between a landed
+  change and the next run for any job. Format: `<number><unit>` where unit
+  is `s`, `m`, `h`, `d`, or `w` (e.g. `"7d"`). See
+  [Throttling jobs with `cooldown_period`](#throttling-jobs-with-cooldown_period).
+- **`timeout`** (default: `"2m"`) — Maximum runtime for a job's command.
+  Same format as `cooldown_period`. See
+  [Limiting job runtime with `timeout`](#limiting-job-runtime-with-timeout).
+
+### `[job.<name>]`
+
+The table key is the job's unique name; the branch is always
+`branch_prefix + name`. Job names may contain letters, digits, hyphens, and
+underscores.
+
+**Required:**
+
+- **`command`** — Shell command (or executable path) run in the repository
+  working directory. A non-zero exit is a failure.
+- **`title`** — MR/PR title (also the commit subject, after
+  `commit_title_prefix`).
+
+**MR/PR options:**
+
+- **`description`** — Body text of the MR/PR.
+- **`labels`** (default: `[]`) — Extra labels for this job's MR/PR, merged
+  with `job-defaults.labels`.
+- **`draft`** (default: `false`) — Open the MR/PR as a draft. On GitHub,
+  draft state cannot be changed after creation.
+- **`create_mr`** (default: `true`) — Whether to create an MR/PR: `true`
+  (always), `false` (push the branch but skip the MR), or
+  `"unless-superseded"` (skip when a dependent's MR from the same run
+  already contains this job's changes — see [Stacking MRs](#stacking-mrs)).
+- **`auto_merge`** (default: inherited from `job-defaults`) — When `true`,
+  enable auto-merge on this job's MR/PR.
+
+**Branch and commit options:**
+
+- **`base_branch`** (default: inherited) — Target branch for this job's
+  MR/PR.
+- **`branch_prefix`** (default: inherited) — Override the branch-name prefix
+  for this job only.
+- **`mr_title_prefix`** (default: inherited) — Override the MR/PR title
+  prefix for this job only.
+- **`commit_title_prefix`** (default: inherited) — Override the commit title
+  prefix for this job only.
+- **`output_in_commit`** (default: `true`) — Append the job's command and
+  its captured output to the commit message. Set to `false` to keep the
+  commit message clean.
+
+**Run control:**
+
+- **`disabled`** (default: `false`) — Exclude this job from the bare
+  `repoactive run`. Sugar for `tags = ["disabled"]`; mutually exclusive with
+  `tags`. See [Disabling jobs](#disabling-jobs).
+- **`tags`** (default: none) — Tags for job selection. A job with no tags
+  carries the implicit `enabled` tag and runs in the bare `repoactive run`;
+  setting any explicit tag removes `enabled`. See
+  [Selecting jobs with tags](#selecting-jobs-with-tags).
+- **`depends_on`** (default: `[]`) — Jobs whose output this job builds on.
+  See [Stacking MRs](#stacking-mrs).
+- **`run_only_if_changed`** (default: `[]`) — Only run this job if at least
+  one listed job produced a diff in the current run. See
+  [Gating jobs with `run_only_if_changed`](#gating-jobs-with-run_only_if_changed).
+- **`cooldown_period`** (default: inherited) — Minimum time between a landed
+  change and the next run. See
+  [Throttling jobs with `cooldown_period`](#throttling-jobs-with-cooldown_period).
+- **`timeout`** (default: inherited) — Maximum runtime for this job's
+  command. Set to `"0s"` to disable the timeout entirely. See
+  [Limiting job runtime with `timeout`](#limiting-job-runtime-with-timeout).
+- **`emits_jobs`** (default: `false`) — Generator job: the command writes
+  `*.toml` job fragments into `$REPOACTIVE_JOBS_DIR` instead of producing a
+  diff. See [Generating jobs dynamically](#generating-jobs-dynamically).
+
+### Stacking MRs
+
+When `depends_on` is set, `repoactive` starts the job's script from a
+working tree that already contains all listed dependencies' diffs, rather
+than from the plain base branch. The resulting MR branch includes both the
+dependency changes and the new job's changes on top, and links to the parent
+MRs are automatically added to the MR description.
+
+Because a dependent's MR already contains its dependencies' changes, a
+dependency chain normally opens one MR per job that produced a diff. Setting
+`create_mr = "unless-superseded"` on the earlier jobs collapses that: such a
+job skips its MR when a dependent job produced an MR in the same run, so the
+chain yields a single MR on the topmost job that actually changed something
+— falling back to the job below it when the jobs above came up empty. The
+branch is still pushed either way. Only the current run counts: a dependent
+that is empty, failed, on cooldown, or not selected does not suppress
+anything. See [ADR 0009](docs/adr/0009-unless-superseded-mr-creation.md) for
+details and limitations.
+
+### Example
+
 ```toml
 [job-defaults]
-# Prefix prepended to job.name to form the branch name
-branch_prefix = "repoactive/"
-# Prefix prepended to every MR/PR title (set to "" to disable)
-mr_title_prefix = "[repoactive] "
-# Prefix prepended to every commit title (set to "" to disable)
-commit_title_prefix = "[repoactive] "
-# Labels applied to every MR/PR unless overridden per job
+base_branch = "main"
 labels = ["repoactive"]
-# Optional: default target branch for jobs that do not set their own
-# (default: repo default branch)
-base_branch = "main"
-# Optional: default cooldown_period applied to jobs that do not set their own
-# (default: none). See "Throttling jobs with cooldown_period" below.
 cooldown_period = "7d"
-# Optional: default timeout applied to jobs that do not set their own
-# (default: "2m"). See "Limiting job runtime with timeout" below.
-timeout = "1h"
+auto_merge = true
 
-# The table key is the job's unique name; the branch is always
-# <branch_prefix><name>.
 [job.regenerate-api-client]
-# Script run in the repo working directory; non-zero exit = failure
 command = "python scripts/regen_api.py"
-# MR/PR title
 title = "api: regenerate API client"
-# Optional: MR description
 description = "Automated regeneration of the API client from the OpenAPI spec."
-# Optional: extra labels (merged with job-defaults.labels)
-labels = ["automated", "api"]
-# Optional: target branch (default: repo default branch)
-base_branch = "main"
-# Optional: open the MR/PR as a draft (default: false)
-draft = false
-# Optional: create an MR/PR for this job (default: true). Set to false to
-# push the branch without opening an MR/PR, or to "unless-superseded" to skip
-# the MR/PR when a dependent job's MR from the same run already contains this
-# job's changes (see the notes on depends_on below).
-create_mr = true
-# Optional: append the job's command and its output to the commit message
-# (default: true). Set to false to keep the commit message clean.
-output_in_commit = true
-# Optional: skip this job on "run all" invocations (default: false). Sugar for
-# tags = ["disabled"]; mutually exclusive with tags. See "Disabling jobs" below.
-disabled = false
-# Optional: tags for job selection (default: none -> the job carries the
-# implicit "enabled" tag and runs in the bare `repoactive run`). Setting any tag
-# removes "enabled", so the job runs only via `repoactive run --tag <tag>`. See
-# "Selecting jobs with tags" below.
-# tags = ["nightly"]
-# Optional: override branch_prefix/mr_title_prefix/commit_title_prefix from
-# job-defaults for this job only.
+labels = ["api"]
 mr_title_prefix = "[api] "
-# Optional: only run this job if at least one of the named jobs produced a
-# diff in the current run. If none of them changed anything, this job is
-# skipped (with a no-op result so dependents still run). Names need not be
-# in depends_on; any job that ran before this one can be listed.
-# run_only_if_changed = ["other-job"]
-# Optional: minimum time between landed changes for this job. If a commit
-# from this job landed on the base branch within this window, the job is
-# skipped. Format: <number><unit>, unit one of s, m, h, d, w (e.g. "7d").
-cooldown_period = "7d"
-# Optional: maximum runtime for this job's command. When it expires the
-# command's process group is killed and the job fails. Same format as
-# cooldown_period.
-timeout = "30m"
+create_mr = "unless-superseded"
 
 [job.sync-license-headers]
 command = "./scripts/add_license_headers.sh"
@@ -508,55 +587,36 @@ title = "sync license headers"
 [job.integration-tests-update]
 command = "./scripts/update_integration_tests.py"
 title = "tests: update integration tests"
-# Optional: run this job on top of the merged output of the listed jobs
 depends_on = ["regenerate-api-client", "sync-license-headers"]
 ```
+
+### `[platform.<name>]`
 
 For public GitHub.com or GitLab.com repositories no platform declaration is
 needed — `repoactive` detects the remote URL automatically. To use a
 self-hosted instance, add a `[platform.<name>]` section (the name is a label
 of your choosing; platforms are matched to a repository by their `url`):
 
+- **`url`** — Base URL of the platform instance (e.g.
+  `"https://gitlab.example.com"`).
+- **`type`** — `"github"` or `"gitlab"`.
+- **`token_env`** — Name of the environment variable holding the API token.
+
 ```toml
 [platform.company-gitlab]
-# Base URL of the platform instance
 url = "https://gitlab.example.com"
-# Name of the env var holding the API token
 token_env = "GITLAB_TOKEN"
-# type must be either "github" or "gitlab"
 type = "gitlab"
 ```
 
-The branch for each job is always `branch_prefix + job.name`, where
-`branch_prefix` is the job's own value if set, otherwise
-`job-defaults.branch_prefix`. Secrets are kept out of the config file by
-referencing environment variable names rather than inline values.
-
-The token named by `token_env` is **stripped from the environment job
-commands run in**, so a script cannot read the credential `repoactive` uses
-to push and create MRs. A job that needs its own credential must be given a
-separate one. `repoactive` otherwise trusts job commands — they run
-arbitrary code against the working tree — so the trust boundary is the
-config that defines them; see
+Secrets are kept out of the config file by referencing environment variable
+names rather than inline values. The token named by `token_env` is
+**stripped from the environment job commands run in**, so a script cannot
+read the credential `repoactive` uses to push and create MRs. A job that
+needs its own credential must be given a separate one. `repoactive`
+otherwise trusts job commands — they run arbitrary code against the working
+tree — so the trust boundary is the config that defines them; see
 [ADR 0006](docs/adr/0006-job-commands-are-trusted.md).
-
-When `depends_on` is set, `repoactive` starts the job's script from a
-working tree that has all listed dependency branches merged together, rather
-than from the plain base branch. The resulting MR branch will therefore
-include both the dependency jobs and the new job on top. Links to the parent
-MRs are automatically added to the MR description.
-
-Because a dependent's MR already contains its dependencies' changes, a
-dependency chain normally opens one MR per job that produced a diff. Setting
-`create_mr = "unless-superseded"` on the earlier jobs collapses that: such a
-job skips its MR whenever a dependent job produced an MR in the same run, so
-the chain yields a single MR on the topmost job that actually changed
-something — falling back to the job below it when the jobs above came up
-empty. The branch is still pushed either way. Only the current run counts: a
-dependent that is empty, failed, on cooldown, or not selected does not
-suppress anything. See
-[ADR 0009](docs/adr/0009-unless-superseded-mr-creation.md) for details and
-limitations.
 
 ### Config file locations
 
