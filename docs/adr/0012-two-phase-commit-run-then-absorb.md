@@ -145,6 +145,18 @@ Force-included successor jobs follow the same selection rules as today (they
 are added to `run_names`, their own successors are inspected recursively,
 and they may themselves pull in further successors).
 
+Whether a successor actually runs is decided at dispatch time, once the fate
+of the jobs below it is known. A successor exists to be rebuilt when the
+stack below it moves, so it bypasses its own cooldown — but when every one
+of its dependencies was itself skipped this run (the selected job turned out
+to be on cooldown, or a lower successor was skipped for the same reason),
+nothing it builds on changed and it is skipped with a no-op result. The skip
+propagates up the stack and leaves the successor's bookmark untouched in the
+absorb phase. The decision is judged on `depends_on`, not the commit graph:
+a successor whose config no longer declares the dependency it is stacked on
+falls through and runs — the safe direction when trailer and config
+disagree.
+
 ### Alternative considered: skip absorb, push new commits directly
 
 Phase 2 can be omitted entirely: after phase 1, move each bookmark directly

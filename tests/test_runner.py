@@ -19,6 +19,7 @@ from repoactive.runner import (
     CommandResult,
     GeneratedJobError,
     JobResult,
+    JobSelection,
     RunMode,
     RunSummary,
     UnknownJobsError,
@@ -375,28 +376,56 @@ def _mock_repo_with_successors(successors: set[str]) -> MagicMock:
 
 
 class TestExpandSuccessors:
+    def _sel(self, jobs: list[Job]) -> JobSelection:
+        return JobSelection(jobs=jobs, refreshed=frozenset())
+
     def test_no_successors_returns_selected_unchanged(self) -> None:
         config = _config(_djob("a"), _djob("b"))
         selected = _select_jobs(jobs=config.jobs, requested_names={"a"})
         repo = _mock_repo_with_successors(set())
-        result = _expand_successors(selected=selected, config=config, repo=repo)
-        assert _names(result) == ["a"]
+        result = _expand_successors(selection=self._sel(selected), config=config, repo=repo)
+        assert _names(result.jobs) == ["a"]
 
     def test_direct_successor_is_added(self) -> None:
         # b's last commit sits on a's bookmark, so b is pulled in.
         config = _config(_djob("a"), _djob("b"))
         selected = _select_jobs(jobs=config.jobs, requested_names={"a"})
         repo = _mock_repo_with_successors({"b"})
-        result = _expand_successors(selected=selected, config=config, repo=repo)
-        assert _names(result) == ["a", "b"]
+        result = _expand_successors(selection=self._sel(selected), config=config, repo=repo)
+        assert _names(result.jobs) == ["a", "b"]
+
+    def test_successor_recorded_separately_from_refreshed(self) -> None:
+        # Successors are tracked in their own subset: they bypass their own
+        # cooldown at dispatch time, but unlike refresh jobs they are skipped
+        # when nothing below them in the stack ran (see _dispatch_job).
+        config = _config(_djob("a"), _djob("b"))
+        selected = _select_jobs(jobs=config.jobs, requested_names={"a"})
+        repo = _mock_repo_with_successors({"b"})
+        result = _expand_successors(selection=self._sel(selected), config=config, repo=repo)
+        assert result.successors == frozenset({"b"})
+        assert result.refreshed == frozenset()
+
+    def test_refreshed_subset_is_preserved(self) -> None:
+        # A default run's refresh subset must survive successor expansion:
+        # refresh jobs bypass cooldown unconditionally, successors do not.
+        config = _config(_djob("a"), _djob("b", tags=["weekly"]))
+        selected = _select_jobs(jobs=config.jobs, requested_names=set(), refresh_names={"a"})
+        repo = _mock_repo_with_successors({"b"})
+        result = _expand_successors(
+            selection=JobSelection(jobs=selected, refreshed=frozenset({"a"})),
+            config=config,
+            repo=repo,
+        )
+        assert result.refreshed == frozenset({"a"})
+        assert result.successors == frozenset({"b"})
 
     def test_deep_stack_expanded_in_one_query(self) -> None:
         # descendants() finds b and c above a's bookmark in a single call.
         config = _config(_djob("a"), _djob("b"), _djob("c"))
         selected = _select_jobs(jobs=config.jobs, requested_names={"a"})
         repo = _mock_repo_with_successors({"b", "c"})
-        result = _expand_successors(selected=selected, config=config, repo=repo)
-        assert _names(result) == ["a", "b", "c"]
+        result = _expand_successors(selection=self._sel(selected), config=config, repo=repo)
+        assert _names(result.jobs) == ["a", "b", "c"]
         repo.pending_job_names.assert_called_once()
 
     def test_unknown_successor_is_ignored(self) -> None:
@@ -404,21 +433,21 @@ class TestExpandSuccessors:
         config = _config(_djob("a"))
         selected = _select_jobs(jobs=config.jobs, requested_names={"a"})
         repo = _mock_repo_with_successors({"gone"})
-        result = _expand_successors(selected=selected, config=config, repo=repo)
-        assert _names(result) == ["a"]
+        result = _expand_successors(selection=self._sel(selected), config=config, repo=repo)
+        assert _names(result.jobs) == ["a"]
 
     def test_already_selected_successor_is_a_noop(self) -> None:
         config = _config(_djob("a"), _djob("b"))
         selected = _select_jobs(jobs=config.jobs, requested_names={"a", "b"})
         repo = _mock_repo_with_successors({"b"})
-        result = _expand_successors(selected=selected, config=config, repo=repo)
-        assert _names(result) == ["a", "b"]
+        result = _expand_successors(selection=self._sel(selected), config=config, repo=repo)
+        assert _names(result.jobs) == ["a", "b"]
 
     def test_bookmarks_passed_as_revset(self) -> None:
         config = _config(_djob("a"), _djob("b"))
         selected = _select_jobs(jobs=config.jobs, requested_names={"a", "b"})
         repo = _mock_repo_with_successors(set())
-        _expand_successors(selected=selected, config=config, repo=repo)
+        _expand_successors(selection=self._sel(selected), config=config, repo=repo)
         [call_args] = repo.pending_job_names.call_args_list
         revset = call_args.kwargs["revset"]
         assert "present(repoactive/a)" in revset
@@ -429,8 +458,8 @@ class TestExpandSuccessors:
         config = _config(_djob("a"), _djob("b"), _djob("c", depends_on=["b"]))
         selected = _select_jobs(jobs=config.jobs, requested_names={"a"})
         repo = _mock_repo_with_successors({"c"})
-        result = _expand_successors(selected=selected, config=config, repo=repo)
-        assert _names(result) == ["a", "b", "c"]
+        result = _expand_successors(selection=self._sel(selected), config=config, repo=repo)
+        assert _names(result.jobs) == ["a", "b", "c"]
 
 
 class TestSelectRunJobs:
@@ -571,6 +600,130 @@ class TestRunOneJob:
         assert "a" not in summary.on_cooldown
         mock_run_job.assert_called_once()
         assert summary.results["a"] is result
+
+    def test_successor_skipped_when_no_dependency_ran(self) -> None:
+        # b was pulled in as a successor of a, but a was cooldown-skipped: the
+        # stack below b is unchanged, so rebuilding b would reproduce the same
+        # result. b records a no-op and is marked so its own successors skip too.
+        job_a = _job("a")
+        job_b = _job("b", depends_on=["a"])
+        config = _config(job_a, job_b)
+        summary = RunSummary()
+        summary.on_cooldown.add("a")
+        summary.results["a"] = JobResult(
+            job=job_a, effective_revsets=["trunk()"], produced_diff=False
+        )
+        with patch("repoactive.runner.run_job") as mock_run_job:
+            _dispatch_job(
+                job=config.jobs[1],
+                config=config,
+                repo_path=REPO,
+                summary=summary,
+                blocked=set(),
+                run_names={"a", "b"},
+                successors=frozenset({"b"}),
+            )
+        assert summary.successor_skipped == {"b"}
+        assert summary.results["b"].produced_diff is False
+        mock_run_job.assert_not_called()
+
+    def test_successor_skip_propagates_up_the_stack(self) -> None:
+        # c is stacked on b, which was itself successor-skipped: c skips too.
+        job_b = _job("b")
+        job_c = _job("c", depends_on=["b"])
+        config = _config(job_b, job_c)
+        summary = RunSummary()
+        summary.successor_skipped.add("b")
+        summary.results["b"] = JobResult(
+            job=job_b, effective_revsets=["trunk()"], produced_diff=False
+        )
+        with patch("repoactive.runner.run_job") as mock_run_job:
+            _dispatch_job(
+                job=config.jobs[1],
+                config=config,
+                repo_path=REPO,
+                summary=summary,
+                blocked=set(),
+                run_names={"b", "c"},
+                successors=frozenset({"b", "c"}),
+            )
+        assert "c" in summary.successor_skipped
+        mock_run_job.assert_not_called()
+
+    def test_successor_runs_and_bypasses_cooldown_when_dependency_ran(self) -> None:
+        # a ran and produced a diff, so successor b must rebuild on a's new
+        # output even though b's own cooldown is active.
+        job_a = _job("a")
+        job_b = _job("b", depends_on=["a"])
+        config = _config(job_a, job_b)
+        result_b = JobResult(job=job_b, effective_revsets=["repoactive/b"], produced_diff=True)
+        summary = RunSummary()
+        summary.results["a"] = JobResult(
+            job=job_a, effective_revsets=["repoactive/a"], produced_diff=True
+        )
+        with (
+            patch(
+                "repoactive.runner._on_cooldown",
+                return_value=datetime(2026, 1, 1, tzinfo=UTC),
+            ) as mock_cooldown,
+            patch("repoactive.runner.run_job", return_value=result_b) as mock_run_job,
+        ):
+            _dispatch_job(
+                job=config.jobs[1],
+                config=config,
+                repo_path=REPO,
+                summary=summary,
+                blocked=set(),
+                run_names={"a", "b"},
+                successors=frozenset({"b"}),
+            )
+        mock_run_job.assert_called_once()
+        mock_cooldown.assert_not_called()
+
+    def test_successor_runs_when_dependency_ran_without_diff(self) -> None:
+        # a ran and found nothing — its bookmark will be deleted in the absorb
+        # phase, so b must still rebuild (on trunk) rather than stay stacked on
+        # a's old, soon-to-be-orphaned commit.
+        job_a = _job("a")
+        job_b = _job("b", depends_on=["a"])
+        config = _config(job_a, job_b)
+        result_b = JobResult(job=job_b, effective_revsets=["repoactive/b"], produced_diff=True)
+        summary = RunSummary()
+        # a is in results but not on_cooldown: it ran, producing no diff.
+        summary.results["a"] = JobResult(
+            job=job_a, effective_revsets=["trunk()"], produced_diff=False
+        )
+        with patch("repoactive.runner.run_job", return_value=result_b) as mock_run_job:
+            _dispatch_job(
+                job=config.jobs[1],
+                config=config,
+                repo_path=REPO,
+                summary=summary,
+                blocked=set(),
+                run_names={"a", "b"},
+                successors=frozenset({"b"}),
+            )
+        mock_run_job.assert_called_once()
+
+    def test_successor_without_declared_dependencies_runs(self) -> None:
+        # A successor whose config no longer declares the dependency it is
+        # stacked on (the trailer outlives depends_on) falls through and runs —
+        # the safe direction when trailer and config disagree.
+        job_b = _job("b")
+        config = _config(job_b)
+        result_b = JobResult(job=job_b, effective_revsets=["repoactive/b"], produced_diff=True)
+        summary = RunSummary()
+        with patch("repoactive.runner.run_job", return_value=result_b) as mock_run_job:
+            _dispatch_job(
+                job=config.jobs[0],
+                config=config,
+                repo_path=REPO,
+                summary=summary,
+                blocked=set(),
+                run_names={"b"},
+                successors=frozenset({"b"}),
+            )
+        mock_run_job.assert_called_once()
 
     def test_success_records_result(self) -> None:
         config = _config(_job("a"))
@@ -2331,6 +2484,77 @@ class TestRunAll:
         assert all(c.kwargs.get("revset") is not None for c in calls)
         called_names = {c.kwargs["job"].name for c in mock_run_job.call_args_list}
         assert called_names == {"a"}
+
+    @staticmethod
+    def _successor_config(*, successor_cooldown: str | None = None) -> Config:
+        """Build a config: a with a cooldown, b stacked on a (optionally with its own cooldown)."""
+        b: dict[str, object] = {"name": "b", "command": "cmd", "title": "b", "depends_on": ["a"]}
+        if successor_cooldown:
+            b["cooldown_period"] = successor_cooldown
+        return Config.model_validate(
+            {
+                "platform": [{"url": "https://gitlab.com", "type": "gitlab", "token_env": "T"}],
+                "jobs": [
+                    {"name": "a", "command": "cmd", "title": "a", "cooldown_period": "7d"},
+                    b,
+                ],
+            }
+        )
+
+    @staticmethod
+    def _stub_successors(mock_jj: MagicMock, names: set[str]) -> None:
+        """Make successor expansion (the revset call) return ``names``."""
+        mock_jj.return_value.pending_job_names.side_effect = lambda revset=None: (
+            names if revset is not None else set()
+        )
+
+    @patch("repoactive.runner.run_job")
+    def test_successor_skipped_when_selected_job_on_cooldown(
+        self, mock_run_job: MagicMock, mock_jj: MagicMock, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # Explicitly selecting a pulls in b (stacked above a's bookmark), but a
+        # is on cooldown: nothing below b changed, so b is skipped too and its
+        # bookmark is left alone in the absorb phase.
+        mock_jj.return_value.last_job_commit_date.return_value = datetime(2026, 1, 1, tzinfo=UTC)
+        self._stub_successors(mock_jj, {"b"})
+
+        summary = run_all(config=self._successor_config(), repo_path=REPO, requested_names=["a"])
+
+        mock_run_job.assert_not_called()
+        assert summary.on_cooldown == {"a"}
+        assert summary.successor_skipped == {"b"}
+        assert summary.ok  # both skips are intentional
+        mock_jj.return_value.bookmark_delete.assert_not_called()
+        out = capsys.readouterr().out
+        assert "==> [b] skipped (successor: no dependency ran)" in out
+        assert "1 successors unchanged" in out
+
+    @patch("repoactive.runner.run_job")
+    def test_successor_runs_when_selected_job_runs(
+        self, mock_run_job: MagicMock, mock_jj: MagicMock
+    ) -> None:
+        # a is off cooldown and runs; successor b rebuilds on top of it even
+        # though b's own cooldown is active (its base just moved). b's cooldown
+        # query is never made — the bypass short-circuits it.
+        mock_jj.return_value.last_job_commit_date.side_effect = lambda **kw: (
+            datetime(2026, 1, 1, tzinfo=UTC) if "b" in kw["job_names"] else None
+        )
+        self._stub_successors(mock_jj, {"b"})
+        mock_run_job.return_value = _result(_job("x"), revsets=["repoactive/x"])
+
+        summary = run_all(
+            config=self._successor_config(successor_cooldown="7d"),
+            repo_path=REPO,
+            requested_names=["a"],
+        )
+
+        called_names = {c.kwargs["job"].name for c in mock_run_job.call_args_list}
+        assert called_names == {"a", "b"}
+        assert not summary.successor_skipped
+        queried = [
+            c.kwargs["job_names"] for c in mock_jj.return_value.last_job_commit_date.call_args_list
+        ]
+        assert {"b"} not in queried
 
     @patch("repoactive.runner.run_job")
     def test_local_run_prints_restore_hint_at_end(

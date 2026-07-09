@@ -3,15 +3,21 @@
 ## 0.2.5 - unreleased
 
 - A new `cooldown_on` field on a job lists the names of broader jobs whose
-  recent landing should also count as a cooldown trigger. Once any listed job
-  lands, the current job stays quiet for its `cooldown_period` instead of
-  opening a redundant MR. `cooldown_on` requires `cooldown_period` to be set;
-  unknown names and self-references are rejected at config load time.
+  recent landing should also count as a cooldown trigger. Once any listed
+  job lands, the current job stays quiet for its `cooldown_period` instead
+  of opening a redundant MR. `cooldown_on` requires `cooldown_period` to be
+  set; unknown names and self-references are rejected at config load time.
 - **Bug fix:** a job on cooldown whose branch was still open (unmerged) was
   previously skipped entirely, leaving the branch un-rebased and its MR
   lingering. Cooldown now gates only the start of fresh work; if the job
   already has an open branch it is still refreshed and the empty-diff path
   closes the MR normally.
+- Explicitly selecting a job now pulls in its successors — jobs whose
+  commits sit above the selected job's bookmark — so the whole stack is
+  rebuilt in one run. A successor runs only when something below it actually
+  ran: it bypasses its own cooldown when the selected job updates, and is
+  skipped (bookmark untouched) when the selected job was itself
+  cooldown-skipped.
 
 ## 0.2.4 - 2026-07-08
 

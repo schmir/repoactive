@@ -155,10 +155,15 @@ class RunSummary:
     failed: dict[str, Exception] = field(default_factory=dict)
     skipped: set[str] = field(default_factory=set)
     on_cooldown: set[str] = field(default_factory=set)
+    # Successor jobs skipped because nothing below them in the stack ran this
+    # run (see _dispatch_job). Like on_cooldown, an intentional skip: the job's
+    # bookmark is left alone in the absorb phase.
+    successor_skipped: set[str] = field(default_factory=set)
 
     @property
     def ok(self) -> bool:
-        # cooldown is an intentional skip, not a failure, so it does not affect ok.
+        # cooldown and successor skips are intentional, not failures, so they
+        # do not affect ok.
         return not self.failed and not self.skipped
 
     def print_report(self) -> None:
@@ -173,6 +178,11 @@ class RunSummary:
             + (f", {len(self.failed)} failed" if self.failed else "")
             + (f", {len(self.skipped)} skipped" if self.skipped else "")
             + (f", {len(self.on_cooldown)} on cooldown" if self.on_cooldown else "")
+            + (
+                f", {len(self.successor_skipped)} successors unchanged"
+                if self.successor_skipped
+                else ""
+            )
             + "."
         )
 
@@ -749,39 +759,54 @@ def _select_jobs(
 
 @dataclass
 class JobSelection:
-    """The outcome of ``_select_run_jobs``: the ordered jobs and the refresh subset.
+    """The outcome of ``_select_run_jobs``: the ordered jobs and the force-included subsets.
 
     ``refreshed`` names the jobs pulled in because they have an unmerged branch
     (empty for explicit selection). It lets the run bypass the cooldown skip for
     those jobs so their branches are rebased (ADR 0003) without a second
     unmerged-branch query.
+
+    ``successors`` names the jobs pulled in because their commits sit above a
+    selected job's bookmark (``_expand_successors``). They exist to be rebuilt
+    when the stack below them moves: they bypass their own cooldown, but are
+    skipped when every dependency was itself skipped this run — an unchanged
+    stack needs no rebuild (see ``_dispatch_job``).
     """
 
     jobs: list[Job]
     refreshed: frozenset[str]
+    successors: frozenset[str] = frozenset()
 
 
-def _expand_successors(*, selected: list[Job], config: Config, repo: JJ) -> list[Job]:
+def _expand_successors(*, selection: JobSelection, config: Config, repo: JJ) -> JobSelection:
     """Force-include jobs whose commits sit anywhere in the stack above a selected job's bookmark.
 
     Queries all unmerged descendants of the selected bookmarks in one shot and
     merges any named jobs into the selection. This keeps stacks fresh in one run —
     when A is selected and B (or C, stacked on B) has its last commit above A's
     bookmark, it is included so its result is rebuilt on top of A's new output.
+    Whether a successor actually runs is decided at dispatch time: if A turns out
+    to be cooldown-skipped, its successors are skipped too (see ``_dispatch_job``).
     See docs/adr/0012-two-phase-commit-run-then-absorb.md.
     """
     known_names = {j.name for j in config.jobs}
-    selected_names = {j.name for j in selected}
-    bookmarks = [j.resolve(config.job_defaults).branch_name() for j in selected]
+    selected_names = {j.name for j in selection.jobs}
+    bookmarks = [j.resolve(config.job_defaults).branch_name() for j in selection.jobs]
     revset = " | ".join(f"present({b})" for b in bookmarks)
     successor_names = (repo.pending_job_names(revset=revset) & known_names) - selected_names
     if not successor_names:
-        return selected
-    return _select_jobs(
-        jobs=config.jobs,
-        requested_names=selected_names | successor_names,
-        requested_tags=set(),
-        refresh_names=set(),
+        return selection
+    # selected_names already contains the refreshed jobs (the first _select_jobs
+    # call force-included them), so only the successors need force-including here.
+    return JobSelection(
+        jobs=_select_jobs(
+            jobs=config.jobs,
+            requested_names=selected_names,
+            requested_tags=set(),
+            refresh_names=successor_names,
+        ),
+        refreshed=selection.refreshed,
+        successors=frozenset(successor_names),
     )
 
 
@@ -815,9 +840,11 @@ def _select_run_jobs(
         refresh_names=refresh_names,
     )
 
-    selected = _expand_successors(selected=selected, config=config, repo=repo)
-
-    return JobSelection(jobs=selected, refreshed=frozenset(refresh_names))
+    return _expand_successors(
+        selection=JobSelection(jobs=selected, refreshed=frozenset(refresh_names)),
+        config=config,
+        repo=repo,
+    )
 
 
 def _dispatch_job(  # noqa: PLR0913
@@ -829,6 +856,7 @@ def _dispatch_job(  # noqa: PLR0913
     blocked: set[str],
     run_names: set[str],
     open_branches: frozenset[str] = frozenset(),
+    successors: frozenset[str] = frozenset(),
 ) -> list[Job]:
     """Run a single job, recording its outcome in ``summary``/``blocked``.
 
@@ -838,8 +866,11 @@ def _dispatch_job(  # noqa: PLR0913
     skipped. ``run_names`` is the set of job names already in this run, used to
     reject an emitted job that collides with an existing name. ``open_branches``
     names the jobs that already have an unmerged branch; such a job is never
-    cooldown-skipped, so its branch is refreshed (ADR 0003). The plan is built
-    in the absorb phase (phase 2), not here.
+    cooldown-skipped, so its branch is refreshed (ADR 0003). ``successors``
+    names the jobs force-included because their commits sit above a selected
+    job's bookmark; they bypass their own cooldown but are skipped when every
+    dependency was itself skipped this run. The plan is built in the absorb
+    phase (phase 2), not here.
     """
     blocking_deps = [d for d in job.depends_on if d in blocked]
     if blocking_deps:
@@ -869,18 +900,39 @@ def _dispatch_job(  # noqa: PLR0913
     resolved_job = job.resolve(config.job_defaults)
     parents = _compute_parents(resolved_job, summary.results)
     logger.debug("[%s] computed parents: %s", job.name, parents)
+    # A successor exists to be rebuilt when the stack below it moves. If every
+    # dependency was itself skipped this run (cooldown or an earlier successor
+    # skip), nothing it builds on changed, so re-running it would reproduce the
+    # same result; record a no-op so its own successors skip too and the absorb
+    # phase leaves its bookmark alone. Judged on depends_on, not the commit
+    # graph: a successor whose config no longer declares the dependency it is
+    # stacked on falls through and runs — the safe direction.
+    not_run = summary.on_cooldown | summary.successor_skipped
+    if job.name in successors and job.depends_on and all(dep in not_run for dep in job.depends_on):
+        print(f"==> [{job.name}] skipped (successor: no dependency ran)")
+        summary.successor_skipped.add(job.name)
+        summary.results[job.name] = JobResult(
+            job=resolved_job, effective_revsets=parents, produced_diff=False
+        )
+        return []
+
     # Cooldown only throttles *starting fresh work*. A job that already has an
     # open (unmerged) branch must always run so it is rebased on the latest trunk
     # and, when its change is now redundant, produces an empty diff that
     # self-closes the MR via the empty-diff path; skipping it here would leave the
     # branch un-rebased and orphan its MR, defeating the refresh guarantee of
-    # ADR 0003.
+    # ADR 0003. A successor bypasses cooldown for the same reason: its base just
+    # moved, so it must rebuild regardless of when it last landed.
     #
     # Checked before the emits_jobs branch on purpose: a generator on cooldown
     # emits nothing, throttling its whole fan-out as a unit (the dual trailer
     # records a recent child landing as the generator's); a generator has no
     # branch, so it is never in open_branches. See docs/adr/0004-job-generators.md.
-    if job.name not in open_branches and (last_run := _on_cooldown(resolved_job, repo_path)):
+    if (
+        job.name not in open_branches
+        and job.name not in successors
+        and (last_run := _on_cooldown(resolved_job, repo_path))
+    ):
         elapsed = datetime.now(UTC) - last_run
         elapsed_str = _format_duration(elapsed.total_seconds())
         print(
@@ -1033,9 +1085,9 @@ def _absorb_results(
 
             if not result.produced_diff:
                 # Only delete the bookmark when the command ran and produced no
-                # diff. Cooldown is an intentional skip — leave its bookmark
-                # alone so the branch is not destroyed.
-                if job.name not in summary.on_cooldown:
+                # diff. Cooldown and successor skips are intentional — leave
+                # their bookmarks alone so the branch is not destroyed.
+                if job.name not in summary.on_cooldown | summary.successor_skipped:
                     _absorb_no_diff_bookmark(job, result, bookmark, repo=repo, plan=plan)
                 continue
 
@@ -1143,6 +1195,7 @@ def _run_jobs(  # noqa: PLR0913
     repo_path: Path,
     summary: RunSummary,
     open_branches: frozenset[str] = frozenset(),
+    successors: frozenset[str] = frozenset(),
 ) -> list[Job]:
     """Run ``ordered_jobs`` in topological order, expanding generators in place.
 
@@ -1161,6 +1214,9 @@ def _run_jobs(  # noqa: PLR0913
     ``open_branches`` names the jobs being refreshed because they already have an
     unmerged branch; they bypass the cooldown skip so their branches are rebased
     (ADR 0003). Empty for explicit selection, which does not refresh (ADR 0003).
+    ``successors`` names the jobs force-included because their commits sit above
+    a selected job's bookmark; they run only when something below them in the
+    stack ran (see _dispatch_job).
     """
     # Names of jobs that failed or were skipped - their dependents are blocked.
     blocked: set[str] = set()
@@ -1179,6 +1235,7 @@ def _run_jobs(  # noqa: PLR0913
             blocked=blocked,
             run_names={j.name for j in ordered_jobs},
             open_branches=open_branches,
+            successors=successors,
         )
         if emitted:
             # Track the new jobs' bookmarks so a branch an earlier run already
@@ -1279,6 +1336,7 @@ def run_all(  # noqa: PLR0913
             repo_path=repo_path,
             summary=summary,
             open_branches=selection.refreshed,
+            successors=selection.successors,
         )
 
         # Phase 2: absorb fresh commits into old commits (preserving change-ids),
