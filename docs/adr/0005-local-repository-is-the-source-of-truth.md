@@ -18,7 +18,7 @@ remote before a run. Three load-bearing decisions read that local view:
   `::<base>`). See [ADR 0001](0001-no-schedule-field.md) for why this
   trailer-based gating is the foundation the design rests on.
 - **Unmerged-branch refresh.** The bare run sweeps up jobs whose last commit
-  is not an ancestor of `trunk()` (`JJ.unmerged_job_names`, revset
+  is not an ancestor of `trunk()` (`JJ.pending_job_names`, revset
   `~(::trunk())`) and rebases them onto the current `trunk()` — see
   [ADR 0003](0003-refresh-unmerged-branches-in-default-run.md).
 

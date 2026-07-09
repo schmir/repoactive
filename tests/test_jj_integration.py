@@ -682,7 +682,7 @@ class TestUnmergedJobNames:
         local, _ = repo_with_remote
         self._establish_trunk(local)
         local.describe("work\n\nRepoactive-Job: job-x")
-        assert local.unmerged_job_names() == {"job-x"}
+        assert local.pending_job_names() == {"job-x"}
 
     def test_excludes_commit_merged_into_trunk(self, repo_with_remote: tuple[JJ, Path]) -> None:
         local, _ = repo_with_remote
@@ -691,7 +691,7 @@ class TestUnmergedJobNames:
         # land the job commit on trunk: it becomes an ancestor of trunk()
         local.bookmark_set("main")
         local.git_push_bookmarks("main")
-        assert local.unmerged_job_names() == set()
+        assert local.pending_job_names() == set()
 
     def test_excludes_unmerged_commit_without_trailer(
         self, repo_with_remote: tuple[JJ, Path]
@@ -699,7 +699,7 @@ class TestUnmergedJobNames:
         local, _ = repo_with_remote
         self._establish_trunk(local)
         local.describe("plain work, no trailer")
-        assert local.unmerged_job_names() == set()
+        assert local.pending_job_names() == set()
 
     def test_returns_multiple_job_names(self, repo_with_remote: tuple[JJ, Path]) -> None:
         local, _ = repo_with_remote
@@ -707,13 +707,13 @@ class TestUnmergedJobNames:
         local.describe("a\n\nRepoactive-Job: job-a")
         local.new("main")
         local.describe("b\n\nRepoactive-Job: job-b")
-        assert local.unmerged_job_names() == {"job-a", "job-b"}
+        assert local.pending_job_names() == {"job-a", "job-b"}
 
     def test_empty_when_nothing_unmerged(self, repo_with_remote: tuple[JJ, Path]) -> None:
         local, _ = repo_with_remote
         self._establish_trunk(local)
         # only the empty working copy sits above trunk; it has no trailer
-        assert local.unmerged_job_names() == set()
+        assert local.pending_job_names() == set()
 
 
 class TestRequireColocatedRepo:

@@ -115,18 +115,20 @@ Push bookmarks and create/update MRs, exactly as today.
 
 ### Companion: select successor jobs automatically
 
-When job A is selected for a run, repoactive should inspect the commits that
-sit directly on top of A's current bookmark commit (its children in the
-commit DAG), read their `Repoactive-Job` trailers, and force-include the
-named jobs into the current run.
+When job A is selected for a run, repoactive inspects all unmerged commits
+that are descendants of A's current bookmark, reads their `Repoactive-Job`
+trailers, and force-includes the named jobs into the current run. This is
+implemented as a single `pending_job_names(revset=...)` call using a
+`descendants()` revset, so the entire stack above A is discovered in one
+query without iteration.
 
-This is distinct from the existing `unmerged_job_names` mechanism (ADR
-0003), which includes all jobs that have any unmerged branch regardless of
-structure. The new selection is targeted: only jobs whose commit is an
-immediate child of a selected job's commit are added. The intent is
-consistency — if A changes, any job that built its last result on top of A's
-old commit should rebuild on top of A's new result, so the whole stack stays
-fresh in a single run.
+This is distinct from the no-arg `pending_job_names()` mechanism (ADR 0003),
+which includes all jobs that have any unmerged branch regardless of
+structure. The successor expansion is targeted: only jobs whose commits sit
+above a selected job's bookmark are added. The intent is consistency — if A
+changes, any job that built its last result on top of A's old commit should
+rebuild on top of A's new result, so the whole stack stays fresh in a single
+run.
 
 Without this, the absorb phase would update A's old commit and jj would
 auto-rebase B's old commit on top of it — but B's content would remain the

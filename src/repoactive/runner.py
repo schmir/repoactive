@@ -761,6 +761,30 @@ class JobSelection:
     refreshed: frozenset[str]
 
 
+def _expand_successors(*, selected: list[Job], config: Config, repo: JJ) -> list[Job]:
+    """Force-include jobs whose commits sit anywhere in the stack above a selected job's bookmark.
+
+    Queries all unmerged descendants of the selected bookmarks in one shot and
+    merges any named jobs into the selection. This keeps stacks fresh in one run —
+    when A is selected and B (or C, stacked on B) has its last commit above A's
+    bookmark, it is included so its result is rebuilt on top of A's new output.
+    See docs/adr/0012-two-phase-commit-run-then-absorb.md.
+    """
+    known_names = {j.name for j in config.jobs}
+    selected_names = {j.name for j in selected}
+    bookmarks = [j.resolve(config.job_defaults).branch_name() for j in selected]
+    revset = " | ".join(f"present({b})" for b in bookmarks)
+    successor_names = (repo.pending_job_names(revset=revset) & known_names) - selected_names
+    if not successor_names:
+        return selected
+    return _select_jobs(
+        jobs=config.jobs,
+        requested_names=selected_names | successor_names,
+        requested_tags=set(),
+        refresh_names=set(),
+    )
+
+
 def _select_run_jobs(
     *,
     config: Config,
@@ -770,13 +794,6 @@ def _select_run_jobs(
 ) -> JobSelection:
     """Pick and order the jobs to run, accounting for unmerged-branch refresh and successors.
 
-    After the initial selection, expands the set by force-including any job
-    whose commit is a direct child of a selected job's bookmark. This fixpoint
-    loop keeps stacks fresh in one run — when A is selected and B's last commit
-    sits on A's bookmark, B is included so its result is rebuilt on top of A's
-    new output rather than left structurally correct but semantically stale.
-    See docs/adr/0012-two-phase-commit-run-then-absorb.md.
-
     Returns a ``JobSelection`` carrying the ordered jobs and the refreshed
     subset; the caller reuses ``refreshed`` so a job being refreshed bypasses
     the cooldown skip (ADR 0003) without a second unmerged-branch query.
@@ -785,7 +802,7 @@ def _select_run_jobs(
     # stale branch is rebased on trunk now rather than at the job's next run.
     refresh_names: set[str] = set()
     if not requested_names and not requested_tags:
-        refresh_names = repo.unmerged_job_names() & {j.name for j in config.jobs}
+        refresh_names = repo.pending_job_names() & {j.name for j in config.jobs}
         if refresh_names:
             print(f"==> refreshing unmerged branches: {', '.join(sorted(refresh_names))}")
         else:
@@ -798,24 +815,7 @@ def _select_run_jobs(
         refresh_names=refresh_names,
     )
 
-    # Successor expansion: force-include jobs whose existing commits sit directly
-    # on a selected job's bookmark. Repeat until no new jobs are added.
-    known_names = {j.name for j in config.jobs}
-    selected_names = {j.name for j in selected}
-    while True:
-        bookmarks = [j.resolve(config.job_defaults).branch_name() for j in selected]
-        successor_names = repo.children_job_names(bookmarks) & known_names
-        new_names = successor_names - selected_names
-        if not new_names:
-            break
-        selected_names |= new_names
-        selected = _select_jobs(
-            jobs=config.jobs,
-            requested_names=selected_names,
-            requested_tags=set(),
-            refresh_names=set(),
-        )
-        selected_names = {j.name for j in selected}
+    selected = _expand_successors(selected=selected, config=config, repo=repo)
 
     return JobSelection(jobs=selected, refreshed=frozenset(refresh_names))
 

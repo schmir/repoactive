@@ -28,6 +28,7 @@ from repoactive.runner import (
     _build_generated_jobs,
     _compute_parents,
     _dispatch_job,
+    _expand_successors,
     _load_job_specs,
     _prepare_repo,
     _run_command,
@@ -351,11 +352,85 @@ class TestSelectJobs:
 
 
 def _mock_repo(unmerged: set[str] | None = None) -> MagicMock:
-    """Return a JJ stub whose unmerged_job_names returns the given set."""
+    """Return a JJ stub differentiating unmerged-branch refresh (no revset) from successor expansion (with revset)."""
     repo = MagicMock()
-    repo.unmerged_job_names.return_value = unmerged or set()
-    repo.children_job_names.return_value = set()
+    unmerged_set = unmerged or set()
+
+    def _side_effect(revset: str | None = None) -> set[str]:
+        return set() if revset is not None else unmerged_set
+
+    repo.pending_job_names.side_effect = _side_effect
     return repo
+
+
+def _mock_repo_with_successors(successors: set[str]) -> MagicMock:
+    """Return a JJ stub whose successor expansion (revset call) returns the given set."""
+    repo = MagicMock()
+
+    def _side_effect(revset: str | None = None) -> set[str]:
+        return successors if revset is not None else set()
+
+    repo.pending_job_names.side_effect = _side_effect
+    return repo
+
+
+class TestExpandSuccessors:
+    def test_no_successors_returns_selected_unchanged(self) -> None:
+        config = _config(_djob("a"), _djob("b"))
+        selected = _select_jobs(jobs=config.jobs, requested_names={"a"})
+        repo = _mock_repo_with_successors(set())
+        result = _expand_successors(selected=selected, config=config, repo=repo)
+        assert _names(result) == ["a"]
+
+    def test_direct_successor_is_added(self) -> None:
+        # b's last commit sits on a's bookmark, so b is pulled in.
+        config = _config(_djob("a"), _djob("b"))
+        selected = _select_jobs(jobs=config.jobs, requested_names={"a"})
+        repo = _mock_repo_with_successors({"b"})
+        result = _expand_successors(selected=selected, config=config, repo=repo)
+        assert _names(result) == ["a", "b"]
+
+    def test_deep_stack_expanded_in_one_query(self) -> None:
+        # descendants() finds b and c above a's bookmark in a single call.
+        config = _config(_djob("a"), _djob("b"), _djob("c"))
+        selected = _select_jobs(jobs=config.jobs, requested_names={"a"})
+        repo = _mock_repo_with_successors({"b", "c"})
+        result = _expand_successors(selected=selected, config=config, repo=repo)
+        assert _names(result) == ["a", "b", "c"]
+        repo.pending_job_names.assert_called_once()
+
+    def test_unknown_successor_is_ignored(self) -> None:
+        # pending_job_names may return names not present in config (e.g. removed jobs).
+        config = _config(_djob("a"))
+        selected = _select_jobs(jobs=config.jobs, requested_names={"a"})
+        repo = _mock_repo_with_successors({"gone"})
+        result = _expand_successors(selected=selected, config=config, repo=repo)
+        assert _names(result) == ["a"]
+
+    def test_already_selected_successor_is_a_noop(self) -> None:
+        config = _config(_djob("a"), _djob("b"))
+        selected = _select_jobs(jobs=config.jobs, requested_names={"a", "b"})
+        repo = _mock_repo_with_successors({"b"})
+        result = _expand_successors(selected=selected, config=config, repo=repo)
+        assert _names(result) == ["a", "b"]
+
+    def test_bookmarks_passed_as_revset(self) -> None:
+        config = _config(_djob("a"), _djob("b"))
+        selected = _select_jobs(jobs=config.jobs, requested_names={"a", "b"})
+        repo = _mock_repo_with_successors(set())
+        _expand_successors(selected=selected, config=config, repo=repo)
+        [call_args] = repo.pending_job_names.call_args_list
+        revset = call_args.kwargs["revset"]
+        assert "present(repoactive/a)" in revset
+        assert "present(repoactive/b)" in revset
+
+    def test_successor_pulls_in_its_dependencies(self) -> None:
+        # c depends on b; when c is a successor of a, b must be included too.
+        config = _config(_djob("a"), _djob("b"), _djob("c", depends_on=["b"]))
+        selected = _select_jobs(jobs=config.jobs, requested_names={"a"})
+        repo = _mock_repo_with_successors({"c"})
+        result = _expand_successors(selected=selected, config=config, repo=repo)
+        assert _names(result) == ["a", "b", "c"]
 
 
 class TestSelectRunJobs:
@@ -396,7 +471,10 @@ class TestSelectRunJobs:
         )
         assert _names(result.jobs) == ["b"]
         assert result.refreshed == frozenset()
-        repo.unmerged_job_names.assert_not_called()
+        # Unmerged branch refresh was skipped — only successor expansion calls (with revset) were made.
+        assert all(
+            c.kwargs.get("revset") is not None for c in repo.pending_job_names.call_args_list
+        )
 
     def test_requested_tags_skip_unmerged_query(self) -> None:
         config = _config(_djob("a", tags=["weekly"]), _djob("b"))
@@ -405,7 +483,9 @@ class TestSelectRunJobs:
             config=config, repo=repo, requested_names=None, requested_tags=["weekly"]
         )
         assert _names(result.jobs) == ["a"]
-        repo.unmerged_job_names.assert_not_called()
+        assert all(
+            c.kwargs.get("revset") is not None for c in repo.pending_job_names.call_args_list
+        )
 
     def test_unknown_requested_job_raises(self) -> None:
         config = _config(_djob("a"))
@@ -1819,7 +1899,7 @@ class TestRunAll:
 
     @pytest.fixture(autouse=True)
     def mock_jj(self) -> Iterator[MagicMock]:
-        """Stub the JJ class run_all constructs (unmerged_job_names + cooldown query).
+        """Stub the JJ class run_all constructs (pending_job_names + cooldown query).
 
         Also bypass the real per-repository run lock (REPO is a fake path with no
         ``.jj`` directory); lock behaviour is covered separately in test_lock.py.
@@ -1828,8 +1908,7 @@ class TestRunAll:
             patch("repoactive.runner.run_lock"),
             patch("repoactive.runner.JJ") as cls,
         ):
-            cls.return_value.unmerged_job_names.return_value = set()
-            cls.return_value.children_job_names.return_value = set()
+            cls.return_value.pending_job_names.return_value = set()
             cls.return_value.last_job_commit_date.return_value = None
             cls.return_value.remote_bookmark_exists.return_value = False
             cls.return_value.op_id.return_value = "OP-START"
@@ -2229,7 +2308,7 @@ class TestRunAll:
         self, mock_run_job: MagicMock, mock_jj: MagicMock
     ) -> None:
         # b is weekly (not in the default run) but has an unmerged branch, so it runs.
-        mock_jj.return_value.unmerged_job_names.return_value = {"b"}
+        mock_jj.return_value.pending_job_names.return_value = {"b"}
         config = _config(_djob("a"), _djob("b", tags=["weekly"]))
         mock_run_job.return_value = _result(_job("x"), revsets=["repoactive/x"])
 
@@ -2247,7 +2326,9 @@ class TestRunAll:
 
         run_all(config=config, repo_path=REPO, requested_names=["a"])
 
-        mock_jj.return_value.unmerged_job_names.assert_not_called()
+        # Branch refresh was skipped — only successor expansion calls (with revset) were made.
+        calls = mock_jj.return_value.pending_job_names.call_args_list
+        assert all(c.kwargs.get("revset") is not None for c in calls)
         called_names = {c.kwargs["job"].name for c in mock_run_job.call_args_list}
         assert called_names == {"a"}
 

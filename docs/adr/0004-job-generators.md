@@ -100,7 +100,7 @@ differences in behavior:
    rejected `schedule` field. Each child's own `cooldown_period` still
    throttles it individually via its own-name trailer. Implementation
    requirement: `Repoactive-Job` must be read as a **multi-valued** trailer
-   (`has_recent_job_commit`, `unmerged_job_names`), and `_publish_job` must
+   (`has_recent_job_commit`, `pending_job_names`), and `_publish_job` must
    know an emitted job's generator (a repoactive-set `generated_by` field,
    not user-written).
 
@@ -152,9 +152,9 @@ Run flow (a refinement of `run_all` / `_select_run_jobs`):
   generation phase and the inheritance rules.
 - **Unmerged children pull their generator back into the default run.**
   Because a child's commit also carries the generator's trailer (behavior
-  4), an unmerged child makes `unmerged_job_names()` surface the
-  _generator_, which is a static config job — so `_select_run_jobs`'s
-  unmerged refresh (`unmerged_job_names() & {config jobs}`,
+  4), an unmerged child makes `pending_job_names()` surface the _generator_,
+  which is a static config job — so `_select_run_jobs`'s unmerged refresh
+  (`pending_job_names() & {config jobs}`,
   [ADR 0003](0003-refresh-unmerged-branches-in-default-run.md))
   force-includes the generator, re-runs it, and re-emits the batch, keeping
   still-applicable children rebased on `trunk()`. The residual gap is a
