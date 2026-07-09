@@ -73,3 +73,12 @@ it.
   — Accepted. A job listing upstream job names in `run_only_if_changed` is
   skipped (with a no-op result, not a block) when none of those jobs
   produced a diff in the current run.
+- [0014 — Keep the `disabled` field](0014-keep-disabled-field.md) —
+  Accepted. `disabled = true` stays as sugar for the `disabled` tag rather
+  than requiring `tags = ["disabled"]`, keeping the common on/off toggle
+  legible.
+- [0015 — `cooldown_on` throttles a job when a superset lands](0015-cooldown-on.md)
+  — Accepted. A job lists broader jobs in `cooldown_on`; its cooldown check
+  then also counts a recent landing of any named job, so once a superset
+  lands, the narrower job stays quiet for its `cooldown_period` instead of
+  opening a redundant MR. A read-only query, not an extra trailer.
