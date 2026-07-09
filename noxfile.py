@@ -16,6 +16,12 @@ def tests(session: nox.Session) -> None:
     session.run("pytest", *session.posargs)
 
 
+@nox_uv.session(uv_groups=["dev"])
+def ty(session: nox.Session) -> None:
+    """Type check with ty."""
+    session.run("ty", "check")
+
+
 @nox_uv.session
 def validate_config(session: nox.Session) -> None:
     """Validate repoactive's own config."""

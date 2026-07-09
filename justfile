@@ -18,11 +18,8 @@ coverage *args:
 # Run quick CI checks: treefmt, type check, tests, config + schema validation
 ci:
     treefmt
+    uv run nox -s ty tests-3.14 check_schema validate_config  -- -m 'not slow'
     # scripts/prek.sh run --all-files
-    uv run ty check
-    uv run pytest -m "not slow"
-    uv run nox -s validate_config
-    uv run nox -s check_schema
 
 # Run pyright (from PATH if available, else bundled node.js via uvx)
 pyright:
