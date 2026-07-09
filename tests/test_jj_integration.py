@@ -126,6 +126,28 @@ class TestDescribe:
         assert _description(repo) == "title\n\nbody"
 
 
+class TestGetDescription:
+    def test_returns_description_of_revision(self, repo: JJ) -> None:
+        repo.describe("my message")
+        assert repo.get_description("@") == "my message\n"
+
+    def test_multiline_description(self, repo: JJ) -> None:
+        repo.describe("title\n\nbody")
+        assert repo.get_description("@") == "title\n\nbody\n"
+
+    def test_empty_description(self, repo: JJ) -> None:
+        assert repo.get_description("@") == ""
+
+    def test_returns_description_of_ancestor(self, repo: JJ) -> None:
+        repo.describe("parent")
+        repo.new("@")
+        assert repo.get_description("@-") == "parent\n"
+
+    def test_raises_for_invalid_revision(self, repo: JJ) -> None:
+        with pytest.raises(CommandFailedError):
+            repo.get_description("does-not-exist")
+
+
 class TestNew:
     def test_creates_child_of_given_parent(self, repo: JJ) -> None:
         repo.describe("parent")
