@@ -227,6 +227,8 @@ class TestSelectJobs:
             config=config, requested_names=frozenset(), requested_tags=frozenset()
         ).select_run_jobs(_mock_repo(unmerged={"b"}))
         assert _names(result.jobs) == ["a", "b"]
+        # The refreshed subset is reported so the run can bypass cooldown for it.
+        assert result.refreshed == frozenset({"b"})
 
     def test_refresh_includes_dependencies(self) -> None:
         config = _config(
@@ -337,34 +339,6 @@ class TestExpandSuccessors:
 
 
 class TestJobSelector:
-    def test_bare_run_returns_default_jobs(self) -> None:
-        config = _config(_djob("a"), _djob("b", tags=["weekly"]))
-        repo = _mock_repo()
-        result = JobSelector(
-            config=config, requested_names=frozenset(), requested_tags=frozenset()
-        ).select_run_jobs(repo)
-        assert _names(result.jobs) == ["a"]
-
-    def test_bare_run_refreshes_unmerged_branches(self) -> None:
-        # A weekly job (out of the default run) with an unmerged branch is pulled in.
-        config = _config(_djob("a"), _djob("b", tags=["weekly"]))
-        repo = _mock_repo({"b"})
-        result = JobSelector(
-            config=config, requested_names=frozenset(), requested_tags=frozenset()
-        ).select_run_jobs(repo)
-        assert _names(result.jobs) == ["a", "b"]
-        # The refreshed subset is reported so the run can bypass cooldown for it.
-        assert result.refreshed == frozenset({"b"})
-
-    def test_bare_run_ignores_unmerged_names_not_in_config(self) -> None:
-        # A trailer for a removed/renamed job must not affect selection.
-        config = _config(_djob("a"))
-        repo = _mock_repo({"gone"})
-        result = JobSelector(
-            config=config, requested_names=frozenset(), requested_tags=frozenset()
-        ).select_run_jobs(repo)
-        assert _names(result.jobs) == ["a"]
-
     def test_requested_jobs_skip_unmerged_query(self) -> None:
         # Explicit selection does not consult unmerged branches.
         config = _config(_djob("a"), _djob("b"))
