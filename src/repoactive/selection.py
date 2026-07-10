@@ -66,53 +66,6 @@ def _drop_jobs_with_unselected_deps(
     return frozenset(selected)
 
 
-def _select_jobs(
-    *,
-    jobs: list[Job],
-    requested_names: frozenset[str],
-    requested_tags: frozenset[str] = frozenset(),
-    refresh_names: frozenset[str] = frozenset(),
-) -> list[Job]:
-    """Return the filtered, topologically sorted jobs to run.
-
-    Selection is by tag. With no names and no tags this is the default run:
-    every job carrying ``DEFAULT_TAG`` (see ``Job.effective_tags``), with a job
-    dropped if any dependency is not itself selected. Naming jobs or passing
-    tags is explicit selection: the union of the named jobs and the jobs
-    matching any requested tag (``DEFAULT_TAG`` is not implied), with all
-    dependencies force-included. Names and tags are assumed valid - the caller
-    (``JobSelector``) validates them.
-
-    ``refresh_names`` names the jobs that currently have an unmerged branch;
-    they are force-included regardless of tag, along with their dependencies,
-    so the default run keeps unmerged branches rebased on trunk rather than
-    waiting for the job's next run.
-    """
-    jobs = topological_sort(jobs)
-
-    selected: frozenset[str]
-    if requested_names or requested_tags:
-        selected = requested_names | {j.name for j in jobs if j.effective_tags() & requested_tags}
-        selected = _include_dependencies(jobs, selected)
-    else:
-        selected = frozenset(j.name for j in jobs if DEFAULT_TAG in j.effective_tags())
-        selected = _drop_jobs_with_unselected_deps(jobs, selected)
-
-    if refresh_names:
-        selected = selected | refresh_names
-        selected = _include_dependencies(jobs, selected)
-
-    selected_jobs = [j for j in jobs if j.name in selected]
-    logger.debug(
-        "selected jobs: %s (requested=%s, tags=%s, refresh=%s)",
-        [j.name for j in selected_jobs],
-        sorted(requested_names),
-        sorted(requested_tags),
-        sorted(refresh_names),
-    )
-    return selected_jobs
-
-
 @dataclass
 class JobSelection:
     """The outcome of ``select_run_jobs``: the ordered jobs and the force-included subsets.
@@ -123,7 +76,7 @@ class JobSelection:
     unmerged-branch query.
 
     ``successors`` names the jobs pulled in because their commits sit above a
-    selected job's bookmark (``_expand_successors``). They exist to be rebuilt
+    selected job's bookmark (``select_run_jobs``). They exist to be rebuilt
     when the stack below them moves: they bypass their own cooldown, but are
     skipped when every dependency was itself skipped this run — an unchanged
     stack needs no rebuild (see ``_dispatch_job``).
@@ -132,37 +85,6 @@ class JobSelection:
     jobs: list[Job]
     refreshed: frozenset[str]
     successors: frozenset[str] = frozenset()
-
-
-def _expand_successors(*, selection: JobSelection, config: Config, repo: JJ) -> JobSelection:
-    """Force-include jobs whose commits sit anywhere in the stack above a selected job's bookmark.
-
-    Queries all unmerged descendants of the selected bookmarks in one shot and
-    merges any named jobs into the selection. This keeps stacks fresh in one run —
-    when A is selected and B (or C, stacked on B) has its last commit above A's
-    bookmark, it is included so its result is rebuilt on top of A's new output.
-    Whether a successor actually runs is decided at dispatch time: if A turns out
-    to be cooldown-skipped, its successors are skipped too (see ``_dispatch_job``).
-    See docs/adr/0012-two-phase-commit-run-then-absorb.md.
-    """
-    known_names = {j.name for j in config.jobs}
-    selected_names = {j.name for j in selection.jobs}
-    bookmarks = [j.resolve(config.job_defaults).branch_name() for j in selection.jobs]
-    revset = " | ".join(f"present({b})" for b in bookmarks)
-    successor_names = (repo.pending_job_names(revset=revset) & known_names) - selected_names
-    if not successor_names:
-        return selection
-    # selected_names already contains the refreshed jobs (the first _select_jobs
-    # call force-included them), so only the successors need force-including here.
-    return JobSelection(
-        jobs=_select_jobs(
-            jobs=config.jobs,
-            requested_names=frozenset(selected_names),
-            refresh_names=frozenset(successor_names),
-        ),
-        refreshed=selection.refreshed,
-        successors=frozenset(successor_names),
-    )
 
 
 class JobSelector:
@@ -184,8 +106,11 @@ class JobSelector:
     ) -> None:
         self.requested_names = requested_names
         self.requested_tags = requested_tags
-        self._all_job_names = frozenset(j.name for j in self.config.jobs)
-        self._all_tags = frozenset(t for j in self.config.jobs for t in j.effective_tags())
+        self._all_jobs = topological_sort(
+            [job.resolve(config.job_defaults) for job in config.jobs]
+        )
+        self._all_job_names = frozenset(j.name for j in self._all_jobs)
+        self._all_tags = frozenset(t for j in self._all_jobs for t in j.effective_tags())
         self._validate_selection()
 
     def _validate_selection(self) -> None:
@@ -198,11 +123,23 @@ class JobSelector:
             raise UnknownTagsError(unknown_tags)
 
     def select_run_jobs(self, repo: JJ) -> JobSelection:
-        """Pick and order the jobs to run, accounting for unmerged-branch refresh and successors.
+        """Pick and order the jobs to run.
+
+        Selection is by tag. With no names and no tags this is the default run:
+        every job carrying ``DEFAULT_TAG`` (see ``Job.effective_tags``), with a
+        job dropped if any dependency is not itself selected, plus any job with
+        an unmerged branch (refreshed so its stale branch is rebased on trunk
+        now rather than at the job's next run, ADR 0003). Naming jobs or passing
+        tags is explicit selection: the union of the named jobs and the jobs
+        matching any requested tag (``DEFAULT_TAG`` is not implied), with all
+        dependencies force-included and no unmerged-branch refresh. Either way,
+        jobs whose commits sit in the stack above a selected job's bookmark are
+        pulled in as successors so they are rebuilt on the new output (ADR 0012).
 
         Returns a ``JobSelection`` carrying the ordered jobs and the refreshed
-        subset; the caller reuses ``refreshed`` so a job being refreshed bypasses
-        the cooldown skip (ADR 0003) without a second unmerged-branch query.
+        and successor subsets; the caller reuses ``refreshed`` so a job being
+        refreshed bypasses the cooldown skip without a second unmerged-branch
+        query.
         """
         # On the bare default run, also refresh jobs with an unmerged branch so a
         # stale branch is rebased on trunk now rather than at the job's next run.
@@ -214,15 +151,41 @@ class JobSelector:
             else:
                 print("==> no unmerged branches to refresh")
 
-        selected = _select_jobs(
-            jobs=self.config.jobs,
-            requested_names=self.requested_names,
-            requested_tags=self.requested_tags,
-            refresh_names=frozenset(refresh_names),
+        selected: frozenset[str]
+        if self.requested_names or self.requested_tags:
+            selected = self.requested_names | {
+                j.name for j in self._all_jobs if j.effective_tags() & self.requested_tags
+            }
+            selected = _include_dependencies(self._all_jobs, selected)
+        else:
+            selected = frozenset(
+                j.name for j in self._all_jobs if DEFAULT_TAG in j.effective_tags()
+            )
+            selected = _drop_jobs_with_unselected_deps(self._all_jobs, selected)
+
+        if refresh_names:
+            selected = selected | refresh_names
+            selected = _include_dependencies(self._all_jobs, selected)
+
+        bookmarks = [j.branch_name() for j in self._all_jobs if j.name in selected]
+
+        revset = " | ".join(f"present({b})" for b in bookmarks)
+        successor_names = (repo.pending_job_names(revset=revset) & self._all_job_names) - selected
+        selected = selected | successor_names
+        selected = _include_dependencies(self._all_jobs, selected)
+
+        selected_jobs = [j for j in self._all_jobs if j.name in selected]
+        logger.debug(
+            "selected jobs: %s (requested=%s, tags=%s, refresh=%s, successors=%s)",
+            [j.name for j in selected_jobs],
+            sorted(self.requested_names),
+            sorted(self.requested_tags),
+            sorted(refresh_names),
+            sorted(successor_names),
         )
 
-        return _expand_successors(
-            selection=JobSelection(jobs=selected, refreshed=frozenset(refresh_names)),
-            config=self.config,
-            repo=repo,
+        return JobSelection(
+            jobs=selected_jobs,
+            refreshed=frozenset(refresh_names),
+            successors=frozenset(successor_names),
         )
