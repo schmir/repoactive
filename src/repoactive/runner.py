@@ -169,6 +169,31 @@ class RunSummary:
         )
 
 
+@dataclass
+class RunContext:
+    """Run-wide state shared by every job in a single run_all pass.
+
+    Built once in ``_run_jobs`` and threaded through ``_dispatch_job`` to
+    ``run_job`` / ``_run_generator_job`` so the per-job runners have a single
+    handle to the run's config, target repo, accumulating results, and selection.
+    ``selection`` is the live selection object (``_run_jobs`` splices
+    generator-emitted jobs into ``selection.jobs`` in place), so ``selection.jobs``
+    is always every job in the run.
+    """
+
+    config: Config
+    repo_path: Path
+    summary: RunSummary
+    blocked: set[str]
+    selection: JobSelection
+
+    @property
+    def secret_env_names(self) -> frozenset[str]:
+        # Token vars stripped from every job command's environment so a command
+        # cannot read the credential repoactive uses to push/create MRs.
+        return frozenset(self.config.token_env_names())
+
+
 def _compute_parents(job: Job, results: dict[str, JobResult]) -> list[str]:
     if not job.depends_on:
         return [job.base_branch or "trunk()"]
@@ -427,16 +452,15 @@ def _commit_job(
 
 
 def run_job(
+    ctx: RunContext,
     *,
     job: Job,
     parents: list[str],
-    repo_path: Path,
-    secret_env_names: frozenset[str] = frozenset(),
 ) -> JobResult:
     logger.debug("starting job: %s", job.model_dump_json(indent=2))
     logger.debug("parents: %s", parents)
     bookmark = job.branch_name()
-    repo = JJ(repo_path)
+    repo = JJ(ctx.repo_path)
     # Record the pre-existing bookmark's change-id so the absorb phase can
     # mutate it in place (preserving jj change-id continuity). None for new jobs.
     old_change_id = repo.bookmark_change_id(bookmark)
@@ -449,7 +473,7 @@ def run_job(
         ws.git_sync_head()
         logger.debug("[%s] running command: %s", job.name, job.command)
         try:
-            command_result = _run_command(job, ws.cwd, secret_env_names=secret_env_names)
+            command_result = _run_command(job, ws.cwd, secret_env_names=ctx.secret_env_names)
         except CommandError:
             # The command timed out or failed; discard only the fresh commit.
             # The old bookmark is completely unaffected.
@@ -607,36 +631,29 @@ def _on_cooldown(job: Job, repo_path: Path) -> datetime | None:
     return last_run
 
 
-def _dispatch_job(  # noqa: PLR0913
-    *,
-    job: Job,
-    config: Config,
-    repo_path: Path,
-    summary: RunSummary,
-    blocked: set[str],
-    run_names: set[str],
-    open_branches: frozenset[str] = frozenset(),
-    successors: frozenset[str] = frozenset(),
-) -> list[Job]:
-    """Run a single job, recording its outcome in ``summary``/``blocked``.
+def _dispatch_job(ctx: RunContext, *, job: Job) -> list[Job]:
+    """Run a single job, recording its outcome in ``ctx.summary``/``ctx.blocked``.
 
-    A failed or skipped job adds its name to ``blocked`` so its dependents are
+    A failed or skipped job adds its name to ``ctx.blocked`` so its dependents are
     skipped in turn. Returns the jobs a generator (``emits_jobs``) produced — an
     empty list for an ordinary job or a generator that emitted nothing/was
-    skipped. ``run_names`` is the set of job names already in this run, used to
-    reject an emitted job that collides with an existing name. ``open_branches``
-    names the jobs that already have an unmerged branch; such a job is never
-    cooldown-skipped, so its branch is refreshed (ADR 0003). ``successors``
-    names the jobs force-included because their commits sit above a selected
-    job's bookmark; they bypass their own cooldown but are skipped when every
-    dependency was itself skipped this run. The plan is built in the absorb
-    phase (phase 2), not here.
+    skipped. ``ctx.selection.jobs`` is every job in this run (``_run_jobs`` keeps
+    it in sync as generators emit), so its names reject an emitted job that
+    collides with an existing one. ``ctx.selection.refreshed`` names the jobs that
+    already have an unmerged branch; such a job is never cooldown-skipped, so its
+    branch is refreshed (ADR 0003). ``ctx.selection.successors`` names the jobs
+    force-included because their commits sit above a selected job's bookmark;
+    they bypass their own cooldown but are skipped when every dependency was
+    itself skipped this run. The plan is built in the absorb phase (phase 2), not
+    here.
     """
-    blocking_deps = [d for d in job.depends_on if d in blocked]
+    summary = ctx.summary
+    selection = ctx.selection
+    blocking_deps = [d for d in job.depends_on if d in ctx.blocked]
     if blocking_deps:
         print(f"==> [{job.name}] skipped (dependency failed: {', '.join(blocking_deps)})")
         summary.skipped.add(job.name)
-        blocked.add(job.name)
+        ctx.blocked.add(job.name)
         return []
 
     if job.run_only_if_changed:
@@ -666,7 +683,11 @@ def _dispatch_job(  # noqa: PLR0913
     # graph: a successor whose config no longer declares the dependency it is
     # stacked on falls through and runs — the safe direction.
     not_run = summary.on_cooldown | summary.successor_skipped
-    if job.name in successors and job.depends_on and all(dep in not_run for dep in job.depends_on):
+    if (
+        job.name in selection.successors
+        and job.depends_on
+        and all(dep in not_run for dep in job.depends_on)
+    ):
         print(f"==> [{job.name}] skipped (successor: no dependency ran)")
         summary.successor_skipped.add(job.name)
         summary.results[job.name] = JobResult(
@@ -685,11 +706,11 @@ def _dispatch_job(  # noqa: PLR0913
     # Checked before the emits_jobs branch on purpose: a generator on cooldown
     # emits nothing, throttling its whole fan-out as a unit (the dual trailer
     # records a recent child landing as the generator's); a generator has no
-    # branch, so it is never in open_branches. See docs/adr/0004-job-generators.md.
+    # branch, so it is never in selection.refreshed. See docs/adr/0004-job-generators.md.
     if (
-        job.name not in open_branches
-        and job.name not in successors
-        and (last_run := _on_cooldown(job, repo_path))
+        job.name not in selection.refreshed
+        and job.name not in selection.successors
+        and (last_run := _on_cooldown(job, ctx.repo_path))
     ):
         elapsed = datetime.now(UTC) - last_run
         elapsed_str = _format_duration(elapsed.total_seconds())
@@ -704,28 +725,15 @@ def _dispatch_job(  # noqa: PLR0913
         )
         return []
 
-    secret_env_names = frozenset(config.token_env_names())
-    if job.emits_jobs:
-        return _run_generator_job(
-            job=job,
-            parents=parents,
-            repo_path=repo_path,
-            summary=summary,
-            blocked=blocked,
-            run_names=run_names,
-            all_config_names={j.name for j in config.jobs},
-            secret_env_names=secret_env_names,
-        )
-
     start = time.monotonic()
     try:
-        result = run_job(
-            job=job,
-            parents=parents,
-            repo_path=repo_path,
-            secret_env_names=secret_env_names,
-        )
+        emitted: list[Job] = []
+        if job.emits_jobs:
+            result, emitted = _run_generator_job(ctx, job=job, parents=parents)
+        else:
+            result = run_job(ctx, job=job, parents=parents)
         summary.results[job.name] = result
+        return emitted
     except Exception as e:
         # A command failure reports the command's own time (matching the
         # success prints); other failures have no command time, so fall back
@@ -733,21 +741,13 @@ def _dispatch_job(  # noqa: PLR0913
         elapsed = e.elapsed if isinstance(e, CommandError) else time.monotonic() - start
         print(f"==> [{job.name}] failed: {e} ({elapsed:.1f}s)")
         summary.failed[job.name] = e
-        blocked.add(job.name)
-    return []
+        ctx.blocked.add(job.name)
+        return []
 
 
-def _run_generator_job(  # noqa: PLR0913
-    *,
-    job: Job,
-    parents: list[str],
-    repo_path: Path,
-    summary: RunSummary,
-    blocked: set[str],
-    run_names: set[str],
-    all_config_names: set[str],
-    secret_env_names: frozenset[str],
-) -> list[Job]:
+def _run_generator_job(
+    ctx: RunContext, *, job: Job, parents: list[str]
+) -> tuple[JobResult, list[Job]]:
     """Run a generator and return its emitted jobs (resolved ``job`` required).
 
     The command runs in a fresh workspace on top of ``parents`` with
@@ -759,44 +759,41 @@ def _run_generator_job(  # noqa: PLR0913
     set blocks the generator's dependents, exactly like an ordinary job failure.
     """
     logger.debug("starting generator: %s", job.name)
-    start = time.monotonic()
-    try:
-        repo = JJ(repo_path)
-        with (
-            repo.temp_workspace(workspace_name(job.name)) as ws,
-            # The output directory lives outside the workspace, so the files written there never
-            # show up as a diff in the working copy.
-            tempfile.TemporaryDirectory(prefix="repoactive-jobs-") as tmp,
-        ):
-            ws.new(*parents)
-            try:
-                ws.git_sync_head()
-                jobs_dir = Path(tmp)
-                logger.debug("[%s] running generator command (jobs dir %s)", job.name, jobs_dir)
-                _run_command(
-                    job,
-                    ws.cwd,
-                    secret_env_names=secret_env_names,
-                    extra_env={REPOACTIVE_JOBS_DIR_ENV: str(jobs_dir)},
-                )
-                specs = _load_job_specs(jobs_dir)
-            finally:
-                ws.abandon()
-        logger.debug("[%s] generator emitted %d job spec(s)", job.name, len(specs))
-        emitted = _build_generated_jobs(
-            generator=job, specs=specs, run_names=run_names, all_config_names=all_config_names
-        )
-    except Exception as e:
-        elapsed = e.elapsed if isinstance(e, CommandError) else time.monotonic() - start
-        print(f"==> [{job.name}] failed: {e} ({elapsed:.1f}s)")
-        summary.failed[job.name] = e
-        blocked.add(job.name)
-        return []
+    repo = JJ(ctx.repo_path)
+    with (
+        repo.temp_workspace(workspace_name(job.name)) as ws,
+        # The output directory lives outside the workspace, so the files written there never
+        # show up as a diff in the working copy.
+        tempfile.TemporaryDirectory(prefix="repoactive-jobs-") as tmp,
+    ):
+        ws.new(*parents)
+        try:
+            ws.git_sync_head()
+            jobs_dir = Path(tmp)
+            logger.debug("[%s] running generator command (jobs dir %s)", job.name, jobs_dir)
+            _run_command(
+                job,
+                ws.cwd,
+                secret_env_names=ctx.secret_env_names,
+                extra_env={REPOACTIVE_JOBS_DIR_ENV: str(jobs_dir)},
+            )
+            specs = _load_job_specs(jobs_dir)
+        finally:
+            ws.abandon()
+    logger.debug("[%s] generator emitted %d job spec(s)", job.name, len(specs))
+    # selection.jobs is every job already in the run (collision guard); config.jobs
+    # are the statically configured names.
+    emitted = _build_generated_jobs(
+        generator=job,
+        specs=specs,
+        run_names={j.name for j in ctx.selection.jobs},
+        all_config_names={j.name for j in ctx.config.jobs},
+    )
 
-    summary.results[job.name] = JobResult(job=job, effective_revsets=parents, produced_diff=False)
     names = ", ".join(j.name for j in emitted) if emitted else "none"
     print(f"==> [{job.name}] generated {len(emitted)} job(s): {names}")
-    return emitted
+
+    return JobResult(job=job, effective_revsets=parents, produced_diff=False), emitted
 
 
 def _absorb_no_diff_bookmark(
@@ -997,36 +994,36 @@ def _run_jobs(
     their commits sit above a selected job's bookmark; they run only when
     something below them in the stack ran (see _dispatch_job).
     """
-    ordered_jobs = list(selection.jobs)
     # Names of jobs that failed or were skipped - their dependents are blocked.
     blocked: set[str] = set()
+    # Run-wide state, built once and threaded through _dispatch_job. ctx.selection
+    # is this same selection object, so the in-place splice below keeps
+    # ctx.selection.jobs current as generators emit.
+    ctx = RunContext(
+        config=config,
+        repo_path=repo_path,
+        summary=summary,
+        blocked=blocked,
+        selection=selection,
+    )
     started: set[str] = set()
     while True:
-        job = next((j for j in ordered_jobs if j.name not in started), None)
+        job = next((j for j in selection.jobs if j.name not in started), None)
         if job is None:
             break
         started.add(job.name)
-        emitted = _dispatch_job(
-            job=job,
-            config=config,
-            repo_path=repo_path,
-            summary=summary,
-            blocked=blocked,
-            run_names={j.name for j in ordered_jobs},
-            open_branches=selection.refreshed,
-            successors=selection.successors,
-        )
+        emitted = _dispatch_job(ctx, job=job)
         if emitted:
             # Resolve before splicing in so _dispatch_job receives resolved jobs,
             # matching the invariant for jobs from selection.
             resolved_emitted = [j.resolve(config.job_defaults) for j in emitted]
             # Track the new jobs' bookmarks so a branch an earlier run already
-            # pushed is reused rather than recreated, then splice them in and
-            # re-sort so they run after their dependencies.
+            # pushed is reused rather than recreated, then splice them into the
+            # selection and re-sort so they run after their dependencies.
             repo.bookmark_track(*sorted(j.branch_name() for j in resolved_emitted))
-            ordered_jobs = topological_sort(ordered_jobs + resolved_emitted)
-            print_job_table(format_job_forest(ordered_jobs), indent="  ")
-    return ordered_jobs
+            selection.jobs = topological_sort(selection.jobs + resolved_emitted)
+            print_job_table(format_job_forest(selection.jobs), indent="  ")
+    return selection.jobs
 
 
 def _suppress_superseded_mrs(*, plan: UpdatePlan, results: dict[str, JobResult]) -> None:

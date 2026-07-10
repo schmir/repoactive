@@ -19,6 +19,7 @@ from repoactive.runner import (
     CommandResult,
     GeneratedJobError,
     JobResult,
+    RunContext,
     RunMode,
     RunSummary,
     _build_commit_message,
@@ -36,9 +37,46 @@ from repoactive.runner import (
     run_all,
     run_job,
 )
-from repoactive.selection import UnknownJobsError, UnknownTagsError
+from repoactive.selection import JobSelection, UnknownJobsError, UnknownTagsError
 from repoactive.updates import BookmarkPush, JobUpdate, MRUpdate, UpdatePlan
 from tests.builders import _config, _djob, _job
+
+REPO = Path("/repo")
+
+
+def _selection(
+    *jobs: Job,
+    refreshed: frozenset[str] = frozenset(),
+    successors: frozenset[str] = frozenset(),
+) -> JobSelection:
+    """Build a JobSelection for a _dispatch_job call.
+
+    ``_dispatch_job`` reads ``selection.jobs`` only for the names of jobs in the
+    run (generator collision check), plus ``refreshed`` and ``successors``.
+    """
+    return JobSelection(jobs=list(jobs), refreshed=refreshed, successors=successors)
+
+
+def _ctx(
+    *,
+    config: Config | None = None,
+    summary: RunSummary | None = None,
+    blocked: set[str] | None = None,
+    selection: JobSelection | None = None,
+    repo_path: Path = REPO,
+) -> RunContext:
+    """Build a RunContext for a runner call.
+
+    ``summary`` and ``blocked`` are stored by reference, so a caller that passes
+    its own instances can assert on them after the call.
+    """
+    return RunContext(
+        config=config if config is not None else _config(),
+        repo_path=repo_path,
+        summary=summary if summary is not None else RunSummary(),
+        blocked=blocked if blocked is not None else set(),
+        selection=selection or JobSelection(jobs=[], refreshed=frozenset()),
+    )
 
 
 def _result(job: Job, *, revsets: list[str], produced: bool = True) -> JobResult:
@@ -95,9 +133,6 @@ def _mock_jj(mock_jj_cls: MagicMock) -> MagicMock:
     return mock_jj
 
 
-REPO = Path("/repo")
-
-
 class TestRunOneJob:
     def test_blocked_dependency_skips(self) -> None:
         # b depends on a, which already failed; b is skipped and itself blocks.
@@ -107,12 +142,13 @@ class TestRunOneJob:
         blocked = {"a"}
         with patch("repoactive.runner.run_job") as mock_run_job:
             _dispatch_job(
+                _ctx(
+                    config=config,
+                    summary=summary,
+                    blocked=blocked,
+                    selection=_selection(*config.jobs),
+                ),
                 job=job_b,
-                config=config,
-                repo_path=REPO,
-                summary=summary,
-                blocked=blocked,
-                run_names={job_b.name},
             )
         assert summary.skipped == {"b"}
         assert "b" in blocked
@@ -128,12 +164,8 @@ class TestRunOneJob:
             patch("repoactive.runner.run_job") as mock_run_job,
         ):
             _dispatch_job(
+                _ctx(config=config, summary=summary, selection=_selection(*config.jobs)),
                 job=job_a,
-                config=config,
-                repo_path=REPO,
-                summary=summary,
-                blocked=set(),
-                run_names={"a"},
             )
         assert summary.on_cooldown == {"a"}
         # A no-op result is recorded so dependents proceed on the base branch.
@@ -161,14 +193,13 @@ class TestRunOneJob:
             patch("repoactive.runner.run_job", return_value=result) as mock_run_job,
         ):
             _dispatch_job(
+                _ctx(
+                    config=config,
+                    summary=summary,
+                    # The job already has an open branch, so it is being refreshed.
+                    selection=_selection(*config.jobs, refreshed=frozenset({"a"})),
+                ),
                 job=job_a,
-                config=config,
-                repo_path=REPO,
-                summary=summary,
-                blocked=set(),
-                run_names={"a"},
-                # The job already has an open branch, so it is being refreshed.
-                open_branches=frozenset({"a"}),
             )
         assert "a" not in summary.on_cooldown
         mock_run_job.assert_called_once()
@@ -188,13 +219,12 @@ class TestRunOneJob:
         )
         with patch("repoactive.runner.run_job") as mock_run_job:
             _dispatch_job(
+                _ctx(
+                    config=config,
+                    summary=summary,
+                    selection=_selection(*config.jobs, successors=frozenset({"b"})),
+                ),
                 job=config.jobs[1],
-                config=config,
-                repo_path=REPO,
-                summary=summary,
-                blocked=set(),
-                run_names={"a", "b"},
-                successors=frozenset({"b"}),
             )
         assert summary.successor_skipped == {"b"}
         assert summary.results["b"].produced_diff is False
@@ -212,13 +242,12 @@ class TestRunOneJob:
         )
         with patch("repoactive.runner.run_job") as mock_run_job:
             _dispatch_job(
+                _ctx(
+                    config=config,
+                    summary=summary,
+                    selection=_selection(*config.jobs, successors=frozenset({"b", "c"})),
+                ),
                 job=config.jobs[1],
-                config=config,
-                repo_path=REPO,
-                summary=summary,
-                blocked=set(),
-                run_names={"b", "c"},
-                successors=frozenset({"b", "c"}),
             )
         assert "c" in summary.successor_skipped
         mock_run_job.assert_not_called()
@@ -242,13 +271,12 @@ class TestRunOneJob:
             patch("repoactive.runner.run_job", return_value=result_b) as mock_run_job,
         ):
             _dispatch_job(
+                _ctx(
+                    config=config,
+                    summary=summary,
+                    selection=_selection(*config.jobs, successors=frozenset({"b"})),
+                ),
                 job=config.jobs[1],
-                config=config,
-                repo_path=REPO,
-                summary=summary,
-                blocked=set(),
-                run_names={"a", "b"},
-                successors=frozenset({"b"}),
             )
         mock_run_job.assert_called_once()
         mock_cooldown.assert_not_called()
@@ -268,13 +296,12 @@ class TestRunOneJob:
         )
         with patch("repoactive.runner.run_job", return_value=result_b) as mock_run_job:
             _dispatch_job(
+                _ctx(
+                    config=config,
+                    summary=summary,
+                    selection=_selection(*config.jobs, successors=frozenset({"b"})),
+                ),
                 job=config.jobs[1],
-                config=config,
-                repo_path=REPO,
-                summary=summary,
-                blocked=set(),
-                run_names={"a", "b"},
-                successors=frozenset({"b"}),
             )
         mock_run_job.assert_called_once()
 
@@ -288,13 +315,12 @@ class TestRunOneJob:
         summary = RunSummary()
         with patch("repoactive.runner.run_job", return_value=result_b) as mock_run_job:
             _dispatch_job(
+                _ctx(
+                    config=config,
+                    summary=summary,
+                    selection=_selection(*config.jobs, successors=frozenset({"b"})),
+                ),
                 job=config.jobs[0],
-                config=config,
-                repo_path=REPO,
-                summary=summary,
-                blocked=set(),
-                run_names={"b"},
-                successors=frozenset({"b"}),
             )
         mock_run_job.assert_called_once()
 
@@ -308,12 +334,8 @@ class TestRunOneJob:
             patch("repoactive.runner.run_job", return_value=result) as mock_run_job,
         ):
             _dispatch_job(
+                _ctx(config=config, summary=summary, selection=_selection(*config.jobs)),
                 job=job_a,
-                config=config,
-                repo_path=REPO,
-                summary=summary,
-                blocked=set(),
-                run_names={"a"},
             )
         assert summary.results["a"] is result
         # The resolved job (with defaults applied) is run with computed parents.
@@ -331,12 +353,13 @@ class TestRunOneJob:
             patch("repoactive.runner.run_job", side_effect=err),
         ):
             _dispatch_job(
+                _ctx(
+                    config=config,
+                    summary=summary,
+                    blocked=blocked,
+                    selection=_selection(*config.jobs),
+                ),
                 job=job_a,
-                config=config,
-                repo_path=REPO,
-                summary=summary,
-                blocked=blocked,
-                run_names={"a"},
             )
         assert summary.failed == {"a": err}
         assert blocked == {"a"}
@@ -353,12 +376,13 @@ class TestRunOneJob:
             patch("repoactive.runner.run_job", side_effect=err),
         ):
             _dispatch_job(
+                _ctx(
+                    config=config,
+                    summary=summary,
+                    blocked=blocked,
+                    selection=_selection(*config.jobs),
+                ),
                 job=job_a,
-                config=config,
-                repo_path=REPO,
-                summary=summary,
-                blocked=blocked,
-                run_names={"a"},
             )
         assert summary.failed == {"a": err}
         assert blocked == {"a"}
@@ -374,12 +398,8 @@ class TestRunOneJob:
         )
         with patch("repoactive.runner.run_job") as mock_run_job:
             _dispatch_job(
+                _ctx(config=config, summary=summary, selection=_selection(*config.jobs)),
                 job=config.jobs[1],
-                config=config,
-                repo_path=REPO,
-                summary=summary,
-                blocked=set(),
-                run_names={"a", "b"},
             )
         assert "b" in summary.results
         assert summary.results["b"].produced_diff is False
@@ -400,12 +420,8 @@ class TestRunOneJob:
             patch("repoactive.runner.run_job", return_value=result_b) as mock_run_job,
         ):
             _dispatch_job(
+                _ctx(config=config, summary=summary, selection=_selection(*config.jobs)),
                 job=config.jobs[1],
-                config=config,
-                repo_path=REPO,
-                summary=summary,
-                blocked=set(),
-                run_names={"a", "b"},
             )
         assert summary.results["b"] is result_b
         mock_run_job.assert_called_once()
@@ -418,12 +434,8 @@ class TestRunOneJob:
         summary = RunSummary()
         with patch("repoactive.runner.run_job") as mock_run_job:
             _dispatch_job(
+                _ctx(config=config, summary=summary, selection=_selection(*config.jobs)),
                 job=config.jobs[1],
-                config=config,
-                repo_path=REPO,
-                summary=summary,
-                blocked=set(),
-                run_names={"a", "b"},
             )
         assert "b" in summary.results
         assert summary.results["b"].produced_diff is False
@@ -719,7 +731,7 @@ class TestRunJob:
         mock_jj.is_empty.return_value = False
         job = _job("foo")
 
-        result = run_job(job=job, parents=["trunk()"], repo_path=REPO)
+        result = run_job(_ctx(), job=job, parents=["trunk()"])
 
         # Phase 1 always uses new(); bookmark_set is done in the absorb phase.
         mock_jj.new.assert_called_once_with("trunk()")
@@ -740,7 +752,7 @@ class TestRunJob:
         mock_jj.is_empty.return_value = False
         job = _job("foo", description="Body text.")
 
-        run_job(job=job, parents=["trunk()"], repo_path=REPO)
+        run_job(_ctx(), job=job, parents=["trunk()"])
 
         mock_jj.describe.assert_called_once_with("Change foo\n\nBody text.\n\nRepoactive-Job: foo")
 
@@ -754,7 +766,7 @@ class TestRunJob:
         mock_jj.is_empty.return_value = False
         job = _job("foo")
 
-        run_job(job=job, parents=["trunk()"], repo_path=REPO)
+        run_job(_ctx(), job=job, parents=["trunk()"])
 
         mock_jj.describe.assert_called_once_with(
             "Change foo\n\n,----[ cmd-foo ]\n| did stuff\n`----\n\nRepoactive-Job: foo"
@@ -777,7 +789,7 @@ class TestRunJob:
             commit_title_prefix="",
         )
 
-        run_job(job=job, parents=["trunk()"], repo_path=REPO)
+        run_job(_ctx(), job=job, parents=["trunk()"])
 
         mock_jj.describe.assert_called_once_with("Change foo\n\nRepoactive-Job: foo")
 
@@ -791,9 +803,9 @@ class TestRunJob:
         mock_jj.is_empty.return_value = False
 
         run_job(
+            _ctx(),
             job=_job("foo", commit_title_prefix="[bot] "),
             parents=["trunk()"],
-            repo_path=REPO,
         )
 
         mock_jj.describe.assert_called_once_with("[bot] Change foo\n\nRepoactive-Job: foo")
@@ -807,7 +819,7 @@ class TestRunJob:
         _mock_popen(mock_sub)
         mock_jj.is_empty.return_value = True
 
-        result = run_job(job=_job("foo"), parents=["trunk()"], repo_path=REPO)
+        result = run_job(_ctx(), job=_job("foo"), parents=["trunk()"])
 
         mock_jj.abandon.assert_called_once_with()
         mock_jj.bookmark_set.assert_not_called()
@@ -829,7 +841,7 @@ class TestRunJob:
         mock_jj.bookmark_change_id.return_value = "old-change-id"
         mock_jj.is_empty.return_value = True
 
-        result = run_job(job=_job("foo"), parents=["trunk()"], repo_path=REPO)
+        result = run_job(_ctx(), job=_job("foo"), parents=["trunk()"])
 
         mock_jj.abandon.assert_called_once_with()
         mock_jj.bookmark_delete.assert_not_called()
@@ -849,9 +861,9 @@ class TestRunJob:
         mock_jj.is_empty.return_value = True
 
         result = run_job(
+            _ctx(),
             job=_job("foo"),
             parents=["repoactive/a", "repoactive/b"],
-            repo_path=REPO,
         )
 
         assert result.effective_revsets == ["repoactive/a", "repoactive/b"]
@@ -865,9 +877,9 @@ class TestRunJob:
         _mock_popen(mock_sub, output="boom\n", returncode=1)
         with pytest.raises(CommandError, match="command failed"):
             run_job(
+                _ctx(),
                 job=_job("foo"),
                 parents=["trunk()"],
-                repo_path=REPO,
             )
 
         mock_jj.abandon.assert_called_once_with()
@@ -891,7 +903,7 @@ class TestRunJob:
             commit_title_prefix="",
         )
 
-        run_job(job=job, parents=["trunk()"], repo_path=REPO)
+        run_job(_ctx(), job=job, parents=["trunk()"])
 
         assert mock_sub.call_args.kwargs["start_new_session"] is True
         # The watchdog is armed with the job's timeout in seconds.
@@ -927,7 +939,7 @@ class TestRunJob:
             commit_title_prefix="",
         )
         with pytest.raises(CommandError, match="timed out after 30m"):
-            run_job(job=job, parents=["trunk()"], repo_path=REPO)
+            run_job(_ctx(), job=job, parents=["trunk()"])
 
         mock_killpg.assert_called_once_with(4242, signal.SIGKILL)
         mock_jj.abandon.assert_called_once_with()
@@ -961,7 +973,7 @@ class TestRunJob:
             commit_title_prefix="",
         )
 
-        result = run_job(job=job, parents=["trunk()"], repo_path=REPO)
+        result = run_job(_ctx(), job=job, parents=["trunk()"])
 
         assert result.produced_diff is True
         assert result.command_output == "done"
@@ -978,7 +990,7 @@ class TestRunJob:
         mock_jj.is_empty.return_value = False
 
         # _job has no timeout, so no watchdog timer is armed.
-        run_job(job=_job("foo"), parents=["trunk()"], repo_path=REPO)
+        run_job(_ctx(), job=_job("foo"), parents=["trunk()"])
 
         mock_timer.assert_not_called()
 
@@ -1001,7 +1013,7 @@ class TestRunJob:
         )
 
         # A zero timeout means no timeout, so no watchdog timer is armed.
-        run_job(job=job, parents=["trunk()"], repo_path=REPO)
+        run_job(_ctx(), job=job, parents=["trunk()"])
 
         mock_timer.assert_not_called()
 
@@ -1014,7 +1026,7 @@ class TestRunJob:
         _mock_popen(mock_sub, output="Copied file foo -> bar\n")
         mock_jj.is_empty.return_value = False
 
-        result = run_job(job=_job("foo"), parents=["trunk()"], repo_path=REPO)
+        result = run_job(_ctx(), job=_job("foo"), parents=["trunk()"])
 
         # Command output is stored on the result for the absorb/apply phase to use.
         assert result.command_output == "Copied file foo -> bar"
@@ -1028,7 +1040,7 @@ class TestRunJob:
         _mock_popen(mock_sub)
         mock_jj.is_empty.return_value = False
 
-        result = run_job(job=_job("foo"), parents=["trunk()"], repo_path=REPO)
+        result = run_job(_ctx(), job=_job("foo"), parents=["trunk()"])
 
         # MR is not created during the run; mr_url is filled in at apply time.
         assert result.produced_diff is True
@@ -1051,7 +1063,7 @@ class TestRunJob:
             commit_title_prefix="",
         )
 
-        result = run_job(job=job, parents=["trunk()"], repo_path=REPO)
+        result = run_job(_ctx(), job=job, parents=["trunk()"])
 
         assert result.produced_diff is True
         assert result.mr_url is None
@@ -1068,7 +1080,7 @@ class TestRunJob:
         mock_jj.bookmark_change_id.return_value = "old-change-id"
         mock_jj.is_empty.return_value = False
 
-        result = run_job(job=_job("foo"), parents=["trunk()"], repo_path=REPO)
+        result = run_job(_ctx(), job=_job("foo"), parents=["trunk()"])
 
         mock_jj.new.assert_called_once_with("trunk()")
         mock_jj.edit.assert_not_called()
@@ -1086,9 +1098,9 @@ class TestRunJob:
         mock_jj.is_empty.return_value = False
 
         run_job(
+            _ctx(),
             job=_job("foo"),
             parents=["repoactive/a", "repoactive/b"],
-            repo_path=REPO,
         )
 
         mock_jj.new.assert_called_once_with("repoactive/a", "repoactive/b")
@@ -1265,17 +1277,11 @@ class TestRunGeneratorJob:
         self, mock_jj_cls: MagicMock, mock_run_command: MagicMock, mock_load: MagicMock
     ) -> None:
         mock_jj = _mock_jj(mock_jj_cls)
-        summary = RunSummary()
 
-        emitted = _run_generator_job(
+        result, emitted = _run_generator_job(
+            _ctx(selection=_selection(_gen())),
             job=_gen(),
             parents=["trunk()"],
-            repo_path=REPO,
-            summary=summary,
-            blocked=set(),
-            run_names={"gen"},
-            all_config_names=set(),
-            secret_env_names=frozenset(),
         )
 
         mock_jj.new.assert_called_once_with("trunk()")
@@ -1284,33 +1290,20 @@ class TestRunGeneratorJob:
         extra_env = mock_run_command.call_args.kwargs["extra_env"]
         assert REPOACTIVE_JOBS_DIR_ENV in extra_env
         assert [j.name for j in emitted] == ["child"]
-        assert summary.results["gen"].produced_diff is False
+        assert result.produced_diff is False
 
     @patch("repoactive.runner._run_command", side_effect=CommandError("boom", elapsed=1.0))
     @patch("repoactive.runner.JJ")
-    def test_command_failure_abandons_and_records(
+    def test_command_failure_abandons_and_raises(
         self, mock_jj_cls: MagicMock, mock_run_command: MagicMock
     ) -> None:
         mock_jj = _mock_jj(mock_jj_cls)
-        summary = RunSummary()
-        blocked: set[str] = set()
 
-        emitted = _run_generator_job(
-            job=_gen(),
-            parents=["trunk()"],
-            repo_path=REPO,
-            summary=summary,
-            blocked=blocked,
-            run_names=set(),
-            all_config_names=set(),
-            secret_env_names=frozenset(),
-        )
+        with pytest.raises(CommandError):
+            _run_generator_job(_ctx(), job=_gen(), parents=["trunk()"])
 
-        assert emitted == []
         # The fresh commit is abandoned even when the command fails.
         mock_jj.abandon.assert_called_once_with()
-        assert "gen" in summary.failed
-        assert blocked == {"gen"}
 
 
 class TestDualTrailer:
@@ -1331,7 +1324,7 @@ class TestDualTrailer:
             commit_title_prefix="",
         )
 
-        run_job(job=job, parents=["trunk()"], repo_path=REPO)
+        run_job(_ctx(), job=job, parents=["trunk()"])
 
         mock_jj.describe.assert_called_once_with(
             "Change child\n\nRepoactive-Job: child\nRepoactive-Job: gen"
