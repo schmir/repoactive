@@ -510,26 +510,26 @@ def run_generator(
     """
     logger.debug("starting generator: %s", job.name)
     repo = JJ(repo_path)
-    with repo.temp_workspace(workspace_name(job.name)) as ws:
+    with (
+        repo.temp_workspace(workspace_name(job.name)) as ws,
+        # The output directory lives outside the workspace, so the files written there never show
+        # up as a diff in the working copy.
+        tempfile.TemporaryDirectory(prefix="repoactive-jobs-") as tmp,
+    ):
         ws.new(*parents)
-        ws.git_sync_head()
-        # The output directory lives outside the workspace so the files written
-        # there never show up as a diff in the working copy.
-        with tempfile.TemporaryDirectory(prefix="repoactive-jobs-") as tmp:
+        try:
+            ws.git_sync_head()
             jobs_dir = Path(tmp)
             logger.debug("[%s] running generator command (jobs dir %s)", job.name, jobs_dir)
-            try:
-                _run_command(
-                    job,
-                    ws.cwd,
-                    secret_env_names=secret_env_names,
-                    extra_env={REPOACTIVE_JOBS_DIR_ENV: str(jobs_dir)},
-                )
-            except CommandError:
-                ws.abandon()
-                raise
+            _run_command(
+                job,
+                ws.cwd,
+                secret_env_names=secret_env_names,
+                extra_env={REPOACTIVE_JOBS_DIR_ENV: str(jobs_dir)},
+            )
             specs = _load_job_specs(jobs_dir)
-        ws.abandon()
+        finally:
+            ws.abandon()
     logger.debug("[%s] generator emitted %d job spec(s)", job.name, len(specs))
     return specs
 
