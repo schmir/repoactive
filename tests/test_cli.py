@@ -17,7 +17,8 @@ from repoactive.jj import CommandFailedError, JobCommit
 from repoactive.lock import RunLockHeldError
 from repoactive.platforms import PlatformTokenNotSetError
 from repoactive.platforms.base import PlatformError
-from repoactive.runner import RunMode, RunSummary, UnknownJobsError, UnknownTagsError
+from repoactive.runner import RunMode, RunSummary
+from repoactive.selection import UnknownJobsError, UnknownTagsError
 
 runner = CliRunner()
 

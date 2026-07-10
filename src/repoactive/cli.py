@@ -42,10 +42,9 @@ from repoactive.platforms import (
 from repoactive.platforms.base import PlatformError
 from repoactive.runner import (
     RunMode,
-    UnknownJobsError,
-    UnknownTagsError,
     run_all,
 )
+from repoactive.selection import UnknownJobsError, UnknownTagsError
 from repoactive.settings import SettingsError, load_settings
 from repoactive.ui import err_console, print_undo_hint
 
