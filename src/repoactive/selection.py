@@ -36,36 +36,6 @@ class UnknownTagsError(ValueError):
         super().__init__(f"unknown tag(s): {', '.join(sorted(unknown))}")
 
 
-def _include_dependencies(jobs: list[Job], preselected: frozenset[str]) -> frozenset[str]:
-    """Add the transitive dependencies of every selected job.
-
-    ``jobs`` must be topologically sorted; iterating in reverse propagates
-    dependencies of dependencies in a single pass.
-    """
-    selected = set(preselected)
-    for j in reversed(jobs):
-        if j.name in selected:
-            selected.update(j.depends_on)
-    return frozenset(selected)
-
-
-def _drop_jobs_with_unselected_deps(
-    jobs: list[Job], preselected: frozenset[str]
-) -> frozenset[str]:
-    """Drop from ``preselected`` any job that depends on a job not selected.
-
-    The drop cascades to further dependents because ``jobs`` is topologically
-    sorted: a dependency removed earlier is already gone by the time its
-    dependent is checked.
-    """
-    selected = set(preselected)
-    for j in jobs:
-        if j.name in selected and any(dep not in selected for dep in j.depends_on):
-            print(f"==> [{j.name}] skipped (dependency not in default run)")
-            selected.remove(j.name)
-    return frozenset(selected)
-
-
 @dataclass
 class JobSelection:
     """The outcome of ``select_run_jobs``: the ordered jobs and the force-included subsets.
@@ -113,6 +83,32 @@ class JobSelector:
         self._all_tags = frozenset(t for j in self._all_jobs for t in j.effective_tags())
         self._validate_selection()
 
+    def _include_dependencies(self, preselected: frozenset[str]) -> frozenset[str]:
+        """Add the transitive dependencies of every selected job.
+
+        Iterating ``_all_jobs`` in reverse propagates dependencies of dependencies
+        in a single pass (relies on topological order).
+        """
+        selected = set(preselected)
+        for j in reversed(self._all_jobs):
+            if j.name in selected:
+                selected.update(j.depends_on)
+        return frozenset(selected)
+
+    def _drop_jobs_with_unselected_deps(self, preselected: frozenset[str]) -> frozenset[str]:
+        """Drop from ``preselected`` any job that depends on a job not selected.
+
+        The drop cascades to further dependents because ``_all_jobs`` is topologically
+        sorted: a dependency removed earlier is already gone by the time its
+        dependent is checked.
+        """
+        selected = set(preselected)
+        for j in self._all_jobs:
+            if j.name in selected and any(dep not in selected for dep in j.depends_on):
+                print(f"==> [{j.name}] skipped (dependency not in default run)")
+                selected.remove(j.name)
+        return frozenset(selected)
+
     def _validate_selection(self) -> None:
         """Reject unknown job names and tags in the request (a tag carried by no job is a typo)."""
         unknown_jobs = self.requested_names - self._all_job_names
@@ -152,7 +148,7 @@ class JobSelector:
             selected = self.requested_names | {
                 j.name for j in self._all_jobs if j.effective_tags() & self.requested_tags
             }
-            selected = _include_dependencies(self._all_jobs, selected)
+            selected = self._include_dependencies(selected)
         else:
             refresh_names = frozenset(repo.pending_job_names() & self._all_job_names)
             if refresh_names:
@@ -162,15 +158,15 @@ class JobSelector:
 
             selected = frozenset(
                 j.name for j in self._all_jobs if DEFAULT_TAG in j.effective_tags()
-            ) | _include_dependencies(self._all_jobs, refresh_names)
-            selected = _drop_jobs_with_unselected_deps(self._all_jobs, selected)
+            ) | self._include_dependencies(refresh_names)
+            selected = self._drop_jobs_with_unselected_deps(selected)
 
         bookmarks = [j.branch_name() for j in self._all_jobs if j.name in selected]
 
         revset = " | ".join(f"present({b})" for b in bookmarks)
         successor_names = (repo.pending_job_names(revset=revset) & self._all_job_names) - selected
         selected = selected | successor_names
-        selected = _include_dependencies(self._all_jobs, selected)
+        selected = self._include_dependencies(selected)
 
         selected_jobs = [j for j in self._all_jobs if j.name in selected]
         logger.debug(
