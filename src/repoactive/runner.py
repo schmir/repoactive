@@ -494,46 +494,6 @@ def _load_job_specs(jobs_dir: Path) -> dict[str, dict]:
     return specs
 
 
-def run_generator(
-    *,
-    job: Job,
-    parents: list[str],
-    repo_path: Path,
-    secret_env_names: frozenset[str] = frozenset(),
-) -> dict[str, dict]:
-    """Run a generator job and return the raw job specs it emitted, keyed by name.
-
-    The command runs in a fresh workspace on top of ``parents`` with
-    ``REPOACTIVE_JOBS_DIR`` pointing at an empty directory; it writes ``*.toml``
-    fragments there which are parsed once it exits. The generator produces no
-    diff: any working-copy change it leaves is discarded (ADR 0004).
-    """
-    logger.debug("starting generator: %s", job.name)
-    repo = JJ(repo_path)
-    with (
-        repo.temp_workspace(workspace_name(job.name)) as ws,
-        # The output directory lives outside the workspace, so the files written there never show
-        # up as a diff in the working copy.
-        tempfile.TemporaryDirectory(prefix="repoactive-jobs-") as tmp,
-    ):
-        ws.new(*parents)
-        try:
-            ws.git_sync_head()
-            jobs_dir = Path(tmp)
-            logger.debug("[%s] running generator command (jobs dir %s)", job.name, jobs_dir)
-            _run_command(
-                job,
-                ws.cwd,
-                secret_env_names=secret_env_names,
-                extra_env={REPOACTIVE_JOBS_DIR_ENV: str(jobs_dir)},
-            )
-            specs = _load_job_specs(jobs_dir)
-        finally:
-            ws.abandon()
-    logger.debug("[%s] generator emitted %d job spec(s)", job.name, len(specs))
-    return specs
-
-
 def _build_generated_job(
     *, generator: Job, name: str, spec: dict, run_names: set[str], all_config_names: set[str]
 ) -> Job:
@@ -792,16 +752,39 @@ def _run_generator_job(  # noqa: PLR0913
 ) -> list[Job]:
     """Run a generator and return its emitted jobs (resolved ``job`` required).
 
-    The generator itself produces no diff; a no-op ``JobResult`` is recorded so
-    its emitted jobs (which depend on it) compute their parents through it. A
-    failure to run or to build the emitted set blocks the generator's
-    dependents, exactly like an ordinary job failure.
+    The command runs in a fresh workspace on top of ``parents`` with
+    ``REPOACTIVE_JOBS_DIR`` pointing at an empty directory; it writes ``*.toml``
+    fragments there which are parsed once it exits. The generator itself produces
+    no diff: any working-copy change it leaves is discarded (ADR 0004), and a
+    no-op ``JobResult`` is recorded so its emitted jobs (which depend on it)
+    compute their parents through it. A failure to run or to build the emitted
+    set blocks the generator's dependents, exactly like an ordinary job failure.
     """
+    logger.debug("starting generator: %s", job.name)
     start = time.monotonic()
     try:
-        specs = run_generator(
-            job=job, parents=parents, repo_path=repo_path, secret_env_names=secret_env_names
-        )
+        repo = JJ(repo_path)
+        with (
+            repo.temp_workspace(workspace_name(job.name)) as ws,
+            # The output directory lives outside the workspace, so the files written there never
+            # show up as a diff in the working copy.
+            tempfile.TemporaryDirectory(prefix="repoactive-jobs-") as tmp,
+        ):
+            ws.new(*parents)
+            try:
+                ws.git_sync_head()
+                jobs_dir = Path(tmp)
+                logger.debug("[%s] running generator command (jobs dir %s)", job.name, jobs_dir)
+                _run_command(
+                    job,
+                    ws.cwd,
+                    secret_env_names=secret_env_names,
+                    extra_env={REPOACTIVE_JOBS_DIR_ENV: str(jobs_dir)},
+                )
+                specs = _load_job_specs(jobs_dir)
+            finally:
+                ws.abandon()
+        logger.debug("[%s] generator emitted %d job spec(s)", job.name, len(specs))
         emitted = _build_generated_jobs(
             generator=job, specs=specs, run_names=run_names, all_config_names=all_config_names
         )

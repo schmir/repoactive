@@ -28,12 +28,12 @@ from repoactive.runner import (
     _load_job_specs,
     _prepare_repo,
     _run_command,
+    _run_generator_job,
     _spawn,
     _strip_boxquote_and_trailers,
     _suppress_superseded_mrs,
     apply_plan,
     run_all,
-    run_generator,
     run_job,
 )
 from repoactive.selection import UnknownJobsError, UnknownTagsError
@@ -1254,33 +1254,63 @@ class TestLoadJobSpecs:
         assert _load_job_specs(tmp_path) == {}
 
 
-class TestRunGenerator:
-    @patch("repoactive.runner._load_job_specs", return_value={"x": {}})
+class TestRunGeneratorJob:
+    @patch(
+        "repoactive.runner._load_job_specs",
+        return_value={"child": {"command": "c", "title": "Child"}},
+    )
     @patch("repoactive.runner._run_command")
     @patch("repoactive.runner.JJ")
     def test_runs_command_with_jobs_dir_and_abandons(
         self, mock_jj_cls: MagicMock, mock_run_command: MagicMock, mock_load: MagicMock
     ) -> None:
         mock_jj = _mock_jj(mock_jj_cls)
+        summary = RunSummary()
 
-        specs = run_generator(job=_gen(), parents=["trunk()"], repo_path=REPO)
+        emitted = _run_generator_job(
+            job=_gen(),
+            parents=["trunk()"],
+            repo_path=REPO,
+            summary=summary,
+            blocked=set(),
+            run_names={"gen"},
+            all_config_names=set(),
+            secret_env_names=frozenset(),
+        )
 
         mock_jj.new.assert_called_once_with("trunk()")
         # The working copy is abandoned: a generator never produces a diff.
         mock_jj.abandon.assert_called_once_with()
         extra_env = mock_run_command.call_args.kwargs["extra_env"]
         assert REPOACTIVE_JOBS_DIR_ENV in extra_env
-        assert specs == {"x": {}}
+        assert [j.name for j in emitted] == ["child"]
+        assert summary.results["gen"].produced_diff is False
 
     @patch("repoactive.runner._run_command", side_effect=CommandError("boom", elapsed=1.0))
     @patch("repoactive.runner.JJ")
-    def test_command_failure_abandons_and_raises(
+    def test_command_failure_abandons_and_records(
         self, mock_jj_cls: MagicMock, mock_run_command: MagicMock
     ) -> None:
         mock_jj = _mock_jj(mock_jj_cls)
-        with pytest.raises(CommandError, match="boom"):
-            run_generator(job=_gen(), parents=["trunk()"], repo_path=REPO)
+        summary = RunSummary()
+        blocked: set[str] = set()
+
+        emitted = _run_generator_job(
+            job=_gen(),
+            parents=["trunk()"],
+            repo_path=REPO,
+            summary=summary,
+            blocked=blocked,
+            run_names=set(),
+            all_config_names=set(),
+            secret_env_names=frozenset(),
+        )
+
+        assert emitted == []
+        # The fresh commit is abandoned even when the command fails.
         mock_jj.abandon.assert_called_once_with()
+        assert "gen" in summary.failed
+        assert blocked == {"gen"}
 
 
 class TestDualTrailer:
@@ -2168,18 +2198,23 @@ class TestRunAll:
         )
 
     @patch("repoactive.runner.run_job")
+    @patch("repoactive.runner._run_command")
     @patch(
-        "repoactive.runner.run_generator",
+        "repoactive.runner._load_job_specs",
         return_value={"child": {"command": "c", "title": "Child"}},
     )
     def test_generator_emits_and_runs_child(
-        self, mock_run_generator: MagicMock, mock_run_job: MagicMock, mock_jj: MagicMock
+        self,
+        mock_load: MagicMock,
+        mock_run_command: MagicMock,
+        mock_run_job: MagicMock,
+        mock_jj: MagicMock,
     ) -> None:
         mock_run_job.return_value = _result(_job("child"), revsets=["repoactive/child"])
 
         summary = run_all(config=self._generator_config(), repo_path=REPO)
 
-        mock_run_generator.assert_called_once()
+        mock_load.assert_called_once()
         # The emitted child runs in the same invocation.
         called = {c.kwargs["job"].name for c in mock_run_job.call_args_list}
         assert called == {"child"}
@@ -2187,12 +2222,17 @@ class TestRunAll:
         assert summary.results["gen"].produced_diff is False
 
     @patch("repoactive.runner.run_job")
+    @patch("repoactive.runner._run_command")
     @patch(
-        "repoactive.runner.run_generator",
+        "repoactive.runner._load_job_specs",
         return_value={"child": {"command": "c", "title": "Child", "depends_on": ["z"]}},
     )
     def test_emitted_child_runs_after_existing_dependency(
-        self, mock_run_generator: MagicMock, mock_run_job: MagicMock, mock_jj: MagicMock
+        self,
+        mock_load: MagicMock,
+        mock_run_command: MagicMock,
+        mock_run_job: MagicMock,
+        mock_jj: MagicMock,
     ) -> None:
         # The generator emits a child depending on an ordinary job ``z`` that has
         # not run yet, so the re-sort must order the child after ``z``.
@@ -2213,12 +2253,17 @@ class TestRunAll:
         assert order.index("z") < order.index("child")
 
     @patch("repoactive.runner.run_job")
+    @patch("repoactive.runner._run_command")
     @patch(
-        "repoactive.runner.run_generator",
+        "repoactive.runner._load_job_specs",
         return_value={"child": {"command": "c", "title": "Child"}},
     )
     def test_emitted_child_bookmark_is_tracked(
-        self, mock_run_generator: MagicMock, mock_run_job: MagicMock, mock_jj: MagicMock
+        self,
+        mock_load: MagicMock,
+        mock_run_command: MagicMock,
+        mock_run_job: MagicMock,
+        mock_jj: MagicMock,
     ) -> None:
         mock_run_job.return_value = _result(_job("child"), revsets=["repoactive/child"])
 
@@ -2228,9 +2273,9 @@ class TestRunAll:
         assert ("repoactive/child",) in tracked
 
     @patch("repoactive.runner.run_job")
-    @patch("repoactive.runner.run_generator")
+    @patch("repoactive.runner._run_command")
     def test_generator_on_cooldown_emits_nothing(
-        self, mock_run_generator: MagicMock, mock_run_job: MagicMock, mock_jj: MagicMock
+        self, mock_run_command: MagicMock, mock_run_job: MagicMock, mock_jj: MagicMock
     ) -> None:
         # A landed child (dual trailer) puts the generator on cooldown; the whole
         # fan-out is skipped for this run.
@@ -2238,13 +2283,14 @@ class TestRunAll:
 
         summary = run_all(config=self._generator_config(cooldown_period="7d"), repo_path=REPO)
 
-        mock_run_generator.assert_not_called()
+        # The generator command never runs, so nothing is emitted.
+        mock_run_command.assert_not_called()
         mock_run_job.assert_not_called()
         assert summary.on_cooldown == {"gen"}
 
-    @patch("repoactive.runner.run_generator", side_effect=RuntimeError("boom"))
+    @patch("repoactive.runner._run_command", side_effect=RuntimeError("boom"))
     def test_generator_failure_is_recorded(
-        self, mock_run_generator: MagicMock, mock_jj: MagicMock
+        self, mock_run_command: MagicMock, mock_jj: MagicMock
     ) -> None:
         summary = run_all(config=self._generator_config(), repo_path=REPO)
 
