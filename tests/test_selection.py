@@ -239,6 +239,19 @@ class TestSelectJobs:
         ).select_run_jobs(_mock_repo(unmerged={"b"}))
         assert _names(result.jobs) == ["a", "b"]
 
+    def test_refreshed_dependency_keeps_dependent_in_default_run(self) -> None:
+        # c depends on the weekly job b, which would normally drop c from the
+        # default run - but b is refreshed into this run, so c is kept and
+        # stacked on b's fresh output. c is a plain selected job: neither
+        # refreshed nor a successor, so normal cooldown rules apply to it.
+        config = _config(_djob("a"), _djob("b", tags=["weekly"]), _djob("c", depends_on=["b"]))
+        result = JobSelector(
+            config=config, requested_names=frozenset(), requested_tags=frozenset()
+        ).select_run_jobs(_mock_repo(unmerged={"b"}))
+        assert _names(result.jobs) == ["a", "b", "c"]
+        assert result.refreshed == frozenset({"b"})
+        assert result.successors == frozenset()
+
     def test_refresh_includes_disabled_job(self) -> None:
         # An unmerged branch for a disabled job (likely from an explicit run) is refreshed.
         config = _config(_djob("a"), _djob("b", disabled=True))

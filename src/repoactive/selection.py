@@ -129,7 +129,9 @@ class JobSelector:
         every job carrying ``DEFAULT_TAG`` (see ``Job.effective_tags``), with a
         job dropped if any dependency is not itself selected, plus any job with
         an unmerged branch (refreshed so its stale branch is rebased on trunk
-        now rather than at the job's next run, ADR 0003). Naming jobs or passing
+        now rather than at the job's next run, ADR 0003). A job whose dependency
+        is refreshed into the run this way is kept, not dropped - the dependency
+        is present, so the job stacks on its fresh output. Naming jobs or passing
         tags is explicit selection: the union of the named jobs and the jobs
         matching any requested tag (``DEFAULT_TAG`` is not implied), with all
         dependencies force-included and no unmerged-branch refresh. Either way,
@@ -143,29 +145,25 @@ class JobSelector:
         """
         # On the bare default run, also refresh jobs with an unmerged branch so a
         # stale branch is rebased on trunk now rather than at the job's next run.
-        refresh_names: set[str] = set()
-        if not self.requested_names and not self.requested_tags:
-            refresh_names = repo.pending_job_names() & self._all_job_names
-            if refresh_names:
-                print(f"==> refreshing unmerged branches: {', '.join(sorted(refresh_names))}")
-            else:
-                print("==> no unmerged branches to refresh")
-
+        refresh_names: frozenset[str] = frozenset()
         selected: frozenset[str]
+
         if self.requested_names or self.requested_tags:
             selected = self.requested_names | {
                 j.name for j in self._all_jobs if j.effective_tags() & self.requested_tags
             }
             selected = _include_dependencies(self._all_jobs, selected)
         else:
+            refresh_names = frozenset(repo.pending_job_names() & self._all_job_names)
+            if refresh_names:
+                print(f"==> refreshing unmerged branches: {', '.join(sorted(refresh_names))}")
+            else:
+                print("==> no unmerged branches to refresh")
+
             selected = frozenset(
                 j.name for j in self._all_jobs if DEFAULT_TAG in j.effective_tags()
-            )
+            ) | _include_dependencies(self._all_jobs, refresh_names)
             selected = _drop_jobs_with_unselected_deps(self._all_jobs, selected)
-
-        if refresh_names:
-            selected = selected | refresh_names
-            selected = _include_dependencies(self._all_jobs, selected)
 
         bookmarks = [j.branch_name() for j in self._all_jobs if j.name in selected]
 
@@ -186,6 +184,6 @@ class JobSelector:
 
         return JobSelection(
             jobs=selected_jobs,
-            refreshed=frozenset(refresh_names),
+            refreshed=refresh_names,
             successors=frozenset(successor_names),
         )
