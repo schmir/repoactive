@@ -32,7 +32,7 @@ from repoactive.jobtree import format_job_forest, print_job_table
 from repoactive.lock import run_lock
 from repoactive.platforms.base import MRParams, Platform
 from repoactive.progress import ProgressView
-from repoactive.selection import JobSelector
+from repoactive.selection import JobSelection, JobSelector
 from repoactive.settings import load_settings
 from repoactive.trailers import strip_trailers
 from repoactive.ui import print_undo_hint
@@ -987,19 +987,17 @@ def _prepare_repo(*, config: Config, repo_path: Path) -> Generator[JJ]:
         )
 
 
-def _run_jobs(  # noqa: PLR0913
+def _run_jobs(
     *,
-    ordered_jobs: list[Job],
+    selection: JobSelection,
     config: Config,
     repo: JJ,
     repo_path: Path,
     summary: RunSummary,
-    open_branches: frozenset[str] = frozenset(),
-    successors: frozenset[str] = frozenset(),
 ) -> list[Job]:
-    """Run ``ordered_jobs`` in topological order, expanding generators in place.
+    """Run the jobs in ``selection`` in topological order, expanding generators in place.
 
-    ``ordered_jobs`` is topologically sorted, so the first job not yet in
+    ``selection.jobs`` is topologically sorted, so the first job not yet in
     ``started`` always has its dependencies satisfied: every job ahead of it in
     the order has already run (were one not, *it* would be the first
     not-started job).
@@ -1011,13 +1009,14 @@ def _run_jobs(  # noqa: PLR0913
     including generator-emitted jobs, still topologically sorted — the absorb
     phase must iterate this list, not the caller's original selection.
 
-    ``open_branches`` names the jobs being refreshed because they already have an
-    unmerged branch; they bypass the cooldown skip so their branches are rebased
-    (ADR 0003). Empty for explicit selection, which does not refresh (ADR 0003).
-    ``successors`` names the jobs force-included because their commits sit above
-    a selected job's bookmark; they run only when something below them in the
-    stack ran (see _dispatch_job).
+    ``selection.refreshed`` names the jobs being refreshed because they already
+    have an unmerged branch; they bypass the cooldown skip so their branches are
+    rebased (ADR 0003). Empty for explicit selection, which does not refresh
+    (ADR 0003). ``selection.successors`` names the jobs force-included because
+    their commits sit above a selected job's bookmark; they run only when
+    something below them in the stack ran (see _dispatch_job).
     """
+    ordered_jobs = list(selection.jobs)
     # Names of jobs that failed or were skipped - their dependents are blocked.
     blocked: set[str] = set()
     started: set[str] = set()
@@ -1033,8 +1032,8 @@ def _run_jobs(  # noqa: PLR0913
             summary=summary,
             blocked=blocked,
             run_names={j.name for j in ordered_jobs},
-            open_branches=open_branches,
-            successors=successors,
+            open_branches=selection.refreshed,
+            successors=selection.successors,
         )
         if emitted:
             # Track the new jobs' bookmarks so a branch an earlier run already
@@ -1113,26 +1112,23 @@ def run_all(  # noqa: PLR0913
         )
 
         selection = selector.select_run_jobs(repo)
-        ordered_jobs = list(selection.jobs)
         summary = RunSummary()
 
-        print(f"Running {len(ordered_jobs)} job(s):")
+        print(f"Running {len(selection.jobs)} job(s):")
         # The same dependency tree 'info jobs' shows, restricted to this run's
         # selection (generator-emitted jobs appear later, as they run).
-        print_job_table(format_job_forest(ordered_jobs), indent="  ")
+        print_job_table(format_job_forest(selection.jobs), indent="  ")
         print()
         # Phase 1: run every job on a fresh commit; old bookmarks are untouched.
         # The returned list includes generator-emitted jobs so the absorb phase
         # processes them too. Jobs pulled in for refresh bypass the cooldown skip
         # so their branches are rebased (ADR 0003).
         ordered_jobs = _run_jobs(
-            ordered_jobs=ordered_jobs,
+            selection=selection,
             config=config,
             repo=repo,
             repo_path=repo_path,
             summary=summary,
-            open_branches=selection.refreshed,
-            successors=selection.successors,
         )
 
         # Phase 2: absorb fresh commits into old commits (preserving change-ids),
