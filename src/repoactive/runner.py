@@ -646,19 +646,17 @@ def _dispatch_job(  # noqa: PLR0913
             if (r := summary.results.get(d)) is not None
         )
         if not any_changed:
-            resolved_job = job.resolve(config.job_defaults)
-            parents = _compute_parents(resolved_job, summary.results)
+            parents = _compute_parents(job, summary.results)
             print(
                 f"==> [{job.name}] skipped"
                 f" (run_only_if_changed: none of {job.run_only_if_changed} produced changes)"
             )
             summary.results[job.name] = JobResult(
-                job=resolved_job, effective_revsets=parents, produced_diff=False
+                job=job, effective_revsets=parents, produced_diff=False
             )
             return []
 
-    resolved_job = job.resolve(config.job_defaults)
-    parents = _compute_parents(resolved_job, summary.results)
+    parents = _compute_parents(job, summary.results)
     logger.debug("[%s] computed parents: %s", job.name, parents)
     # A successor exists to be rebuilt when the stack below it moves. If every
     # dependency was itself skipped this run (cooldown or an earlier successor
@@ -672,7 +670,7 @@ def _dispatch_job(  # noqa: PLR0913
         print(f"==> [{job.name}] skipped (successor: no dependency ran)")
         summary.successor_skipped.add(job.name)
         summary.results[job.name] = JobResult(
-            job=resolved_job, effective_revsets=parents, produced_diff=False
+            job=job, effective_revsets=parents, produced_diff=False
         )
         return []
 
@@ -691,25 +689,25 @@ def _dispatch_job(  # noqa: PLR0913
     if (
         job.name not in open_branches
         and job.name not in successors
-        and (last_run := _on_cooldown(resolved_job, repo_path))
+        and (last_run := _on_cooldown(job, repo_path))
     ):
         elapsed = datetime.now(UTC) - last_run
         elapsed_str = _format_duration(elapsed.total_seconds())
         print(
-            f"==> [{job.name}] on cooldown ({resolved_job.cooldown_period}),"
+            f"==> [{job.name}] on cooldown ({job.cooldown_period}),"
             f" last run {elapsed_str} ago, skipped"
         )
         summary.on_cooldown.add(job.name)
         # Treat like a no-op run so dependents proceed on the base branch.
         summary.results[job.name] = JobResult(
-            job=resolved_job, effective_revsets=parents, produced_diff=False
+            job=job, effective_revsets=parents, produced_diff=False
         )
         return []
 
     secret_env_names = frozenset(config.token_env_names())
-    if resolved_job.emits_jobs:
+    if job.emits_jobs:
         return _run_generator_job(
-            job=resolved_job,
+            job=job,
             parents=parents,
             repo_path=repo_path,
             summary=summary,
@@ -722,7 +720,7 @@ def _dispatch_job(  # noqa: PLR0913
     start = time.monotonic()
     try:
         result = run_job(
-            job=resolved_job,
+            job=job,
             parents=parents,
             repo_path=repo_path,
             secret_env_names=secret_env_names,
@@ -1019,13 +1017,14 @@ def _run_jobs(
             successors=selection.successors,
         )
         if emitted:
+            # Resolve before splicing in so _dispatch_job receives resolved jobs,
+            # matching the invariant for jobs from selection.
+            resolved_emitted = [j.resolve(config.job_defaults) for j in emitted]
             # Track the new jobs' bookmarks so a branch an earlier run already
             # pushed is reused rather than recreated, then splice them in and
             # re-sort so they run after their dependencies.
-            repo.bookmark_track(
-                *sorted(j.resolve(config.job_defaults).branch_name() for j in emitted)
-            )
-            ordered_jobs = topological_sort(ordered_jobs + emitted)
+            repo.bookmark_track(*sorted(j.branch_name() for j in resolved_emitted))
+            ordered_jobs = topological_sort(ordered_jobs + resolved_emitted)
             print_job_table(format_job_forest(ordered_jobs), indent="  ")
     return ordered_jobs
 
