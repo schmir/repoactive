@@ -17,6 +17,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
+from repoactive.boxquote import boxquote, strip_boxquotes
 from repoactive.config import (
     Config,
     CreateMR,
@@ -25,7 +26,6 @@ from repoactive.config import (
     jobs_table,
     merge_jobs,
 )
-from repoactive.constants import JOB_TRAILER_KEY
 from repoactive.graph import CircularDependencyError, detect_dependency_cycle, topological_sort
 from repoactive.jj import JJ, Colocation, workspace_name
 from repoactive.jobtree import format_job_forest, print_job_table
@@ -34,6 +34,7 @@ from repoactive.platforms.base import MRParams, Platform
 from repoactive.progress import ProgressView
 from repoactive.selection import select_run_jobs, validate_selection
 from repoactive.settings import load_settings
+from repoactive.trailers import strip_trailers
 from repoactive.ui import print_undo_hint
 from repoactive.updates import (
     BookmarkPush,
@@ -355,29 +356,20 @@ def _discard_empty_job(
     )
 
 
-def _boxquote(msg: str, title: str = "") -> str:
-    """Render ``msg`` inside a boxquote.el-style box.
-
-    The first line is ``,----[ title ]`` (or just ``,----`` when ``title`` is
-    empty), each line of ``msg`` is prefixed with ``| ``, and the box closes
-    with ``` `---- ```.
-    """
-    top = f",----[ {title} ]" if title else ",----"
-    body = "\n".join(f"| {line}" for line in msg.splitlines())
-    return f"{top}\n{body}\n`----"
-
-
 def _strip_boxquote_and_trailers(message: str) -> str:
-    """Strip the boxquote section and trailers paragraph from a commit message.
+    """Strip the boxquote section and trailer block from a commit message.
 
-    Returns only the title line and description field.
-    Note: inaccurate when the description itself contains a ,---- boxquote (ignored edge case).
+    Returns the author-controlled parts - the title line and description - so two
+    commit messages can be compared while ignoring the command output (rendered
+    in a boxquote) and the ``Repoactive-Job`` trailer(s).
+
+    Trailers are stripped first, while they are still the final paragraph of the
+    built message; ``strip_boxquotes`` reflows whitespace and could otherwise
+    disturb that.
+
+    Note: inaccurate when the commit description itself contains a boxquote
     """
-    if "\n\n,----" in message:
-        return message[: message.index("\n\n,----")]
-    if f"\n\n{JOB_TRAILER_KEY}" in message:
-        return message[: message.index(f"\n\n{JOB_TRAILER_KEY}")]
-    return message
+    return strip_boxquotes(strip_trailers(message))
 
 
 def _build_commit_message(job: Job, command_result: CommandResult) -> str:
@@ -391,7 +383,7 @@ def _build_commit_message(job: Job, command_result: CommandResult) -> str:
     if job.description:
         message += f"\n\n{job.description}"
     if job.output_in_commit and command_result.output:
-        message += f"\n\n{_boxquote(command_result.output, title=job.command)}"
+        message += f"\n\n{boxquote(command_result.output, title=job.command)}"
     # Trailer must be the final paragraph so jj/git recognise it as a trailer;
     # it lets later runs detect when this job last landed (see cooldown handling).
     message += "\n\n" + "\n".join(job.commit_trailers())

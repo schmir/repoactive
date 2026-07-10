@@ -21,7 +21,6 @@ from repoactive.runner import (
     JobResult,
     RunMode,
     RunSummary,
-    _boxquote,
     _build_commit_message,
     _build_generated_jobs,
     _compute_parents,
@@ -429,25 +428,6 @@ class TestRunOneJob:
         assert "b" in summary.results
         assert summary.results["b"].produced_diff is False
         assert mock_run_job.call_count == 0
-
-
-class TestBoxquote:
-    def test_with_title(self) -> None:
-        assert _boxquote("line1\nline2", title="date") == (
-            ",----[ date ]\n| line1\n| line2\n`----"
-        )
-
-    def test_without_title(self) -> None:
-        assert _boxquote("line1\nline2") == ",----\n| line1\n| line2\n`----"
-
-    def test_single_line(self) -> None:
-        assert _boxquote("only", title="cmd") == ",----[ cmd ]\n| only\n`----"
-
-    def test_empty_message(self) -> None:
-        assert _boxquote("", title="cmd") == ",----[ cmd ]\n\n`----"
-
-    def test_preserves_blank_lines(self) -> None:
-        assert _boxquote("a\n\nb") == ",----\n| a\n| \n| b\n`----"
 
 
 class TestBuildCommitMessage:
