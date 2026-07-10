@@ -1222,10 +1222,9 @@ def _run_jobs(  # noqa: PLR0913
     blocked: set[str] = set()
     started: set[str] = set()
     while True:
-        pending = [j for j in ordered_jobs if j.name not in started]
-        if not pending:
+        job = next((j for j in ordered_jobs if j.name not in started), None)
+        if job is None:
             break
-        job = pending[0]
         started.add(job.name)
         emitted = _dispatch_job(
             job=job,
