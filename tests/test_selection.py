@@ -7,11 +7,11 @@ import pytest
 from repoactive.config import Job
 from repoactive.selection import (
     JobSelection,
+    JobSelector,
     UnknownJobsError,
     UnknownTagsError,
     _expand_successors,
     _select_jobs,
-    select_run_jobs,
 )
 from tests.builders import _config, _djob, _job, _names
 
@@ -32,17 +32,6 @@ class TestSelectJobs:
             "b",
             "c",
         ]
-
-    def test_unknown_job_raises(self) -> None:
-        with pytest.raises(UnknownJobsError, match="unknown job"):
-            _select_jobs(jobs=_config(_job("a")).jobs, requested_names=frozenset({"nonexistent"}))
-
-    def test_unknown_tag_raises(self) -> None:
-        jobs = _config(_djob("a", tags=["weekly"])).jobs
-        with pytest.raises(UnknownTagsError, match="unknown tag"):
-            _select_jobs(
-                jobs=jobs, requested_names=frozenset(), requested_tags=frozenset({"weekley"})
-            )
 
     def test_implicit_enabled_and_disabled_tags_are_known(self) -> None:
         # effective tags include the implicit enabled/disabled, so requesting
@@ -345,22 +334,22 @@ class TestExpandSuccessors:
         assert _names(result.jobs) == ["a", "b", "c"]
 
 
-class TestSelectRunJobs:
+class TestJobSelector:
     def test_bare_run_returns_default_jobs(self) -> None:
         config = _config(_djob("a"), _djob("b", tags=["weekly"]))
         repo = _mock_repo()
-        result = select_run_jobs(
-            config=config, repo=repo, requested_names=frozenset(), requested_tags=frozenset()
-        )
+        result = JobSelector(
+            config=config, requested_names=frozenset(), requested_tags=frozenset()
+        ).select_run_jobs(repo)
         assert _names(result.jobs) == ["a"]
 
     def test_bare_run_refreshes_unmerged_branches(self) -> None:
         # A weekly job (out of the default run) with an unmerged branch is pulled in.
         config = _config(_djob("a"), _djob("b", tags=["weekly"]))
         repo = _mock_repo({"b"})
-        result = select_run_jobs(
-            config=config, repo=repo, requested_names=frozenset(), requested_tags=frozenset()
-        )
+        result = JobSelector(
+            config=config, requested_names=frozenset(), requested_tags=frozenset()
+        ).select_run_jobs(repo)
         assert _names(result.jobs) == ["a", "b"]
         # The refreshed subset is reported so the run can bypass cooldown for it.
         assert result.refreshed == frozenset({"b"})
@@ -369,18 +358,18 @@ class TestSelectRunJobs:
         # A trailer for a removed/renamed job must not affect selection.
         config = _config(_djob("a"))
         repo = _mock_repo({"gone"})
-        result = select_run_jobs(
-            config=config, repo=repo, requested_names=frozenset(), requested_tags=frozenset()
-        )
+        result = JobSelector(
+            config=config, requested_names=frozenset(), requested_tags=frozenset()
+        ).select_run_jobs(repo)
         assert _names(result.jobs) == ["a"]
 
     def test_requested_jobs_skip_unmerged_query(self) -> None:
         # Explicit selection does not consult unmerged branches.
         config = _config(_djob("a"), _djob("b"))
         repo = _mock_repo({"a"})
-        result = select_run_jobs(
-            config=config, repo=repo, requested_names=frozenset({"b"}), requested_tags=frozenset()
-        )
+        result = JobSelector(
+            config=config, requested_names=frozenset({"b"}), requested_tags=frozenset()
+        ).select_run_jobs(repo)
         assert _names(result.jobs) == ["b"]
         assert result.refreshed == frozenset()
         # Unmerged branch refresh was skipped — only successor expansion calls (with revset) were made.
@@ -391,24 +380,25 @@ class TestSelectRunJobs:
     def test_requested_tags_skip_unmerged_query(self) -> None:
         config = _config(_djob("a", tags=["weekly"]), _djob("b"))
         repo = _mock_repo({"b"})
-        result = select_run_jobs(
-            config=config,
-            repo=repo,
-            requested_names=frozenset(),
-            requested_tags=frozenset({"weekly"}),
-        )
+        result = JobSelector(
+            config=config, requested_names=frozenset(), requested_tags=frozenset({"weekly"})
+        ).select_run_jobs(repo)
         assert _names(result.jobs) == ["a"]
         assert all(
             c.kwargs.get("revset") is not None for c in repo.pending_job_names.call_args_list
         )
 
     def test_unknown_requested_job_raises(self) -> None:
+        # The request is validated at construction, before any repo work.
         config = _config(_djob("a"))
-        repo = _mock_repo()
-        with pytest.raises(UnknownJobsError):
-            select_run_jobs(
-                config=config,
-                repo=repo,
-                requested_names=frozenset({"nope"}),
-                requested_tags=frozenset(),
+        with pytest.raises(UnknownJobsError, match="unknown job"):
+            JobSelector(
+                config=config, requested_names=frozenset({"nope"}), requested_tags=frozenset()
+            )
+
+    def test_unknown_requested_tag_raises(self) -> None:
+        config = _config(_djob("a", tags=["weekly"]))
+        with pytest.raises(UnknownTagsError, match="unknown tag"):
+            JobSelector(
+                config=config, requested_names=frozenset(), requested_tags=frozenset({"weekley"})
             )

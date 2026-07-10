@@ -32,7 +32,7 @@ from repoactive.jobtree import format_job_forest, print_job_table
 from repoactive.lock import run_lock
 from repoactive.platforms.base import MRParams, Platform
 from repoactive.progress import ProgressView
-from repoactive.selection import select_run_jobs, validate_selection
+from repoactive.selection import JobSelector
 from repoactive.settings import load_settings
 from repoactive.trailers import strip_trailers
 from repoactive.ui import print_undo_hint
@@ -1094,10 +1094,12 @@ def run_all(  # noqa: PLR0913
     assert (mode is RunMode.publish) == (platform is not None), (
         f"mode={mode} is inconsistent with platform={platform!r}"
     )
-    # Fail on a mistyped job name or tag before the lock is taken and before
-    # _prepare_repo mutates anything (or promises an undo hint for a run that
-    # never started).
-    validate_selection(config.jobs, requested_names, requested_tags)
+    # Building the selector validates the request, failing on a mistyped job name
+    # or tag before the lock is taken and before _prepare_repo mutates anything
+    # (or promises an undo hint for a run that never started).
+    selector = JobSelector(
+        config=config, requested_names=requested_names, requested_tags=requested_tags
+    )
     # Serialise runs against the same repository: a run mutates repo-global state
     # (workspaces, bookmarks, pushes), and forget_stale_workspaces would clobber a
     # concurrent run's live workspaces. Fail-fast if another run holds the lock.
@@ -1110,12 +1112,7 @@ def run_all(  # noqa: PLR0913
             requested_tags,
         )
 
-        selection = select_run_jobs(
-            config=config,
-            repo=repo,
-            requested_names=requested_names,
-            requested_tags=requested_tags,
-        )
+        selection = selector.select_run_jobs(repo)
         ordered_jobs = list(selection.jobs)
         summary = RunSummary()
 

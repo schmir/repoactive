@@ -1,9 +1,10 @@
 """Choose and order the jobs a run operates on.
 
-``select_run_jobs`` is the entry point: it resolves the requested names/tags
-into an ordered ``JobSelection``, folding in unmerged-branch refresh and stacked
-successors. ``run_all`` calls ``validate_selection`` first (before taking the
-lock) and ``select_run_jobs`` once the repository is prepared.
+``JobSelector`` is the entry point: constructed from a config and the requested
+names/tags (validating them), its ``select_run_jobs`` resolves an ordered
+``JobSelection`` for a repo, folding in unmerged-branch refresh and stacked
+successors. ``run_all`` builds the selector before taking the lock (so a bad
+request fails early) and calls ``select_run_jobs`` once the repository is prepared.
 """
 
 import logging
@@ -33,23 +34,6 @@ class UnknownTagsError(ValueError):
 
     def __init__(self, unknown: frozenset[str]) -> None:
         super().__init__(f"unknown tag(s): {', '.join(sorted(unknown))}")
-
-
-def validate_selection(
-    jobs: list[Job], requested_names: frozenset[str], requested_tags: frozenset[str]
-) -> None:
-    """Reject unknown job names and tags (a tag carried by no job is a typo).
-
-    run_all calls this before taking the run lock or touching the repository,
-    so a mistyped selection fails before any state changes - and before the
-    undo hint is printed, which would be noise for a run that did nothing.
-    """
-    unknown = requested_names - {j.name for j in jobs}
-    if unknown:
-        raise UnknownJobsError(unknown)
-    unknown_tags = requested_tags - {t for j in jobs for t in j.effective_tags()}
-    if unknown_tags:
-        raise UnknownTagsError(unknown_tags)
 
 
 def _include_dependencies(jobs: list[Job], preselected: frozenset[str]) -> frozenset[str]:
@@ -96,8 +80,8 @@ def _select_jobs(
     dropped if any dependency is not itself selected. Naming jobs or passing
     tags is explicit selection: the union of the named jobs and the jobs
     matching any requested tag (``DEFAULT_TAG`` is not implied), with all
-    dependencies force-included. An unknown name or a tag carried by no job
-    raises (``UnknownJobsError``/``UnknownTagsError``).
+    dependencies force-included. Names and tags are assumed valid - the caller
+    (``JobSelector``) validates them.
 
     ``refresh_names`` names the jobs that currently have an unmerged branch;
     they are force-included regardless of tag, along with their dependencies,
@@ -105,8 +89,6 @@ def _select_jobs(
     waiting for the job's next run.
     """
     jobs = topological_sort(jobs)
-
-    validate_selection(jobs, requested_names, requested_tags)
 
     selected: frozenset[str]
     if requested_names or requested_tags:
@@ -183,38 +165,64 @@ def _expand_successors(*, selection: JobSelection, config: Config, repo: JJ) -> 
     )
 
 
-def select_run_jobs(
-    *,
-    config: Config,
-    repo: JJ,
-    requested_names: frozenset[str],
-    requested_tags: frozenset[str],
-) -> JobSelection:
-    """Pick and order the jobs to run, accounting for unmerged-branch refresh and successors.
+class JobSelector:
+    """Resolves a requested ``(names, tags)`` selection against a config into a run.
 
-    Returns a ``JobSelection`` carrying the ordered jobs and the refreshed
-    subset; the caller reuses ``refreshed`` so a job being refreshed bypasses
-    the cooldown skip (ADR 0003) without a second unmerged-branch query.
+    Construction validates the request (``_validate_selection``) so a mistyped job
+    name or tag fails before any repository work - run_all builds the selector
+    before taking the lock or touching the repo, so the failure comes before any
+    state changes and before the undo hint is printed for a run that did nothing.
+    ``select_run_jobs`` then produces the ordered ``JobSelection`` for a repo.
     """
-    # On the bare default run, also refresh jobs with an unmerged branch so a
-    # stale branch is rebased on trunk now rather than at the job's next run.
-    refresh_names: set[str] = set()
-    if not requested_names and not requested_tags:
-        refresh_names = repo.pending_job_names() & {j.name for j in config.jobs}
-        if refresh_names:
-            print(f"==> refreshing unmerged branches: {', '.join(sorted(refresh_names))}")
-        else:
-            print("==> no unmerged branches to refresh")
 
-    selected = _select_jobs(
-        jobs=config.jobs,
-        requested_names=requested_names,
-        requested_tags=requested_tags,
-        refresh_names=frozenset(refresh_names),
-    )
+    def __init__(
+        self,
+        *,
+        config: Config,
+        requested_names: frozenset[str],
+        requested_tags: frozenset[str],
+    ) -> None:
+        self.requested_names = requested_names
+        self.requested_tags = requested_tags
+        self._all_job_names = frozenset(j.name for j in self.config.jobs)
+        self._all_tags = frozenset(t for j in self.config.jobs for t in j.effective_tags())
+        self._validate_selection()
 
-    return _expand_successors(
-        selection=JobSelection(jobs=selected, refreshed=frozenset(refresh_names)),
-        config=config,
-        repo=repo,
-    )
+    def _validate_selection(self) -> None:
+        """Reject unknown job names and tags in the request (a tag carried by no job is a typo)."""
+        unknown_jobs = self.requested_names - self._all_job_names
+        if unknown_jobs:
+            raise UnknownJobsError(unknown_jobs)
+        unknown_tags = self.requested_tags - self._all_tags
+        if unknown_tags:
+            raise UnknownTagsError(unknown_tags)
+
+    def select_run_jobs(self, repo: JJ) -> JobSelection:
+        """Pick and order the jobs to run, accounting for unmerged-branch refresh and successors.
+
+        Returns a ``JobSelection`` carrying the ordered jobs and the refreshed
+        subset; the caller reuses ``refreshed`` so a job being refreshed bypasses
+        the cooldown skip (ADR 0003) without a second unmerged-branch query.
+        """
+        # On the bare default run, also refresh jobs with an unmerged branch so a
+        # stale branch is rebased on trunk now rather than at the job's next run.
+        refresh_names: set[str] = set()
+        if not self.requested_names and not self.requested_tags:
+            refresh_names = repo.pending_job_names() & self._all_job_names
+            if refresh_names:
+                print(f"==> refreshing unmerged branches: {', '.join(sorted(refresh_names))}")
+            else:
+                print("==> no unmerged branches to refresh")
+
+        selected = _select_jobs(
+            jobs=self.config.jobs,
+            requested_names=self.requested_names,
+            requested_tags=self.requested_tags,
+            refresh_names=frozenset(refresh_names),
+        )
+
+        return _expand_successors(
+            selection=JobSelection(jobs=selected, refreshed=frozenset(refresh_names)),
+            config=self.config,
+            repo=repo,
+        )
