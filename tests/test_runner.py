@@ -177,47 +177,57 @@ def _names(jobs: list[Job]) -> list[str]:
 class TestSelectJobs:
     def test_no_filter_returns_all(self) -> None:
         jobs = _config(_job("a"), _job("b")).jobs
-        assert _names(_select_jobs(jobs=jobs, requested_names=set())) == ["a", "b"]
+        assert _names(_select_jobs(jobs=jobs, requested_names=frozenset())) == ["a", "b"]
 
     def test_requested_subset(self) -> None:
         config = _config(_job("a"), _job("b"), _job("c"))
-        assert _names(_select_jobs(jobs=config.jobs, requested_names={"a"})) == ["a"]
+        assert _names(_select_jobs(jobs=config.jobs, requested_names=frozenset({"a"}))) == ["a"]
 
     def test_requested_includes_transitive_deps(self) -> None:
         config = _config(_job("a"), _job("b", depends_on=["a"]), _job("c", depends_on=["b"]))
-        assert _names(_select_jobs(jobs=config.jobs, requested_names={"c"})) == ["a", "b", "c"]
+        assert _names(_select_jobs(jobs=config.jobs, requested_names=frozenset({"c"}))) == [
+            "a",
+            "b",
+            "c",
+        ]
 
     def test_unknown_job_raises(self) -> None:
         with pytest.raises(UnknownJobsError, match="unknown job"):
-            _select_jobs(jobs=_config(_job("a")).jobs, requested_names={"nonexistent"})
+            _select_jobs(jobs=_config(_job("a")).jobs, requested_names=frozenset({"nonexistent"}))
 
     def test_unknown_tag_raises(self) -> None:
         jobs = _config(_djob("a", tags=["weekly"])).jobs
         with pytest.raises(UnknownTagsError, match="unknown tag"):
-            _select_jobs(jobs=jobs, requested_names=set(), requested_tags={"weekley"})
+            _select_jobs(
+                jobs=jobs, requested_names=frozenset(), requested_tags=frozenset({"weekley"})
+            )
 
     def test_implicit_enabled_and_disabled_tags_are_known(self) -> None:
         # effective tags include the implicit enabled/disabled, so requesting
         # them is valid even though no job lists them explicitly.
         jobs = _config(_djob("a"), _djob("b", disabled=True)).jobs
         assert _names(
-            _select_jobs(jobs=jobs, requested_names=set(), requested_tags={"enabled"})
+            _select_jobs(
+                jobs=jobs, requested_names=frozenset(), requested_tags=frozenset({"enabled"})
+            )
         ) == ["a"]
         assert _names(
-            _select_jobs(jobs=jobs, requested_names=set(), requested_tags={"disabled"})
+            _select_jobs(
+                jobs=jobs, requested_names=frozenset(), requested_tags=frozenset({"disabled"})
+            )
         ) == ["b"]
 
     def test_no_disabled_jobs(self) -> None:
         config = _config(_djob("a"), _djob("b"))
-        assert _names(_select_jobs(jobs=config.jobs, requested_names=set())) == ["a", "b"]
+        assert _names(_select_jobs(jobs=config.jobs, requested_names=frozenset())) == ["a", "b"]
 
     def test_explicitly_disabled_excluded(self) -> None:
         config = _config(_djob("a", disabled=True), _djob("b"))
-        assert _names(_select_jobs(jobs=config.jobs, requested_names=set())) == ["b"]
+        assert _names(_select_jobs(jobs=config.jobs, requested_names=frozenset())) == ["b"]
 
     def test_direct_dependent_excluded(self) -> None:
         config = _config(_djob("a", disabled=True), _djob("b", depends_on=["a"]))
-        assert _names(_select_jobs(jobs=config.jobs, requested_names=set())) == []
+        assert _names(_select_jobs(jobs=config.jobs, requested_names=frozenset())) == []
 
     def test_transitive_propagation(self) -> None:
         config = _config(
@@ -225,11 +235,11 @@ class TestSelectJobs:
             _djob("b", depends_on=["a"]),
             _djob("c", depends_on=["b"]),
         )
-        assert _names(_select_jobs(jobs=config.jobs, requested_names=set())) == []
+        assert _names(_select_jobs(jobs=config.jobs, requested_names=frozenset())) == []
 
     def test_unrelated_job_not_excluded(self) -> None:
         config = _config(_djob("a", disabled=True), _djob("b", depends_on=["a"]), _djob("c"))
-        assert _names(_select_jobs(jobs=config.jobs, requested_names=set())) == ["c"]
+        assert _names(_select_jobs(jobs=config.jobs, requested_names=frozenset())) == ["c"]
 
     def test_multiple_disabled_roots(self) -> None:
         config = _config(
@@ -238,7 +248,7 @@ class TestSelectJobs:
             _djob("c", depends_on=["a"]),
             _djob("d", depends_on=["b"]),
         )
-        assert _names(_select_jobs(jobs=config.jobs, requested_names=set())) == []
+        assert _names(_select_jobs(jobs=config.jobs, requested_names=frozenset())) == []
 
     def test_diamond_propagation(self) -> None:
         config = _config(
@@ -247,45 +257,54 @@ class TestSelectJobs:
             _djob("c", depends_on=["a"]),
             _djob("d", depends_on=["b", "c"]),
         )
-        assert _names(_select_jobs(jobs=config.jobs, requested_names=set())) == []
+        assert _names(_select_jobs(jobs=config.jobs, requested_names=frozenset())) == []
 
     def test_only_one_dep_disabled(self) -> None:
         config = _config(_djob("a", disabled=True), _djob("b"), _djob("c", depends_on=["a", "b"]))
-        assert _names(_select_jobs(jobs=config.jobs, requested_names=set())) == ["b"]
+        assert _names(_select_jobs(jobs=config.jobs, requested_names=frozenset())) == ["b"]
 
     def test_disabled_job_depends_on_disabled_job(self) -> None:
         config = _config(_djob("a", disabled=True), _djob("b", disabled=True, depends_on=["a"]))
-        assert _names(_select_jobs(jobs=config.jobs, requested_names=set())) == []
+        assert _names(_select_jobs(jobs=config.jobs, requested_names=frozenset())) == []
 
     def test_requesting_disabled_job_runs_it(self) -> None:
         config = _config(_djob("a", disabled=True))
-        assert _names(_select_jobs(jobs=config.jobs, requested_names={"a"})) == ["a"]
+        assert _names(_select_jobs(jobs=config.jobs, requested_names=frozenset({"a"}))) == ["a"]
 
     def test_requesting_job_pulls_in_disabled_dependency(self) -> None:
         config = _config(_djob("a", disabled=True), _djob("b", depends_on=["a"]))
-        assert _names(_select_jobs(jobs=config.jobs, requested_names={"b"})) == ["a", "b"]
+        assert _names(_select_jobs(jobs=config.jobs, requested_names=frozenset({"b"}))) == [
+            "a",
+            "b",
+        ]
 
     def test_tagged_job_excluded_from_default_run(self) -> None:
         config = _config(_djob("a"), _djob("b", tags=["weekly"]))
-        assert _names(_select_jobs(jobs=config.jobs, requested_names=set())) == ["a"]
+        assert _names(_select_jobs(jobs=config.jobs, requested_names=frozenset())) == ["a"]
 
     def test_tag_selects_matching_jobs(self) -> None:
         config = _config(_djob("a"), _djob("b", tags=["weekly"]), _djob("c", tags=["weekly"]))
         assert _names(
-            _select_jobs(jobs=config.jobs, requested_names=set(), requested_tags={"weekly"})
+            _select_jobs(
+                jobs=config.jobs, requested_names=frozenset(), requested_tags=frozenset({"weekly"})
+            )
         ) == ["b", "c"]
 
     def test_tag_does_not_imply_enabled(self) -> None:
         config = _config(_djob("a"), _djob("b", tags=["weekly"]))
         assert _names(
-            _select_jobs(jobs=config.jobs, requested_names=set(), requested_tags={"weekly"})
+            _select_jobs(
+                jobs=config.jobs, requested_names=frozenset(), requested_tags=frozenset({"weekly"})
+            )
         ) == ["b"]
 
     def test_explicit_enabled_tag_keeps_job_in_both(self) -> None:
         config = _config(_djob("a"), _djob("b", tags=["enabled", "weekly"]))
-        assert _names(_select_jobs(jobs=config.jobs, requested_names=set())) == ["a", "b"]
+        assert _names(_select_jobs(jobs=config.jobs, requested_names=frozenset())) == ["a", "b"]
         assert _names(
-            _select_jobs(jobs=config.jobs, requested_names=set(), requested_tags={"weekly"})
+            _select_jobs(
+                jobs=config.jobs, requested_names=frozenset(), requested_tags=frozenset({"weekly"})
+            )
         ) == ["b"]
 
     def test_multiple_tags_are_ored(self) -> None:
@@ -294,7 +313,9 @@ class TestSelectJobs:
         )
         assert _names(
             _select_jobs(
-                jobs=config.jobs, requested_names=set(), requested_tags={"weekly", "monthly"}
+                jobs=config.jobs,
+                requested_names=frozenset(),
+                requested_tags=frozenset({"weekly", "monthly"}),
             )
         ) == ["a", "b"]
 
@@ -302,31 +323,43 @@ class TestSelectJobs:
         # disabled is sugar for the 'disabled' tag, so --tag disabled runs them.
         config = _config(_djob("a", disabled=True), _djob("b"))
         assert _names(
-            _select_jobs(jobs=config.jobs, requested_names=set(), requested_tags={"disabled"})
+            _select_jobs(
+                jobs=config.jobs,
+                requested_names=frozenset(),
+                requested_tags=frozenset({"disabled"}),
+            )
         ) == ["a"]
 
     def test_names_and_tags_are_unioned(self) -> None:
         config = _config(_djob("a"), _djob("b", tags=["weekly"]), _djob("c"))
         assert _names(
-            _select_jobs(jobs=config.jobs, requested_names={"a"}, requested_tags={"weekly"})
+            _select_jobs(
+                jobs=config.jobs,
+                requested_names=frozenset({"a"}),
+                requested_tags=frozenset({"weekly"}),
+            )
         ) == ["a", "b"]
 
     def test_tag_selection_force_includes_dependencies(self) -> None:
         config = _config(_djob("a"), _djob("b", tags=["weekly"], depends_on=["a"]))
         assert _names(
-            _select_jobs(jobs=config.jobs, requested_names=set(), requested_tags={"weekly"})
+            _select_jobs(
+                jobs=config.jobs, requested_names=frozenset(), requested_tags=frozenset({"weekly"})
+            )
         ) == ["a", "b"]
 
     def test_tagged_dependency_dropped_from_default_run(self) -> None:
         # b is out of the default run (tagged weekly); its dependent c is dropped too.
         config = _config(_djob("a"), _djob("b", tags=["weekly"]), _djob("c", depends_on=["b"]))
-        assert _names(_select_jobs(jobs=config.jobs, requested_names=set())) == ["a"]
+        assert _names(_select_jobs(jobs=config.jobs, requested_names=frozenset())) == ["a"]
 
     def test_refresh_job_pulled_into_default_run(self) -> None:
         # A weekly job with an unmerged branch is refreshed by the default run.
         config = _config(_djob("a"), _djob("b", tags=["weekly"]))
         assert _names(
-            _select_jobs(jobs=config.jobs, requested_names=set(), refresh_names={"b"})
+            _select_jobs(
+                jobs=config.jobs, requested_names=frozenset(), refresh_names=frozenset({"b"})
+            )
         ) == ["a", "b"]
 
     def test_refresh_includes_dependencies(self) -> None:
@@ -334,21 +367,27 @@ class TestSelectJobs:
             _djob("a", tags=["weekly"]), _djob("b", tags=["weekly"], depends_on=["a"])
         )
         assert _names(
-            _select_jobs(jobs=config.jobs, requested_names=set(), refresh_names={"b"})
+            _select_jobs(
+                jobs=config.jobs, requested_names=frozenset(), refresh_names=frozenset({"b"})
+            )
         ) == ["a", "b"]
 
     def test_refresh_includes_disabled_job(self) -> None:
         # An unmerged branch for a disabled job (likely from an explicit run) is refreshed.
         config = _config(_djob("a"), _djob("b", disabled=True))
         assert _names(
-            _select_jobs(jobs=config.jobs, requested_names=set(), refresh_names={"b"})
+            _select_jobs(
+                jobs=config.jobs, requested_names=frozenset(), refresh_names=frozenset({"b"})
+            )
         ) == ["a", "b"]
 
     def test_refresh_ignores_unknown_names(self) -> None:
         # A trailer for a removed/renamed job must not blow up selection.
         config = _config(_djob("a"))
         assert _names(
-            _select_jobs(jobs=config.jobs, requested_names=set(), refresh_names={"gone"})
+            _select_jobs(
+                jobs=config.jobs, requested_names=frozenset(), refresh_names=frozenset({"gone"})
+            )
         ) == ["a"]
 
 
@@ -381,7 +420,7 @@ class TestExpandSuccessors:
 
     def test_no_successors_returns_selected_unchanged(self) -> None:
         config = _config(_djob("a"), _djob("b"))
-        selected = _select_jobs(jobs=config.jobs, requested_names={"a"})
+        selected = _select_jobs(jobs=config.jobs, requested_names=frozenset({"a"}))
         repo = _mock_repo_with_successors(set())
         result = _expand_successors(selection=self._sel(selected), config=config, repo=repo)
         assert _names(result.jobs) == ["a"]
@@ -389,7 +428,7 @@ class TestExpandSuccessors:
     def test_direct_successor_is_added(self) -> None:
         # b's last commit sits on a's bookmark, so b is pulled in.
         config = _config(_djob("a"), _djob("b"))
-        selected = _select_jobs(jobs=config.jobs, requested_names={"a"})
+        selected = _select_jobs(jobs=config.jobs, requested_names=frozenset({"a"}))
         repo = _mock_repo_with_successors({"b"})
         result = _expand_successors(selection=self._sel(selected), config=config, repo=repo)
         assert _names(result.jobs) == ["a", "b"]
@@ -399,7 +438,7 @@ class TestExpandSuccessors:
         # cooldown at dispatch time, but unlike refresh jobs they are skipped
         # when nothing below them in the stack ran (see _dispatch_job).
         config = _config(_djob("a"), _djob("b"))
-        selected = _select_jobs(jobs=config.jobs, requested_names={"a"})
+        selected = _select_jobs(jobs=config.jobs, requested_names=frozenset({"a"}))
         repo = _mock_repo_with_successors({"b"})
         result = _expand_successors(selection=self._sel(selected), config=config, repo=repo)
         assert result.successors == frozenset({"b"})
@@ -409,7 +448,9 @@ class TestExpandSuccessors:
         # A default run's refresh subset must survive successor expansion:
         # refresh jobs bypass cooldown unconditionally, successors do not.
         config = _config(_djob("a"), _djob("b", tags=["weekly"]))
-        selected = _select_jobs(jobs=config.jobs, requested_names=set(), refresh_names={"a"})
+        selected = _select_jobs(
+            jobs=config.jobs, requested_names=frozenset(), refresh_names=frozenset({"a"})
+        )
         repo = _mock_repo_with_successors({"b"})
         result = _expand_successors(
             selection=JobSelection(jobs=selected, refreshed=frozenset({"a"})),
@@ -422,7 +463,7 @@ class TestExpandSuccessors:
     def test_deep_stack_expanded_in_one_query(self) -> None:
         # descendants() finds b and c above a's bookmark in a single call.
         config = _config(_djob("a"), _djob("b"), _djob("c"))
-        selected = _select_jobs(jobs=config.jobs, requested_names={"a"})
+        selected = _select_jobs(jobs=config.jobs, requested_names=frozenset({"a"}))
         repo = _mock_repo_with_successors({"b", "c"})
         result = _expand_successors(selection=self._sel(selected), config=config, repo=repo)
         assert _names(result.jobs) == ["a", "b", "c"]
@@ -431,21 +472,21 @@ class TestExpandSuccessors:
     def test_unknown_successor_is_ignored(self) -> None:
         # pending_job_names may return names not present in config (e.g. removed jobs).
         config = _config(_djob("a"))
-        selected = _select_jobs(jobs=config.jobs, requested_names={"a"})
+        selected = _select_jobs(jobs=config.jobs, requested_names=frozenset({"a"}))
         repo = _mock_repo_with_successors({"gone"})
         result = _expand_successors(selection=self._sel(selected), config=config, repo=repo)
         assert _names(result.jobs) == ["a"]
 
     def test_already_selected_successor_is_a_noop(self) -> None:
         config = _config(_djob("a"), _djob("b"))
-        selected = _select_jobs(jobs=config.jobs, requested_names={"a", "b"})
+        selected = _select_jobs(jobs=config.jobs, requested_names=frozenset({"a", "b"}))
         repo = _mock_repo_with_successors({"b"})
         result = _expand_successors(selection=self._sel(selected), config=config, repo=repo)
         assert _names(result.jobs) == ["a", "b"]
 
     def test_bookmarks_passed_as_revset(self) -> None:
         config = _config(_djob("a"), _djob("b"))
-        selected = _select_jobs(jobs=config.jobs, requested_names={"a", "b"})
+        selected = _select_jobs(jobs=config.jobs, requested_names=frozenset({"a", "b"}))
         repo = _mock_repo_with_successors(set())
         _expand_successors(selection=self._sel(selected), config=config, repo=repo)
         [call_args] = repo.pending_job_names.call_args_list
@@ -456,7 +497,7 @@ class TestExpandSuccessors:
     def test_successor_pulls_in_its_dependencies(self) -> None:
         # c depends on b; when c is a successor of a, b must be included too.
         config = _config(_djob("a"), _djob("b"), _djob("c", depends_on=["b"]))
-        selected = _select_jobs(jobs=config.jobs, requested_names={"a"})
+        selected = _select_jobs(jobs=config.jobs, requested_names=frozenset({"a"}))
         repo = _mock_repo_with_successors({"c"})
         result = _expand_successors(selection=self._sel(selected), config=config, repo=repo)
         assert _names(result.jobs) == ["a", "b", "c"]
@@ -467,7 +508,7 @@ class TestSelectRunJobs:
         config = _config(_djob("a"), _djob("b", tags=["weekly"]))
         repo = _mock_repo()
         result = _select_run_jobs(
-            config=config, repo=repo, requested_names=None, requested_tags=None
+            config=config, repo=repo, requested_names=frozenset(), requested_tags=frozenset()
         )
         assert _names(result.jobs) == ["a"]
 
@@ -476,7 +517,7 @@ class TestSelectRunJobs:
         config = _config(_djob("a"), _djob("b", tags=["weekly"]))
         repo = _mock_repo({"b"})
         result = _select_run_jobs(
-            config=config, repo=repo, requested_names=None, requested_tags=None
+            config=config, repo=repo, requested_names=frozenset(), requested_tags=frozenset()
         )
         assert _names(result.jobs) == ["a", "b"]
         # The refreshed subset is reported so the run can bypass cooldown for it.
@@ -487,7 +528,7 @@ class TestSelectRunJobs:
         config = _config(_djob("a"))
         repo = _mock_repo({"gone"})
         result = _select_run_jobs(
-            config=config, repo=repo, requested_names=None, requested_tags=None
+            config=config, repo=repo, requested_names=frozenset(), requested_tags=frozenset()
         )
         assert _names(result.jobs) == ["a"]
 
@@ -496,7 +537,7 @@ class TestSelectRunJobs:
         config = _config(_djob("a"), _djob("b"))
         repo = _mock_repo({"a"})
         result = _select_run_jobs(
-            config=config, repo=repo, requested_names=["b"], requested_tags=None
+            config=config, repo=repo, requested_names=frozenset({"b"}), requested_tags=frozenset()
         )
         assert _names(result.jobs) == ["b"]
         assert result.refreshed == frozenset()
@@ -509,7 +550,10 @@ class TestSelectRunJobs:
         config = _config(_djob("a", tags=["weekly"]), _djob("b"))
         repo = _mock_repo({"b"})
         result = _select_run_jobs(
-            config=config, repo=repo, requested_names=None, requested_tags=["weekly"]
+            config=config,
+            repo=repo,
+            requested_names=frozenset(),
+            requested_tags=frozenset({"weekly"}),
         )
         assert _names(result.jobs) == ["a"]
         assert all(
@@ -521,7 +565,10 @@ class TestSelectRunJobs:
         repo = _mock_repo()
         with pytest.raises(UnknownJobsError):
             _select_run_jobs(
-                config=config, repo=repo, requested_names=["nope"], requested_tags=None
+                config=config,
+                repo=repo,
+                requested_names=frozenset({"nope"}),
+                requested_tags=frozenset(),
             )
 
 
@@ -2207,7 +2254,7 @@ class TestRunAll:
         a, b, c = _job("a"), _job("b"), _job("c")
         mock_run_job.return_value = _result(b, revsets=["repoactive/b"])
 
-        run_all(config=_config(a, b, c), repo_path=REPO, requested_names=["b"])
+        run_all(config=_config(a, b, c), repo_path=REPO, requested_names=frozenset({"b"}))
 
         called_names = {c.kwargs["job"].name for c in mock_run_job.call_args_list}
         assert called_names == {"b"}
@@ -2304,7 +2351,7 @@ class TestRunAll:
         b = _job("b")
         mock_run_job.return_value = _result(a.resolve(JobDefaults()), revsets=["repoactive/a"])
 
-        run_all(config=_config(a, b), repo_path=REPO, requested_names=["a"])
+        run_all(config=_config(a, b), repo_path=REPO, requested_names=frozenset({"a"}))
 
         called_names = {c.kwargs["job"].name for c in mock_run_job.call_args_list}
         assert called_names == {"a"}
@@ -2318,7 +2365,7 @@ class TestRunAll:
             _result(b, revsets=["repoactive/b"]),
         ]
 
-        run_all(config=_config(a, b), repo_path=REPO, requested_names=["b"])
+        run_all(config=_config(a, b), repo_path=REPO, requested_names=frozenset({"b"}))
 
         called_names = {c.kwargs["job"].name for c in mock_run_job.call_args_list}
         assert called_names == {"a", "b"}
@@ -2477,7 +2524,7 @@ class TestRunAll:
         config = _config(_djob("a"), _djob("b", tags=["weekly"]))
         mock_run_job.return_value = _result(_job("x"), revsets=["repoactive/x"])
 
-        run_all(config=config, repo_path=REPO, requested_names=["a"])
+        run_all(config=config, repo_path=REPO, requested_names=frozenset({"a"}))
 
         # Branch refresh was skipped — only successor expansion calls (with revset) were made.
         calls = mock_jj.return_value.pending_job_names.call_args_list
@@ -2518,7 +2565,9 @@ class TestRunAll:
         mock_jj.return_value.last_job_commit_date.return_value = datetime(2026, 1, 1, tzinfo=UTC)
         self._stub_successors(mock_jj, {"b"})
 
-        summary = run_all(config=self._successor_config(), repo_path=REPO, requested_names=["a"])
+        summary = run_all(
+            config=self._successor_config(), repo_path=REPO, requested_names=frozenset({"a"})
+        )
 
         mock_run_job.assert_not_called()
         assert summary.on_cooldown == {"a"}
@@ -2545,7 +2594,7 @@ class TestRunAll:
         summary = run_all(
             config=self._successor_config(successor_cooldown="7d"),
             repo_path=REPO,
-            requested_names=["a"],
+            requested_names=frozenset({"a"}),
         )
 
         called_names = {c.kwargs["job"].name for c in mock_run_job.call_args_list}
@@ -2592,9 +2641,9 @@ class TestRunAll:
         # run that never started.
         config = _config(_djob("a"))
         with pytest.raises(UnknownTagsError):
-            run_all(config=config, repo_path=REPO, requested_tags=["weekley"])
+            run_all(config=config, repo_path=REPO, requested_tags=frozenset({"weekley"}))
         with pytest.raises(UnknownJobsError):
-            run_all(config=config, repo_path=REPO, requested_names=["nope"])
+            run_all(config=config, repo_path=REPO, requested_names=frozenset({"nope"}))
         assert "op restore" not in capsys.readouterr().out
         mock_jj.return_value.forget_stale_workspaces.assert_not_called()
         mock_jj.return_value.bookmark_track.assert_not_called()

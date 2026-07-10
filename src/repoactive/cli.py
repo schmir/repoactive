@@ -241,8 +241,8 @@ def run(  # noqa: PLR0913
             config=cfg,
             repo_path=repo,
             platform=platform,
-            requested_names=jobs or None,
-            requested_tags=tags or None,
+            requested_names=frozenset(jobs or []),
+            requested_tags=frozenset(tags or []),
             mode=mode,
         )
     except RunLockHeldError as e:

@@ -102,7 +102,7 @@ class CommandError(RuntimeError):
 class UnknownJobsError(ValueError):
     """Raised when requested job names do not match any configured job."""
 
-    def __init__(self, unknown: set[str]) -> None:
+    def __init__(self, unknown: frozenset[str]) -> None:
         super().__init__(f"unknown job(s): {', '.join(sorted(unknown))}")
 
 
@@ -114,7 +114,7 @@ class UnknownTagsError(ValueError):
     crontab from silently running zero jobs.
     """
 
-    def __init__(self, unknown: set[str]) -> None:
+    def __init__(self, unknown: frozenset[str]) -> None:
         super().__init__(f"unknown tag(s): {', '.join(sorted(unknown))}")
 
 
@@ -675,7 +675,7 @@ def _on_cooldown(job: Job, repo_path: Path) -> datetime | None:
 
 
 def _validate_selection(
-    jobs: list[Job], requested_names: set[str], requested_tags: set[str]
+    jobs: list[Job], requested_names: frozenset[str], requested_tags: frozenset[str]
 ) -> None:
     """Reject unknown job names and tags (a tag carried by no job is a typo).
 
@@ -691,23 +691,42 @@ def _validate_selection(
         raise UnknownTagsError(unknown_tags)
 
 
-def _include_dependencies(jobs: list[Job], selected: set[str]) -> None:
-    """Add the transitive dependencies of every selected job to ``selected``.
+def _include_dependencies(jobs: list[Job], preselected: frozenset[str]) -> frozenset[str]:
+    """Add the transitive dependencies of every selected job.
 
     ``jobs`` must be topologically sorted; iterating in reverse propagates
     dependencies of dependencies in a single pass.
     """
+    selected = set(preselected)
     for j in reversed(jobs):
         if j.name in selected:
             selected.update(j.depends_on)
+    return frozenset(selected)
+
+
+def _drop_jobs_with_unselected_deps(
+    jobs: list[Job], preselected: frozenset[str]
+) -> frozenset[str]:
+    """Drop from ``preselected`` any job that depends on a job not selected.
+
+    The drop cascades to further dependents because ``jobs`` is topologically
+    sorted: a dependency removed earlier is already gone by the time its
+    dependent is checked.
+    """
+    selected = set(preselected)
+    for j in jobs:
+        if j.name in selected and any(dep not in selected for dep in j.depends_on):
+            print(f"==> [{j.name}] skipped (dependency not in default run)")
+            selected.remove(j.name)
+    return frozenset(selected)
 
 
 def _select_jobs(
     *,
     jobs: list[Job],
-    requested_names: set[str],
-    requested_tags: set[str] | None = None,
-    refresh_names: set[str] | None = None,
+    requested_names: frozenset[str],
+    requested_tags: frozenset[str] = frozenset(),
+    refresh_names: frozenset[str] = frozenset(),
 ) -> list[Job]:
     """Return the filtered, topologically sorted jobs to run.
 
@@ -724,37 +743,31 @@ def _select_jobs(
     so the default run keeps unmerged branches rebased on trunk rather than
     waiting for the job's next run.
     """
-    requested_tags = requested_tags or set()
-    refresh_names = refresh_names or set()
     jobs = topological_sort(jobs)
 
     _validate_selection(jobs, requested_names, requested_tags)
 
-    selected: set[str]
+    selected: frozenset[str]
     if requested_names or requested_tags:
-        selected = set(requested_names)
-        selected.update(j.name for j in jobs if j.effective_tags() & requested_tags)
-        _include_dependencies(jobs, selected)
+        selected = requested_names | {j.name for j in jobs if j.effective_tags() & requested_tags}
+        selected = _include_dependencies(jobs, selected)
     else:
-        selected = {j.name for j in jobs if DEFAULT_TAG in j.effective_tags()}
-        for j in jobs:
-            if j.name in selected and any(dep not in selected for dep in j.depends_on):
-                print(f"==> [{j.name}] skipped (dependency not in default run)")
-                selected.remove(j.name)
+        selected = frozenset(j.name for j in jobs if DEFAULT_TAG in j.effective_tags())
+        selected = _drop_jobs_with_unselected_deps(jobs, selected)
 
     if refresh_names:
-        selected.update(refresh_names)
-        _include_dependencies(jobs, selected)
+        selected = selected | refresh_names
+        selected = _include_dependencies(jobs, selected)
 
-    result = [j for j in jobs if j.name in selected]
+    selected_jobs = [j for j in jobs if j.name in selected]
     logger.debug(
         "selected jobs: %s (requested=%s, tags=%s, refresh=%s)",
-        [j.name for j in result],
+        [j.name for j in selected_jobs],
         sorted(requested_names),
         sorted(requested_tags),
         sorted(refresh_names),
     )
-    return result
+    return selected_jobs
 
 
 @dataclass
@@ -801,9 +814,8 @@ def _expand_successors(*, selection: JobSelection, config: Config, repo: JJ) -> 
     return JobSelection(
         jobs=_select_jobs(
             jobs=config.jobs,
-            requested_names=selected_names,
-            requested_tags=set(),
-            refresh_names=successor_names,
+            requested_names=frozenset(selected_names),
+            refresh_names=frozenset(successor_names),
         ),
         refreshed=selection.refreshed,
         successors=frozenset(successor_names),
@@ -814,8 +826,8 @@ def _select_run_jobs(
     *,
     config: Config,
     repo: JJ,
-    requested_names: list[str] | None,
-    requested_tags: list[str] | None,
+    requested_names: frozenset[str],
+    requested_tags: frozenset[str],
 ) -> JobSelection:
     """Pick and order the jobs to run, accounting for unmerged-branch refresh and successors.
 
@@ -835,9 +847,9 @@ def _select_run_jobs(
 
     selected = _select_jobs(
         jobs=config.jobs,
-        requested_names=set(requested_names or []),
-        requested_tags=set(requested_tags or []),
-        refresh_names=refresh_names,
+        requested_names=requested_names,
+        requested_tags=requested_tags,
+        refresh_names=frozenset(refresh_names),
     )
 
     return _expand_successors(
@@ -1285,8 +1297,8 @@ def run_all(  # noqa: PLR0913
     config: Config,
     repo_path: Path,
     platform: Platform | None = None,
-    requested_names: list[str] | None = None,
-    requested_tags: list[str] | None = None,
+    requested_names: frozenset[str] = frozenset(),
+    requested_tags: frozenset[str] = frozenset(),
     mode: RunMode = RunMode.local,
 ) -> RunSummary:
     # A publish run needs a platform to create MRs; local/push runs must not be
@@ -1297,7 +1309,7 @@ def run_all(  # noqa: PLR0913
     # Fail on a mistyped job name or tag before the lock is taken and before
     # _prepare_repo mutates anything (or promises an undo hint for a run that
     # never started).
-    _validate_selection(config.jobs, set(requested_names or []), set(requested_tags or []))
+    _validate_selection(config.jobs, requested_names, requested_tags)
     # Serialise runs against the same repository: a run mutates repo-global state
     # (workspaces, bookmarks, pushes), and forget_stale_workspaces would clobber a
     # concurrent run's live workspaces. Fail-fast if another run holds the lock.

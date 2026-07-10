@@ -323,8 +323,8 @@ class TestRun:
         kwargs = run_all.call_args.kwargs
         assert kwargs["repo_path"] == repo
         assert kwargs["mode"] is RunMode.local
-        assert kwargs["requested_names"] is None
-        assert kwargs["requested_tags"] is None
+        assert kwargs["requested_names"] == frozenset()
+        assert kwargs["requested_tags"] == frozenset()
         assert kwargs["platform"] is None
 
     def test_failed_summary_exits_nonzero(self, tmp_path: Path) -> None:
@@ -350,7 +350,7 @@ class TestRun:
         repo = _make_repo(tmp_path)
         cfg = repo / "config.toml"
         _write_job(cfg, "a")
-        err = UnknownJobsError({"nope"})
+        err = UnknownJobsError(frozenset({"nope"}))
         with patch("repoactive.cli.run_all", side_effect=err):
             result = runner.invoke(app, ["run", "--repo", str(repo), "--config", str(cfg), "nope"])
         assert result.exit_code == 1
@@ -361,7 +361,7 @@ class TestRun:
         repo = _make_repo(tmp_path)
         cfg = repo / "config.toml"
         _write_job(cfg, "a")
-        err = UnknownTagsError({"weekley"})
+        err = UnknownTagsError(frozenset({"weekley"}))
         with patch("repoactive.cli.run_all", side_effect=err):
             result = runner.invoke(
                 app, ["run", "--repo", str(repo), "--config", str(cfg), "--tag", "weekley"]
@@ -422,8 +422,8 @@ class TestRun:
             )
         assert result.exit_code == 0
         kwargs = run_all.call_args.kwargs
-        assert kwargs["requested_names"] == ["a"]
-        assert kwargs["requested_tags"] == ["x"]
+        assert kwargs["requested_names"] == frozenset({"a"})
+        assert kwargs["requested_tags"] == frozenset({"x"})
 
     def test_publish_mode_resolves_platform(self, tmp_path: Path) -> None:
         repo = _make_repo(tmp_path)
