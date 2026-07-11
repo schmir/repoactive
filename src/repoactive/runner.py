@@ -119,7 +119,7 @@ class JobResult:
     # dependents only need this during the run, before absorb.
     effective_revsets: list[str]
     produced_diff: bool
-    # Parent revsets passed to ws.new() in phase 1. Carried so the absorb
+    # Parent revsets passed to repo.new() in phase 1. Carried so the absorb
     # phase knows where to rebase the old commit.
     parents: list[str] = field(default_factory=list)
     # change-id of the fresh commit created in phase 1 (None when no diff).
@@ -359,7 +359,7 @@ def _discard_empty_job(
     *,
     job: Job,
     parents: list[str],
-    ws: JJ,
+    repo: JJ,
     command_result: CommandResult,
     old_change_id: str | None,
 ) -> JobResult:
@@ -370,7 +370,7 @@ def _discard_empty_job(
     JobResult with produced_diff=False, carrying the original parents forward so
     dependents still have a base.
     """
-    ws.abandon()
+    repo.abandon()
     if old_change_id:
         print(
             f"==> [{job.name}] no changes, bookmark will be deleted ({command_result.elapsed:.1f}s)"
@@ -425,7 +425,7 @@ def _commit_job(
     *,
     job: Job,
     parents: list[str],
-    ws: JJ,
+    repo: JJ,
     command_result: CommandResult,
     old_change_id: str | None,
 ) -> JobResult:
@@ -437,9 +437,9 @@ def _commit_job(
     new change-id so dependent jobs build directly on this commit during phase 1.
     The push and MR are recorded in the absorb phase once the bookmark is set.
     """
-    stat = ws.diff_stat()
-    ws.describe(_build_commit_message(job, command_result))
-    new_change_id = ws.change_id()
+    stat = repo.diff_stat()
+    repo.describe(_build_commit_message(job, command_result))
+    new_change_id = repo.change_id()
 
     print(f"==> [{job.name}] committed [{new_change_id}] ({command_result.elapsed:.1f}s)")
     if stat:
@@ -465,25 +465,25 @@ def run_job(
 ) -> JobResult:
     logger.debug("starting job: %s", job.model_dump_json(indent=2))
     logger.debug("parents: %s", parents)
-    bookmark = job.branch_name()
-    repo = JJ(ctx.repo_path)
-    # Record the pre-existing bookmark's change-id so the absorb phase can
-    # mutate it in place (preserving jj change-id continuity). None for new jobs.
-    old_change_id = repo.bookmark_change_id(bookmark)
-    logger.debug("[%s] bookmark %s old_change_id=%s", job.name, bookmark, old_change_id)
 
-    with repo.temp_workspace(workspace_name(job.name)) as ws:
+    with JJ(ctx.repo_path).temp_workspace(workspace_name(job.name)) as repo:
+        bookmark = job.branch_name()
+        # Record the pre-existing bookmark's change-id so the absorb phase can
+        # mutate it in place (preserving jj change-id continuity). None for new jobs.
+        old_change_id = repo.bookmark_change_id(bookmark)
+        logger.debug("[%s] bookmark %s old_change_id=%s", job.name, bookmark, old_change_id)
+
         # Always start from a fresh commit: old bookmarks are never touched
         # during the run phase, so a failed command cannot destroy them.
-        ws.new(*parents)
-        ws.git_sync_head()
+        repo.new(*parents)
+        repo.git_sync_head()
         logger.debug("[%s] running command: %s", job.name, job.command)
         try:
-            command_result = _run_command(job, ws.cwd, secret_env_names=ctx.secret_env_names)
+            command_result = _run_command(job, repo.cwd, secret_env_names=ctx.secret_env_names)
         except CommandError:
             # The command timed out or failed; discard only the fresh commit.
             # The old bookmark is completely unaffected.
-            ws.abandon()
+            repo.abandon()
             raise
         logger.debug(
             "[%s] command finished in %.3fs, %d bytes output",
@@ -491,19 +491,19 @@ def run_job(
             command_result.elapsed,
             len(command_result.output),
         )
-        if ws.is_empty():
+        if repo.is_empty():
             logger.debug("[%s] working copy is empty, no diff produced", job.name)
             return _discard_empty_job(
                 job=job,
                 parents=parents,
-                ws=ws,
+                repo=repo,
                 command_result=command_result,
                 old_change_id=old_change_id,
             )
         return _commit_job(
             job=job,
             parents=parents,
-            ws=ws,
+            repo=repo,
             command_result=command_result,
             old_change_id=old_change_id,
         )
@@ -765,27 +765,26 @@ def _run_generator_job(
     set blocks the generator's dependents, exactly like an ordinary job failure.
     """
     logger.debug("starting generator: %s", job.name)
-    repo = JJ(ctx.repo_path)
     with (
-        repo.temp_workspace(workspace_name(job.name)) as ws,
+        JJ(ctx.repo_path).temp_workspace(workspace_name(job.name)) as repo,
         # The output directory lives outside the workspace, so the files written there never
         # show up as a diff in the working copy.
         tempfile.TemporaryDirectory(prefix="repoactive-jobs-") as tmp,
     ):
-        ws.new(*parents)
+        repo.new(*parents)
         try:
-            ws.git_sync_head()
+            repo.git_sync_head()
             jobs_dir = Path(tmp)
             logger.debug("[%s] running generator command (jobs dir %s)", job.name, jobs_dir)
             _run_command(
                 job,
-                ws.cwd,
+                repo.cwd,
                 secret_env_names=ctx.secret_env_names,
                 extra_env={REPOACTIVE_JOBS_DIR_ENV: str(jobs_dir)},
             )
             specs = _load_job_specs(jobs_dir)
         finally:
-            ws.abandon()
+            repo.abandon()
     logger.debug("[%s] generator emitted %d job spec(s)", job.name, len(specs))
     # selection.jobs is every job already in the run (collision guard); config.jobs
     # are the statically configured names.
