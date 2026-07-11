@@ -173,9 +173,10 @@ class RunSummary:
 class RunContext:
     """Run-wide state shared by every job in a single run_all pass.
 
-    Built once in ``_run_jobs`` and threaded through ``_dispatch_job`` to
-    ``run_job`` / ``_run_generator_job`` so the per-job runners have a single
-    handle to the run's config, target repo, accumulating results, and selection.
+    Built once in ``run_all`` and threaded through ``_run_jobs`` /
+    ``_dispatch_job`` to ``run_job`` / ``_run_generator_job`` so every stage has a
+    single handle to the run's config, target repo, accumulating results,
+    selection, and the ``plan`` the absorb phase fills in.
     ``selection`` is the live selection object (``_run_jobs`` splices
     generator-emitted jobs into ``selection.jobs`` in place), so ``selection.jobs``
     is always every job in the run.
@@ -186,6 +187,9 @@ class RunContext:
     summary: RunSummary
     blocked: set[str]
     selection: JobSelection
+    # Bookmark pushes and MR descriptors, filled in by _absorb_results and then
+    # applied by apply_plan. Empty until phase 2.
+    plan: UpdatePlan = field(default_factory=UpdatePlan)
 
     @property
     def secret_env_names(self) -> frozenset[str]:
@@ -817,16 +821,12 @@ def _absorb_no_diff_bookmark(
         )
 
 
-def _absorb_results(
-    *,
-    ordered_jobs: list[Job],
-    summary: RunSummary,
-    repo: JJ,
-    plan: UpdatePlan,
-) -> None:
+def _absorb_results(ctx: RunContext, *, repo: JJ) -> None:
     """Phase 2: absorb fresh phase-1 commits into pre-existing commits.
 
-    For each successful job, in topological order:
+    Iterates ``ctx.selection.jobs`` — every job in the run, including
+    generator-emitted ones, in topological order (``_run_jobs`` keeps that list
+    current). For each successful job:
     - No diff produced: delete the old bookmark if the command ran and found
       nothing (cooldown skips are left untouched), and record a remote deletion.
     - Diff produced, new job: set the bookmark directly on the new commit.
@@ -836,8 +836,10 @@ def _absorb_results(
       Change-id continuity is preserved so jj auto-rebases any dependents not
       in this run.
 
-    Builds the UpdatePlan (bookmark pushes and MR descriptors) as a side-effect.
+    Fills in ``ctx.plan`` (bookmark pushes and MR descriptors) as a side-effect.
     """
+    summary = ctx.summary
+    plan = ctx.plan
     with contextlib.ExitStack() as stack:
         abs_ws: JJ | None = None
 
@@ -845,7 +847,7 @@ def _absorb_results(
         # dependent jobs are rebased onto the right commit, not the abandoned fresh one.
         absorbed: dict[str, str] = {}
 
-        for job in ordered_jobs:
+        for job in ctx.selection.jobs:
             result = summary.results.get(job.name)
             if result is None:
                 logger.debug("absorb: [%s] no result, skipping", job.name)
@@ -965,7 +967,7 @@ def _prepare_repo(*, config: Config, repo_path: Path) -> Generator[JJ]:
         )
 
 
-def _run_jobs(*, ctx: RunContext, repo: JJ) -> list[Job]:
+def _run_jobs(*, ctx: RunContext, repo: JJ) -> None:
     """Run ``ctx.selection`` in topological order, expanding generators in place.
 
     ``ctx.selection.jobs`` is topologically sorted, so the first job not yet in
@@ -976,9 +978,9 @@ def _run_jobs(*, ctx: RunContext, repo: JJ) -> list[Job]:
     after its dependencies (the generator included); the next iteration picks
     them up once their turn comes. See docs/adr/0004-job-generators.md.
 
-    Results are recorded in ``ctx.summary`` in place. Returns the final job list
-    including generator-emitted jobs, still topologically sorted — the absorb
-    phase must iterate this list, not the caller's original selection.
+    Results are recorded in ``ctx.summary`` in place, and generator-emitted jobs
+    are spliced into ``ctx.selection.jobs`` (still topologically sorted) — the
+    absorb phase iterates that same list.
 
     ``ctx.selection.refreshed`` names the jobs being refreshed because they
     already have an unmerged branch; they bypass the cooldown skip so their
@@ -1005,7 +1007,6 @@ def _run_jobs(*, ctx: RunContext, repo: JJ) -> list[Job]:
             repo.bookmark_track(*sorted(j.branch_name() for j in resolved_emitted))
             selection.jobs = topological_sort(selection.jobs + resolved_emitted)
             print_job_table(format_job_forest(selection.jobs), indent="  ")
-    return selection.jobs
 
 
 def _suppress_superseded_mrs(*, plan: UpdatePlan, results: dict[str, JobResult]) -> None:
@@ -1091,24 +1092,23 @@ def run_all(  # noqa: PLR0913
         print_job_table(format_job_forest(selection.jobs), indent="  ")
         print()
         # Phase 1: run every job on a fresh commit; old bookmarks are untouched.
-        # The returned list includes generator-emitted jobs so the absorb phase
-        # processes them too. Jobs pulled in for refresh bypass the cooldown skip
-        # so their branches are rebased (ADR 0003).
-        ordered_jobs = _run_jobs(ctx=ctx, repo=repo)
+        # Generator-emitted jobs are spliced into ctx.selection.jobs so the absorb
+        # phase processes them too. Jobs pulled in for refresh bypass the cooldown
+        # skip so their branches are rebased (ADR 0003).
+        _run_jobs(ctx=ctx, repo=repo)
 
         # Phase 2: absorb fresh commits into old commits (preserving change-ids),
-        # set bookmarks for new jobs, delete bookmarks for empty jobs, build plan.
-        plan = UpdatePlan()
-        _absorb_results(ordered_jobs=ordered_jobs, summary=summary, repo=repo, plan=plan)
+        # set bookmarks for new jobs, delete bookmarks for empty jobs, fill ctx.plan.
+        _absorb_results(ctx, repo=repo)
 
         # Resolve "unless-superseded" now that every job has run: a job's MR is
         # dropped from the plan when a dependent's MR in this run contains it.
-        _suppress_superseded_mrs(plan=plan, results=summary.results)
+        _suppress_superseded_mrs(plan=ctx.plan, results=summary.results)
 
         # A local run stops here: the plan is built but deliberately not applied, so
         # nothing is pushed and no MR is created.
         if mode is not RunMode.local:
-            applied = apply_plan(plan, repo_path=repo_path, platform=platform, mode=mode)
+            applied = apply_plan(ctx.plan, repo_path=repo_path, platform=platform, mode=mode)
             for name, url in applied.mr_urls.items():
                 summary.results[name].mr_url = url
             # A job whose MR failed keeps its results entry (the command ran and
