@@ -360,14 +360,14 @@ def dump_schema(
 def _print_commit_table(commits: list[JobCommit]) -> None:
     """Print ``commits`` as columns padded to their widest value."""
     names_column = [",".join(sorted(c.job_names)) for c in commits]
-    id_width = max(len(c.commit_id) for c in commits)
+    commit_width = max(len(c.commit_id) for c in commits)
     change_width = max(len(c.change_id) for c in commits)
-    name_width = max(len(names) for names in names_column)
+    names_width = max(len(names) for names in names_column)
     age_width = max(len(c.relative_age) for c in commits)
     for c, names in zip(commits, names_column, strict=True):
         typer.echo(
-            f"{c.commit_id:<{id_width}}  {c.change_id:<{change_width}}  "
-            f"{names:<{name_width}}  {c.relative_age:<{age_width}}  {c.subject}"
+            f"{c.commit_id:<{commit_width}}  {c.change_id:<{change_width}}  "
+            f"{names:<{names_width}}  {c.relative_age:<{age_width}}  {c.subject}"
         )
 
 
