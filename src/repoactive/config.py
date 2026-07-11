@@ -278,8 +278,18 @@ def _validate_duration(value: str) -> str:
     return value
 
 
+def _validate_single_line(value: str, info: ValidationInfo) -> str:
+    if "\n" in value:
+        assert info.field_name is not None
+        raise NewlineInTitleError(info.field_name, value)
+    return value
+
+
 _BranchPrefix = Annotated[str, AfterValidator(_validate_branch_prefix)]
 _Duration = Annotated[str, AfterValidator(_validate_duration)]
+# Titles and title prefixes end up in commit subjects and MR titles, which are
+# single-line by nature.
+_SingleLine = Annotated[str, AfterValidator(_validate_single_line)]
 # json_schema_input_type keeps booleans valid in the published JSON schema.
 _CreateMR = Annotated[
     CreateMR, BeforeValidator(_coerce_create_mr, json_schema_input_type=bool | CreateMR)
@@ -290,21 +300,13 @@ class JobDefaults(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     branch_prefix: _BranchPrefix = "repoactive/"
-    mr_title_prefix: str = "[repoactive] "
-    commit_title_prefix: str = "[repoactive] "
+    mr_title_prefix: _SingleLine = "[repoactive] "
+    commit_title_prefix: _SingleLine = "[repoactive] "
     labels: list[str] = Field(default_factory=list)
     base_branch: str | None = None
     cooldown_period: _Duration | None = None
     timeout: _Duration | None = "2m"
     auto_merge: bool = False
-
-    @field_validator("mr_title_prefix", "commit_title_prefix")
-    @classmethod
-    def _check_no_newline(cls, value: str, info: ValidationInfo) -> str:
-        if "\n" in value:
-            assert info.field_name is not None
-            raise NewlineInTitleError(info.field_name, value)
-        return value
 
 
 # Fields Job.resolve fills in from JobDefaults when the job does not set them
@@ -325,7 +327,7 @@ class Job(BaseModel):
 
     name: str
     command: str
-    title: str
+    title: _SingleLine
     description: str | None = None
     base_branch: str | None = None
     draft: bool = False
@@ -352,8 +354,8 @@ class Job(BaseModel):
 
     # the following fields will be resolved from the defaults
     branch_prefix: _BranchPrefix | None = None
-    mr_title_prefix: str | None = None
-    commit_title_prefix: str | None = None
+    mr_title_prefix: _SingleLine | None = None
+    commit_title_prefix: _SingleLine | None = None
     labels: list[str] = Field(default_factory=list)
     cooldown_period: _Duration | None = None
     timeout: _Duration | None = None
@@ -364,14 +366,6 @@ class Job(BaseModel):
     def _check_name(cls, value: str) -> str:
         if not _JOB_NAME_RE.match(value):
             raise InvalidJobNameError(value)
-        return value
-
-    @field_validator("title", "commit_title_prefix")
-    @classmethod
-    def _check_no_newline(cls, value: str, info: ValidationInfo) -> str:
-        if "\n" in value:
-            assert info.field_name is not None
-            raise NewlineInTitleError(info.field_name, value)
         return value
 
     @field_validator("tags")

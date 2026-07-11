@@ -810,6 +810,14 @@ class TestNewlineValidation:
         job = Job(name="x", command="cmd", title="T", commit_title_prefix="[ok] ")
         assert job.commit_title_prefix == "[ok] "
 
+    def test_job_mr_title_prefix_with_newline_rejected(self) -> None:
+        with pytest.raises(ValueError, match="newline"):
+            Job(name="x", command="cmd", title="T", mr_title_prefix="bad\nprefix")
+
+    def test_job_mr_title_prefix_without_newline_accepted(self) -> None:
+        job = Job(name="x", command="cmd", title="T", mr_title_prefix="[mr] ")
+        assert job.mr_title_prefix == "[mr] "
+
     def test_defaults_mr_title_prefix_with_newline_rejected(self) -> None:
         with pytest.raises(ValueError, match="newline"):
             JobDefaults(mr_title_prefix="bad\nprefix")
