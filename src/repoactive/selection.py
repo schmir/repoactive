@@ -118,7 +118,7 @@ class JobSelector:
         if unknown_tags:
             raise UnknownTagsError(unknown_tags)
 
-    def _pending_job_names(self, repo: JJ) -> frozenset[str]:
+    def _refresh_names(self, repo: JJ) -> frozenset[str]:
         """Retrieve job names with an unmerged commit to refresh on the bare default run.
 
         Scans the mutable commits that are not ancestors of any job's base branch
@@ -178,7 +178,7 @@ class JobSelector:
             }
             selected = self._include_dependencies(selected)
         else:
-            refresh_names = self._pending_job_names(repo)
+            refresh_names = self._refresh_names(repo)
             if refresh_names:
                 print(f"==> refreshing unmerged branches: {', '.join(sorted(refresh_names))}")
             else:
