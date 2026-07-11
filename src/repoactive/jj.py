@@ -219,9 +219,6 @@ class JJ:
     def new(self, *parents: str) -> None:
         self._run("new", *parents)
 
-    def edit(self, revision: str) -> None:
-        self._run("edit", revision)
-
     def restore(self, *, source_rev: str, destination_rev: str) -> None:
         self._run("restore", "--from", source_rev, "--into", destination_rev)
 

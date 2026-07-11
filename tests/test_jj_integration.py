@@ -78,6 +78,16 @@ def _has_conflict(jj: JJ, rev: str) -> bool:
     )
 
 
+def _file_content(jj: JJ, rev: str, path: str) -> str:
+    return subprocess.run(
+        ["jj", "--no-pager", "file", "show", "-r", rev, path],
+        cwd=jj.cwd,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+
+
 def _git(cwd: Path, *args: str) -> str:
     return subprocess.run(
         ["git", *args],
@@ -254,16 +264,6 @@ class TestOpId:
         assert repo.op_id() != before
 
 
-class TestEdit:
-    def test_switches_working_copy_to_revision(self, repo: JJ) -> None:
-        repo.describe("first")
-        repo.bookmark_set("first")
-        repo.new("@")
-        repo.describe("second")
-        repo.edit("first")
-        assert _description(repo) == "first"
-
-
 class TestRestore:
     def test_discards_current_commits_own_changes(self, repo: JJ) -> None:
         (repo.cwd / "file.txt").write_text("hello")
@@ -281,8 +281,7 @@ class TestRestore:
         repo.bookmark_set("destination")
         repo.new("@")
         repo.restore(source_rev="source", destination_rev="destination")
-        repo.edit("destination")
-        assert (repo.cwd / "file.txt").read_text() == "from source"
+        assert _file_content(repo, "destination", "file.txt") == "from source"
 
     def test_resolves_conflict_in_destination(self, repo: JJ) -> None:
         # Simulate the bug: rebase causes a conflict in "old", then restore
@@ -306,8 +305,7 @@ class TestRestore:
 
         repo.restore(source_rev="new", destination_rev="old")
         assert not _has_conflict(repo, "old")
-        repo.edit("old")
-        assert (repo.cwd / "file.txt").read_text() == "new content"
+        assert _file_content(repo, "old", "file.txt") == "new content"
 
 
 class TestRebase:
@@ -320,9 +318,8 @@ class TestRebase:
         repo.new("root")
         repo.describe("b")
         repo.bookmark_set("b")
-        repo.edit("a")
-        repo.rebase("b")
-        assert _description(repo, "@-") == "b"
+        repo.rebase("a")
+        assert _description(repo, "@-") == "a"
 
 
 class TestAbandon:
@@ -516,7 +513,7 @@ class TestGetRemoteUrl:
 class TestJJError:
     def test_raised_for_invalid_revision(self, repo: JJ) -> None:
         with pytest.raises(CommandFailedError):
-            repo.edit("this-revision-does-not-exist")
+            repo.new("this-revision-does-not-exist")
 
 
 class TestLastJobCommitDate:

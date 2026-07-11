@@ -1086,7 +1086,6 @@ class TestRunJob:
         result = run_job(_ctx(), job=_job("foo"), parents=["trunk()"])
 
         mock_jj.new.assert_called_once_with("trunk()")
-        mock_jj.edit.assert_not_called()
         mock_jj.rebase.assert_not_called()
         mock_jj.bookmark_set.assert_not_called()
         assert result.old_change_id == "old-change-id"
@@ -1107,7 +1106,6 @@ class TestRunJob:
         )
 
         mock_jj.new.assert_called_once_with("repoactive/a", "repoactive/b")
-        mock_jj.edit.assert_not_called()
         mock_jj.rebase.assert_not_called()
 
 

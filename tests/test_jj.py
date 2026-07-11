@@ -256,14 +256,6 @@ class TestGitPushBookmarks:
         mock_run.assert_not_called()
 
 
-class TestEdit:
-    @patch("repoactive.jj.subprocess.run")
-    def test_edits_revision(self, mock_run: MagicMock) -> None:
-        mock_run.return_value.stdout = ""
-        _jj().edit("repoactive/foo")
-        assert mock_run.call_args == _call("edit", "repoactive/foo")
-
-
 class TestRestore:
     @patch("repoactive.jj.subprocess.run")
     def test_restores_from_source_into_destination(self, mock_run: MagicMock) -> None:
