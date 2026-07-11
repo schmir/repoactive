@@ -118,6 +118,34 @@ class JobSelector:
         if unknown_tags:
             raise UnknownTagsError(unknown_tags)
 
+    def _pending_job_names(self, repo: JJ) -> frozenset[str]:
+        """Retrieve job names with an unmerged commit to refresh on the bare default run.
+
+        Scans the mutable commits that are not ancestors of any job's base branch
+        (``base_branch``, defaulting to ``trunk()``) for ``Repoactive-Job``
+        trailers, then intersects with the configured job names. These are the
+        stale branches the default run rebases on their base now rather than
+        waiting for each job's next scheduled run (ADR 0003).
+        """
+        base_branches = {j.base_branch or "trunk()" for j in self._all_jobs}
+        if not base_branches:
+            return frozenset()
+
+        stack = " | ".join(f"present({b})" for b in base_branches)
+        revset = f"~::({stack}) & mutable()"
+        return frozenset(repo.job_names_in_revset(revset) & self._all_job_names)
+
+    def _successor_names(self, repo: JJ, selected: frozenset[str]) -> frozenset[str]:
+        bookmarks = [j.branch_name() for j in self._all_jobs if j.name in selected]
+        if not bookmarks:
+            return frozenset()
+
+        stack = " | ".join(f"present({b})" for b in bookmarks)
+        # Jobs whose commits sit in the stack above a selected bookmark but
+        # are not yet landed in trunk (ADR 0012).
+        revset = f"descendants({stack}) & ~({stack}) & ~(::trunk())"
+        return frozenset((repo.job_names_in_revset(revset) & self._all_job_names) - selected)
+
     def select_run_jobs(self, repo: JJ) -> JobSelection:
         """Pick and order the jobs to run.
 
@@ -150,7 +178,7 @@ class JobSelector:
             }
             selected = self._include_dependencies(selected)
         else:
-            refresh_names = frozenset(repo.pending_job_names() & self._all_job_names)
+            refresh_names = self._pending_job_names(repo)
             if refresh_names:
                 print(f"==> refreshing unmerged branches: {', '.join(sorted(refresh_names))}")
             else:
@@ -161,10 +189,7 @@ class JobSelector:
             ) | self._include_dependencies(refresh_names)
             selected = self._drop_jobs_with_unselected_deps(selected)
 
-        bookmarks = [j.branch_name() for j in self._all_jobs if j.name in selected]
-
-        revset = " | ".join(f"present({b})" for b in bookmarks)
-        successor_names = (repo.pending_job_names(revset=revset) & self._all_job_names) - selected
+        successor_names = self._successor_names(repo, selected)
         selected = selected | successor_names
         selected = self._include_dependencies(selected)
 

@@ -410,52 +410,35 @@ class TestEnsureColocatedRepo:
             require_colocated_repo(subdir)
 
 
-class TestUnmergedJobNames:
+class TestJobNamesInRevset:
     @patch("repoactive.jj.subprocess.run")
     def test_parses_job_names(self, mock_run: MagicMock) -> None:
         mock_run.return_value.stdout = "uv-lock-upgrade\nprek-autoupdate\n"
-        assert _jj().pending_job_names() == {"uv-lock-upgrade", "prek-autoupdate"}
+        assert _jj().job_names_in_revset("mutable()") == {"uv-lock-upgrade", "prek-autoupdate"}
 
     @patch("repoactive.jj.subprocess.run")
     def test_splits_multiple_trailers_on_one_commit(self, mock_run: MagicMock) -> None:
         # A generated job's commit carries its own name and the generator's,
         # comma-joined; both must be returned (see ADR 0004).
         mock_run.return_value.stdout = "deps-pkg-a,per-package\ndeps-pkg-b,per-package\n"
-        assert _jj().pending_job_names() == {"deps-pkg-a", "deps-pkg-b", "per-package"}
+        assert _jj().job_names_in_revset("mutable()") == {
+            "deps-pkg-a",
+            "deps-pkg-b",
+            "per-package",
+        }
 
     @patch("repoactive.jj.subprocess.run")
-    def test_empty_when_no_unmerged_commits(self, mock_run: MagicMock) -> None:
+    def test_empty_when_no_matching_commits(self, mock_run: MagicMock) -> None:
         mock_run.return_value.stdout = ""
-        assert _jj().pending_job_names() == set()
+        assert _jj().job_names_in_revset("mutable()") == set()
 
     @patch("repoactive.jj.subprocess.run")
-    def test_queries_unmerged_revset(self, mock_run: MagicMock) -> None:
+    def test_queries_the_given_revset(self, mock_run: MagicMock) -> None:
         mock_run.return_value.stdout = ""
-        _jj().pending_job_names()
+        _jj().job_names_in_revset("descendants(present(repoactive/a)) & ~(::trunk())")
         args = mock_run.call_args[0][0]
         assert "log" in args
-        assert "~(::trunk())" in args
-
-    @patch("repoactive.jj.subprocess.run")
-    def test_revset_wraps_descendants_and_filters_unmerged(self, mock_run: MagicMock) -> None:
-        mock_run.return_value.stdout = ""
-        _jj().pending_job_names(revset="present(repoactive/a)")
-        args = mock_run.call_args[0][0]
-        joined = " ".join(args)
-        assert "descendants(present(repoactive/a))" in joined
-        assert "~(::trunk())" in joined
-
-    @patch("repoactive.jj.subprocess.run")
-    def test_revset_parses_job_names(self, mock_run: MagicMock) -> None:
-        mock_run.return_value.stdout = "my-job\n"
-        result = _jj().pending_job_names(revset="present(repoactive/a)")
-        assert result == {"my-job"}
-
-    @patch("repoactive.jj.subprocess.run")
-    def test_empty_revset_returns_empty_without_querying(self, mock_run: MagicMock) -> None:
-        result = _jj().pending_job_names(revset="")
-        assert result == set()
-        mock_run.assert_not_called()
+        assert "descendants(present(repoactive/a)) & ~(::trunk())" in args
 
 
 class TestAbandonRevision:
@@ -520,18 +503,6 @@ class TestDescribeRevision:
         assert mock_run.call_args == _call(
             "describe", "-r", "abc123", "--message", "chore: update deps"
         )
-
-
-class TestUnmergedJobNamesWithRevset:
-    @patch("repoactive.jj.subprocess.run")
-    def test_multi_bookmark_revset_includes_both_in_descendants_query(
-        self, mock_run: MagicMock
-    ) -> None:
-        mock_run.return_value.stdout = ""
-        _jj().pending_job_names(revset="present(repoactive/a) | present(repoactive/b)")
-        args = mock_run.call_args[0][0]
-        assert "present(repoactive/a)" in " ".join(args)
-        assert "present(repoactive/b)" in " ".join(args)
 
 
 class TestJjTimestamp:

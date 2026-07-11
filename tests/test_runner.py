@@ -1632,7 +1632,7 @@ class TestRunAll:
 
     @pytest.fixture(autouse=True)
     def mock_jj(self) -> Iterator[MagicMock]:
-        """Stub the JJ class run_all constructs (pending_job_names + cooldown query).
+        """Stub the JJ class run_all constructs (job_names_in_revset + cooldown query).
 
         Also bypass the real per-repository run lock (REPO is a fake path with no
         ``.jj`` directory); lock behaviour is covered separately in test_lock.py.
@@ -1641,7 +1641,7 @@ class TestRunAll:
             patch("repoactive.runner.run_lock"),
             patch("repoactive.runner.JJ") as cls,
         ):
-            cls.return_value.pending_job_names.return_value = set()
+            cls.return_value.job_names_in_revset.return_value = set()
             cls.return_value.last_job_commit_date.return_value = None
             cls.return_value.remote_bookmark_exists.return_value = False
             cls.return_value.op_id.return_value = "OP-START"
@@ -2041,7 +2041,7 @@ class TestRunAll:
         self, mock_run_job: MagicMock, mock_jj: MagicMock
     ) -> None:
         # b is weekly (not in the default run) but has an unmerged branch, so it runs.
-        mock_jj.return_value.pending_job_names.return_value = {"b"}
+        mock_jj.return_value.job_names_in_revset.return_value = {"b"}
         config = _config(_djob("a"), _djob("b", tags=["weekly"]))
         mock_run_job.return_value = _result(_job("x"), revsets=["repoactive/x"])
 
@@ -2059,9 +2059,9 @@ class TestRunAll:
 
         run_all(config=config, repo_path=REPO, requested_names=frozenset({"a"}))
 
-        # Branch refresh was skipped — only successor expansion calls (with revset) were made.
-        calls = mock_jj.return_value.pending_job_names.call_args_list
-        assert all(c.kwargs.get("revset") is not None for c in calls)
+        # Branch refresh was skipped — only successor expansion (the descendants query) ran.
+        calls = mock_jj.return_value.job_names_in_revset.call_args_list
+        assert all(c.args[0].startswith("descendants") for c in calls)
         called_names = {c.kwargs["job"].name for c in mock_run_job.call_args_list}
         assert called_names == {"a"}
 
@@ -2083,9 +2083,9 @@ class TestRunAll:
 
     @staticmethod
     def _stub_successors(mock_jj: MagicMock, names: set[str]) -> None:
-        """Make successor expansion (the revset call) return ``names``."""
-        mock_jj.return_value.pending_job_names.side_effect = lambda revset=None: (
-            names if revset is not None else set()
+        """Make successor expansion (the descendants query) return ``names``."""
+        mock_jj.return_value.job_names_in_revset.side_effect = lambda revset: (
+            names if revset.startswith("descendants") else set()
         )
 
     @patch("repoactive.runner.run_job")

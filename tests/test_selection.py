@@ -9,15 +9,15 @@ from tests.builders import _config, _djob, _job, _names
 
 
 def _mock_repo(unmerged: set[str] | None = None, successors: set[str] | None = None) -> MagicMock:
-    """JJ stub: the no-revset call yields the unmerged-branch refresh set, a revset call the successors."""
+    """JJ stub: job_names_in_revset yields the successor set for the descendants query, the refresh set otherwise."""
     repo = MagicMock()
     unmerged_set = unmerged or set()
     successor_set = successors or set()
 
-    def _side_effect(revset: str | None = None) -> set[str]:
-        return successor_set if revset is not None else unmerged_set
+    def _job_names(revset: str) -> set[str]:
+        return successor_set if revset.startswith("descendants") else unmerged_set
 
-    repo.pending_job_names.side_effect = _side_effect
+    repo.job_names_in_revset.side_effect = _job_names
     return repo
 
 
@@ -28,6 +28,16 @@ class TestSelectJobs:
             config=config, requested_names=frozenset(), requested_tags=frozenset()
         ).select_run_jobs(_mock_repo())
         assert _names(result.jobs) == ["a", "b"]
+
+    def test_empty_config_is_a_noop(self) -> None:
+        # A default run over a config with no jobs must not build an empty
+        # `~::()` revset (a jj syntax error); it selects nothing instead.
+        repo = _mock_repo()
+        result = JobSelector(
+            config=_config(), requested_names=frozenset(), requested_tags=frozenset()
+        ).select_run_jobs(repo)
+        assert result.jobs == []
+        repo.job_names_in_revset.assert_not_called()
 
     def test_requested_subset(self) -> None:
         config = _config(_job("a"), _job("b"), _job("c"))
@@ -314,10 +324,10 @@ class TestExpandSuccessors:
             config=config, requested_names=frozenset({"a"}), requested_tags=frozenset()
         ).select_run_jobs(repo)
         assert _names(result.jobs) == ["a", "b", "c"]
-        repo.pending_job_names.assert_called_once()
+        repo.job_names_in_revset.assert_called_once()
 
     def test_unknown_successor_is_ignored(self) -> None:
-        # pending_job_names may return names not present in config (e.g. removed jobs).
+        # the successor query may return names not present in config (e.g. removed jobs).
         config = _config(_djob("a"))
         result = JobSelector(
             config=config, requested_names=frozenset({"a"}), requested_tags=frozenset()
@@ -337,8 +347,8 @@ class TestExpandSuccessors:
         JobSelector(
             config=config, requested_names=frozenset({"a", "b"}), requested_tags=frozenset()
         ).select_run_jobs(repo)
-        [call_args] = repo.pending_job_names.call_args_list
-        revset = call_args.kwargs["revset"]
+        [call_args] = repo.job_names_in_revset.call_args_list
+        revset = call_args.args[0]
         assert "present(repoactive/a)" in revset
         assert "present(repoactive/b)" in revset
 
@@ -361,9 +371,9 @@ class TestJobSelector:
         ).select_run_jobs(repo)
         assert _names(result.jobs) == ["b"]
         assert result.refreshed == frozenset()
-        # Unmerged branch refresh was skipped — only successor expansion calls (with revset) were made.
+        # Unmerged branch refresh was skipped — only successor expansion (the descendants query) ran.
         assert all(
-            c.kwargs.get("revset") is not None for c in repo.pending_job_names.call_args_list
+            c.args[0].startswith("descendants") for c in repo.job_names_in_revset.call_args_list
         )
 
     def test_requested_tags_skip_unmerged_query(self) -> None:
@@ -374,7 +384,7 @@ class TestJobSelector:
         ).select_run_jobs(repo)
         assert _names(result.jobs) == ["a"]
         assert all(
-            c.kwargs.get("revset") is not None for c in repo.pending_job_names.call_args_list
+            c.args[0].startswith("descendants") for c in repo.job_names_in_revset.call_args_list
         )
 
     def test_unknown_requested_job_raises(self) -> None:

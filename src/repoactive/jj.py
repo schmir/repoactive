@@ -354,27 +354,8 @@ class JJ:
                 )
         return result
 
-    def pending_job_names(self, revset: str | None = None) -> set[str]:
-        """Job names that appear on unmerged commits reachable via ``revset``.
-
-        Without ``revset``: scans all commits not yet landed in trunk —
-        used by the default run to refresh stale branches (ADR 0003). A commit
-        may carry more than one trailer (a generated job records both its own
-        name and the generator's, see ADR 0004), so comma-joined values are
-        split; job names never contain commas.
-
-        With ``revset``: scans all descendants of ``revset`` that are not
-        in trunk — used by successor expansion to pull in jobs whose commits
-        sit anywhere in the stack above a selected job's bookmark (ADR 0012).
-        Uses ``present()`` semantics implicitly via the caller-supplied revset,
-        so non-existent bookmarks are silently skipped.
-        """
-        if revset is not None:
-            if not revset:
-                return set()
-            target = f"descendants({revset}) & ~({revset}) & ~(::trunk())"
-        else:
-            target = "~(::trunk())"
+    def job_names_in_revset(self, revset: str) -> set[str]:
+        """Job names that appear in revset."""
         template = f"""
         if(trailers.contains_key("{JOB_TRAILER_KEY}"),
            trailers.filter(|t| t.key() == "{JOB_TRAILER_KEY}").map(|t| t.value()).join(",")
@@ -382,7 +363,7 @@ class JJ:
            ""
         )
         """
-        output = self._run("log", "--no-graph", "-r", target, "-T", template)
+        output = self._run("log", "--no-graph", "-r", revset, "-T", template)
         return {
             name.strip()
             for line in output.splitlines()
