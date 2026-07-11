@@ -965,17 +965,10 @@ def _prepare_repo(*, config: Config, repo_path: Path) -> Generator[JJ]:
         )
 
 
-def _run_jobs(
-    *,
-    selection: JobSelection,
-    config: Config,
-    repo: JJ,
-    repo_path: Path,
-    summary: RunSummary,
-) -> list[Job]:
-    """Run the jobs in ``selection`` in topological order, expanding generators in place.
+def _run_jobs(*, ctx: RunContext, repo: JJ) -> list[Job]:
+    """Run ``ctx.selection`` in topological order, expanding generators in place.
 
-    ``selection.jobs`` is topologically sorted, so the first job not yet in
+    ``ctx.selection.jobs`` is topologically sorted, so the first job not yet in
     ``started`` always has its dependencies satisfied: every job ahead of it in
     the order has already run (were one not, *it* would be the first
     not-started job).
@@ -983,29 +976,18 @@ def _run_jobs(
     after its dependencies (the generator included); the next iteration picks
     them up once their turn comes. See docs/adr/0004-job-generators.md.
 
-    Results are recorded in ``summary`` in place. Returns the final job list
+    Results are recorded in ``ctx.summary`` in place. Returns the final job list
     including generator-emitted jobs, still topologically sorted — the absorb
     phase must iterate this list, not the caller's original selection.
 
-    ``selection.refreshed`` names the jobs being refreshed because they already
-    have an unmerged branch; they bypass the cooldown skip so their branches are
-    rebased (ADR 0003). Empty for explicit selection, which does not refresh
-    (ADR 0003). ``selection.successors`` names the jobs force-included because
-    their commits sit above a selected job's bookmark; they run only when
+    ``ctx.selection.refreshed`` names the jobs being refreshed because they
+    already have an unmerged branch; they bypass the cooldown skip so their
+    branches are rebased (ADR 0003). Empty for explicit selection, which does not
+    refresh (ADR 0003). ``ctx.selection.successors`` names the jobs force-included
+    because their commits sit above a selected job's bookmark; they run only when
     something below them in the stack ran (see _dispatch_job).
     """
-    # Names of jobs that failed or were skipped - their dependents are blocked.
-    blocked: set[str] = set()
-    # Run-wide state, built once and threaded through _dispatch_job. ctx.selection
-    # is this same selection object, so the in-place splice below keeps
-    # ctx.selection.jobs current as generators emit.
-    ctx = RunContext(
-        config=config,
-        repo_path=repo_path,
-        summary=summary,
-        blocked=blocked,
-        selection=selection,
-    )
+    selection = ctx.selection
     started: set[str] = set()
     while True:
         job = next((j for j in selection.jobs if j.name not in started), None)
@@ -1016,7 +998,7 @@ def _run_jobs(
         if emitted:
             # Resolve before splicing in so _dispatch_job receives resolved jobs,
             # matching the invariant for jobs from selection.
-            resolved_emitted = [j.resolve(config.job_defaults) for j in emitted]
+            resolved_emitted = [j.resolve(ctx.config.job_defaults) for j in emitted]
             # Track the new jobs' bookmarks so a branch an earlier run already
             # pushed is reused rather than recreated, then splice them into the
             # selection and re-sort so they run after their dependencies.
@@ -1092,6 +1074,16 @@ def run_all(  # noqa: PLR0913
 
         selection = selector.select_run_jobs(repo)
         summary = RunSummary()
+        # Run-wide state, built once and threaded through _run_jobs → _dispatch_job.
+        # ctx.selection is this same selection object, so the in-place splice in
+        # _run_jobs keeps ctx.selection.jobs current as generators emit.
+        ctx = RunContext(
+            config=config,
+            repo_path=repo_path,
+            summary=summary,
+            blocked=set(),
+            selection=selection,
+        )
 
         print(f"Running {len(selection.jobs)} job(s):")
         # The same dependency tree 'info jobs' shows, restricted to this run's
@@ -1102,13 +1094,7 @@ def run_all(  # noqa: PLR0913
         # The returned list includes generator-emitted jobs so the absorb phase
         # processes them too. Jobs pulled in for refresh bypass the cooldown skip
         # so their branches are rebased (ADR 0003).
-        ordered_jobs = _run_jobs(
-            selection=selection,
-            config=config,
-            repo=repo,
-            repo_path=repo_path,
-            summary=summary,
-        )
+        ordered_jobs = _run_jobs(ctx=ctx, repo=repo)
 
         # Phase 2: absorb fresh commits into old commits (preserving change-ids),
         # set bookmarks for new jobs, delete bookmarks for empty jobs, build plan.
