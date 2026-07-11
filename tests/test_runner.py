@@ -444,6 +444,50 @@ class TestRunOneJob:
         assert summary.results["b"].produced_diff is False
         assert mock_run_job.call_count == 0
 
+    def test_run_only_if_changed_skip_recorded_in_dedicated_set(self) -> None:
+        # A gated skip must land in run_only_if_changed_skipped so the absorb
+        # phase knows not to delete the bookmark.
+        job_a = _job("a")
+        job_b = _job("b", depends_on=["a"], run_only_if_changed=["a"])
+        config = _config(job_a, job_b)
+        summary = RunSummary()
+        summary.results["a"] = JobResult(
+            job=job_a, effective_revsets=["trunk()"], produced_diff=False
+        )
+        _dispatch_job(
+            _ctx(config=config, summary=summary, selection=_selection(*config.jobs)),
+            job=config.jobs[1],
+        )
+        assert "b" in summary.run_only_if_changed_skipped
+        assert "b" not in summary.skipped
+        assert "b" not in summary.on_cooldown
+
+    def test_refreshed_job_bypasses_run_only_if_changed_gate(self) -> None:
+        # A refreshed job has an open MR that must be rebased (ADR 0003); it
+        # must run even when its run_only_if_changed deps produced no diff.
+        job_a = _job("a")
+        job_b = _job("b", depends_on=["a"], run_only_if_changed=["a"])
+        config = _config(job_a, job_b)
+        result_b = JobResult(job=job_b, effective_revsets=["repoactive/b"], produced_diff=True)
+        summary = RunSummary()
+        summary.results["a"] = JobResult(
+            job=job_a, effective_revsets=["trunk()"], produced_diff=False
+        )
+        with (
+            patch("repoactive.runner._on_cooldown", return_value=False),
+            patch("repoactive.runner.run_job", return_value=result_b) as mock_run_job,
+        ):
+            _dispatch_job(
+                _ctx(
+                    config=config,
+                    summary=summary,
+                    selection=_selection(*config.jobs, refreshed=frozenset({"b"})),
+                ),
+                job=config.jobs[1],
+            )
+        mock_run_job.assert_called_once()
+        assert "b" not in summary.run_only_if_changed_skipped
+
 
 class TestBuildCommitMessage:
     def test_title_and_trailer_only_when_no_output(self) -> None:
@@ -2021,6 +2065,60 @@ class TestRunAll:
         run_all(config=_config(a), repo_path=REPO)
 
         mock_jj.return_value.last_job_commit_date.assert_not_called()
+
+    @patch("repoactive.runner.run_job")
+    def test_run_only_if_changed_skip_leaves_bookmark_alone(
+        self, mock_run_job: MagicMock, mock_jj: MagicMock
+    ) -> None:
+        # b gates on a; a produces no diff → b is gated. The absorb phase must
+        # not schedule a remote deletion for b's bookmark (which a real push
+        # would delete).
+        a = _djob("a")
+        b = Job(
+            name="b",
+            command="cmd",
+            title="b",
+            depends_on=["a"],
+            run_only_if_changed=["a"],
+        )
+        mock_run_job.return_value = _result(
+            a.resolve(JobDefaults()), revsets=["trunk()"], produced=False
+        )
+        mock_jj.return_value.remote_bookmark_exists.return_value = True
+
+        run_all(config=_config(a, b), repo_path=REPO)
+
+        mock_jj.return_value.bookmark_delete.assert_not_called()
+        push_calls = mock_jj.return_value.git_push_bookmarks.call_args_list
+        pushed = [bm for call in push_calls for bm in call.args]
+        assert "repoactive/b" not in pushed
+
+    @patch("repoactive.runner.run_job")
+    def test_refreshed_job_runs_despite_run_only_if_changed_gate(
+        self, mock_run_job: MagicMock, mock_jj: MagicMock
+    ) -> None:
+        # b has an open unmerged branch (refreshed), so it must run even when
+        # its run_only_if_changed dependency produced no diff (ADR 0003).
+        a = _djob("a")
+        b = Job(
+            name="b",
+            command="cmd",
+            title="b",
+            depends_on=["a"],
+            run_only_if_changed=["a"],
+        )
+        mock_jj.return_value.job_names_in_revset.side_effect = lambda revset: (
+            {"b"} if revset.startswith("~::") else set()
+        )
+        mock_run_job.return_value = _result(
+            a.resolve(JobDefaults()), revsets=["trunk()"], produced=False
+        )
+
+        summary = run_all(config=_config(a, b), repo_path=REPO)
+
+        called_names = {c.kwargs["job"].name for c in mock_run_job.call_args_list}
+        assert "b" in called_names
+        assert "b" not in summary.run_only_if_changed_skipped
 
     @patch("repoactive.runner.run_job")
     def test_run_all_resolves_jobs_with_defaults(self, mock_run_job: MagicMock) -> None:

@@ -141,6 +141,10 @@ class RunSummary:
     # run (see _dispatch_job). Like on_cooldown, an intentional skip: the job's
     # bookmark is left alone in the absorb phase.
     successor_skipped: set[str] = field(default_factory=set)
+    # Jobs whose run_only_if_changed gate fired (none of the watched deps
+    # produced a diff). Like on_cooldown, an intentional skip: the job's
+    # bookmark is left alone in the absorb phase.
+    run_only_if_changed_skipped: set[str] = field(default_factory=set)
 
     @property
     def ok(self) -> bool:
@@ -163,6 +167,11 @@ class RunSummary:
             + (
                 f", {len(self.successor_skipped)} successors unchanged"
                 if self.successor_skipped
+                else ""
+            )
+            + (
+                f", {len(self.run_only_if_changed_skipped)} gated"
+                if self.run_only_if_changed_skipped
                 else ""
             )
             + "."
@@ -646,12 +655,12 @@ def _dispatch_job(ctx: RunContext, *, job: Job) -> list[Job]:
     skipped. ``ctx.selection.jobs`` is every job in this run (``_run_jobs`` keeps
     it in sync as generators emit), so its names reject an emitted job that
     collides with an existing one. ``ctx.selection.refreshed`` names the jobs that
-    already have an unmerged branch; such a job is never cooldown-skipped, so its
-    branch is refreshed (ADR 0003). ``ctx.selection.successors`` names the jobs
-    force-included because their commits sit above a selected job's bookmark;
-    they bypass their own cooldown but are skipped when every dependency was
-    itself skipped this run. The plan is built in the absorb phase (phase 2), not
-    here.
+    already have an unmerged branch; such a job is never cooldown-skipped or
+    run_only_if_changed-skipped, so its branch is refreshed (ADR 0003).
+    ``ctx.selection.successors`` names the jobs force-included because their
+    commits sit above a selected job's bookmark; they bypass their own cooldown
+    but are skipped when every dependency was itself skipped this run. The plan is
+    built in the absorb phase (phase 2), not here.
     """
     summary = ctx.summary
     selection = ctx.selection
@@ -662,24 +671,28 @@ def _dispatch_job(ctx: RunContext, *, job: Job) -> list[Job]:
         ctx.blocked.add(job.name)
         return []
 
-    if job.run_only_if_changed:
+    parents = _compute_parents(job, summary.results)
+
+    # run_only_if_changed gates jobs whose effect is conditional on upstream
+    # diffs. A refreshed job bypasses the gate for the same reason it bypasses
+    # cooldown: it has an open branch that must be rebased (ADR 0003), and
+    # skipping it here would leave the branch un-rebased and orphan its MR.
+    if job.run_only_if_changed and job.name not in selection.refreshed:
         any_changed = any(
             r.produced_diff
             for d in job.run_only_if_changed
             if (r := summary.results.get(d)) is not None
         )
         if not any_changed:
-            parents = _compute_parents(job, summary.results)
             print(
                 f"==> [{job.name}] skipped"
                 f" (run_only_if_changed: none of {job.run_only_if_changed} produced changes)"
             )
+            summary.run_only_if_changed_skipped.add(job.name)
             summary.results[job.name] = JobResult(
                 job=job, effective_revsets=parents, produced_diff=False
             )
             return []
-
-    parents = _compute_parents(job, summary.results)
     logger.debug("[%s] computed parents: %s", job.name, parents)
     # A successor exists to be rebuilt when the stack below it moves. If every
     # dependency was itself skipped this run (cooldown or an earlier successor
@@ -865,9 +878,14 @@ def _absorb_results(ctx: RunContext) -> None:
 
         if not result.produced_diff:
             # Only delete the bookmark when the command ran and produced no
-            # diff. Cooldown and successor skips are intentional — leave
-            # their bookmarks alone so the branch is not destroyed.
-            if job.name not in summary.on_cooldown | summary.successor_skipped:
+            # diff. Cooldown, successor, and run_only_if_changed skips are
+            # intentional — leave their bookmarks alone so the branch is not
+            # destroyed.
+            if job.name not in (
+                summary.on_cooldown
+                | summary.successor_skipped
+                | summary.run_only_if_changed_skipped
+            ):
                 _absorb_no_diff_bookmark(job, result, bookmark, repo=repo, plan=plan)
             continue
 
