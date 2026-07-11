@@ -60,5 +60,8 @@ class GitHubPlatform(Platform):
             if params.labels:
                 pr.set_labels(*params.labels)
         if params.auto_merge:
-            pr.enable_automerge()
+            try:
+                pr.enable_automerge()
+            except GithubException as e:
+                print(f"  warning: could not enable auto-merge ({e})")
         return pr.html_url

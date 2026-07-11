@@ -234,6 +234,25 @@ class TestGitHubEnsureMR:
 
         pr.enable_automerge.assert_not_called()
 
+    @patch("repoactive.platforms.github.Github")
+    def test_auto_merge_failure_warns_and_returns_url(
+        self, mock_github: MagicMock, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # enable_automerge() raises when the repo doesn't allow auto-merge or
+        # the PR isn't mergeable. The URL is already known at that point, so
+        # the error must not propagate — it should warn and return the URL so
+        # subsequent MRs in the same run are not aborted.
+        platform, repo = self._platform(mock_github)
+        pr = MagicMock()
+        pr.html_url = "https://example.com/pull/1"
+        repo.get_pulls.return_value = [pr]
+        pr.enable_automerge.side_effect = GithubException(405, "not allowed")
+
+        url = platform.ensure_mr(_mr_params(auto_merge=True))
+
+        assert url == "https://example.com/pull/1"
+        assert "warning" in capsys.readouterr().out
+
 
 class TestGitLabEnsureMR:
     def _platform(self, mock_gitlab: MagicMock) -> tuple[GitLabPlatform, MagicMock]:
