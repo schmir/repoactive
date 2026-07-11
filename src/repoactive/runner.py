@@ -872,7 +872,7 @@ def _absorb_results(ctx: RunContext) -> None:
             continue
 
         assert result.new_change_id is not None
-        new_cid = result.new_change_id
+        new_change_id = result.new_change_id
         message = _build_commit_message(
             result.job, CommandResult(output=result.command_output, elapsed=0.0)
         )
@@ -881,33 +881,35 @@ def _absorb_results(ctx: RunContext) -> None:
         canonical_parents = [absorbed.get(p, p) for p in result.parents]
 
         if result.old_change_id:
-            old_cid = result.old_change_id
-            repo.rebase_revision(old_cid, *canonical_parents)
-            content_unchanged = repo.same_content(old_cid, new_cid)
+            old_change_id = result.old_change_id
+            repo.rebase_revision(old_change_id, *canonical_parents)
+            content_unchanged = repo.same_content(old_change_id, new_change_id)
             logger.debug(
                 "absorb: [%s] rebased %s onto %s, content %s",
                 job.name,
-                old_cid,
+                old_change_id,
                 canonical_parents,
                 "unchanged" if content_unchanged else "differs, restoring",
             )
             if not content_unchanged:
-                # restore names both revisions, so it rewrites old_cid directly
+                # restore names both revisions, so it rewrites old_change_id directly
                 # without touching any working copy — no scratch workspace needed.
-                repo.restore(source_rev=new_cid, destination_rev=old_cid)
-                repo.describe_revision(old_cid, message)
+                repo.restore(source_rev=new_change_id, destination_rev=old_change_id)
+                repo.describe_revision(old_change_id, message)
             elif _strip_boxquote_and_trailers(
-                repo.get_description(old_cid)
+                repo.get_description(old_change_id)
             ) != _strip_boxquote_and_trailers(message):
-                repo.describe_revision(old_cid, message)
-            repo.abandon_revision(new_cid)
-            # No bookmark_set needed: the bookmark follows old_cid through
+                repo.describe_revision(old_change_id, message)
+            repo.abandon_revision(new_change_id)
+            # No bookmark_set needed: the bookmark follows old_change_id through
             # the rewrites above (jj moves local bookmarks with the commit).
-            absorbed[new_cid] = old_cid
+            absorbed[new_change_id] = old_change_id
         else:
-            logger.debug("absorb: [%s] new job, bookmark %s -> %s", job.name, bookmark, new_cid)
-            repo.bookmark_set(bookmark, new_cid)
-            absorbed[new_cid] = new_cid
+            logger.debug(
+                "absorb: [%s] new job, bookmark %s -> %s", job.name, bookmark, new_change_id
+            )
+            repo.bookmark_set(bookmark, new_change_id)
+            absorbed[new_change_id] = new_change_id
 
         mr: MRUpdate | None = None
         if result.job.create_mr is not CreateMR.never:
