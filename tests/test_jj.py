@@ -497,6 +497,26 @@ class TestDescribeRevision:
         )
 
 
+class TestLastJobCommitDate:
+    @patch("repoactive.jj.subprocess.run")
+    def test_returns_none_when_no_output(self, mock_run: MagicMock) -> None:
+        mock_run.return_value.stdout = "\n\n"
+        since = datetime(2024, 1, 1, tzinfo=UTC)
+        assert (
+            _jj().last_job_commit_date(job_names={"my-job"}, base="trunk()", since=since) is None
+        )
+
+    @patch("repoactive.jj.subprocess.run")
+    def test_returns_newest_when_log_order_is_not_date_order(self, mock_run: MagicMock) -> None:
+        # Topological order is not guaranteed to match committer-date order. Simulate
+        # jj returning an older timestamp first (e.g. a rebased commit sits above a
+        # newer one in the graph) to verify max() is used rather than lines[0].
+        mock_run.return_value.stdout = "2024-03-01T10:00:00\n2024-06-15T09:00:00\n"
+        since = datetime(2024, 1, 1, tzinfo=UTC)
+        result = _jj().last_job_commit_date(job_names={"my-job"}, base="trunk()", since=since)
+        assert result == datetime(2024, 6, 15, 9, 0, 0, tzinfo=UTC)
+
+
 class TestJjTimestamp:
     def test_strips_microseconds(self) -> None:
         dt = datetime(2024, 3, 15, 10, 30, 45, 123456, tzinfo=UTC)

@@ -399,8 +399,8 @@ class JJ:
         lines = [line.strip() for line in output.splitlines() if line.strip()]
         if not lines:
             return None
-        # jj log returns newest-first; take the first line.
-        return datetime.fromisoformat(lines[0]).replace(tzinfo=UTC)
+        # ISO-8601 strings are lexicographically ordered, so max() gives the newest.
+        return datetime.fromisoformat(max(lines)).replace(tzinfo=UTC)
 
     def git_push_bookmarks(self, *bookmarks: str) -> None:
         """Push bookmarks to the remote.
