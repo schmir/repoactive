@@ -84,9 +84,11 @@ commit:
    commit. If they are identical, steps 3 and 4 are skipped — the rebase
    alone produced the correct result, and the old commit's message is
    already valid.
-3. `ws.restore(new_change_id)` — replace the old commit's content with the
-   new commit's content. Both commits share the same parents, so the same
-   diff applies to the same base; the result is identical.
+3. `jj restore --from new_change_id --into old_change_id` — replace the old
+   commit's content with the new commit's content. Naming both revisions
+   rewrites `old_change_id` directly, without touching any working copy.
+   Both commits share the same parents, so the same diff applies to the same
+   base; the result is identical.
 4. `jj describe -r old_change_id` — set the commit message.
 5. Abandon the new commit (`jj abandon new_change_id`) — it is now
    redundant.
@@ -103,11 +105,10 @@ through it before rebasing. Without this, a stacked job's old commit would
 be rebased onto its dependency's abandoned fresh commit instead of the
 absorbed one.
 
-The absorb rebase/diff/describe/abandon steps run against the main
-repository (job workspaces are torn down after phase 1). The restore step
-needs a working copy, so a single temporary workspace is created lazily —
-only when some job's content actually differs — and shared across all jobs
-in the run. No command execution happens in this phase.
+Every absorb step — rebase, diff, restore, describe, abandon — names its
+revisions explicitly, so all of them run against the main repository and
+none need a working copy (the per-job workspaces are torn down after phase
+1). No command execution happens in this phase.
 
 ### Phase 3 — Apply
 
@@ -180,7 +181,7 @@ zero and this alternative is sufficient.
   bookmarks were not moved). Recovery requires a re-run, which re-runs phase
   1 and re-attempts the absorb. The window is small: absorb operations are
   local jj commands with no network I/O and no command execution.
-- **`restore --changes-in` relies on shared parents.** The correctness of
+- **`restore --from/--into` relies on shared parents.** The correctness of
   step 3 in phase 2 depends on the new commit and the rebased old commit
   having the same parents (and therefore the same base content). This is
   guaranteed by construction: phase 1 always uses `ws.new(*parents)`, and

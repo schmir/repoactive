@@ -12,6 +12,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from repoactive.config import Config, CreateMR, Job, JobDefaults
+from repoactive.jj import JJ
 from repoactive.runner import (
     REPOACTIVE_JOBS_DIR_ENV,
     ApplyResult,
@@ -57,12 +58,13 @@ def _selection(
     return JobSelection(jobs=list(jobs), refreshed=refreshed, successors=successors)
 
 
-def _ctx(
+def _ctx(  # noqa: PLR0913
     *,
     config: Config | None = None,
     summary: RunSummary | None = None,
     blocked: set[str] | None = None,
     selection: JobSelection | None = None,
+    repo: JJ | None = None,
     repo_path: Path = REPO,
 ) -> RunContext:
     """Build a RunContext for a runner call.
@@ -73,6 +75,7 @@ def _ctx(
     return RunContext(
         config=config if config is not None else _config(),
         repo_path=repo_path,
+        repo=repo if repo is not None else JJ(repo_path),
         summary=summary if summary is not None else RunSummary(),
         blocked=blocked if blocked is not None else set(),
         selection=selection or JobSelection(jobs=[], refreshed=frozenset()),

@@ -27,7 +27,7 @@ from repoactive.config import (
     merge_jobs,
 )
 from repoactive.graph import CircularDependencyError, detect_dependency_cycle, topological_sort
-from repoactive.jj import JJ, Colocation, workspace_name
+from repoactive.jj import JJ, workspace_name
 from repoactive.jobtree import format_job_forest, print_job_table
 from repoactive.lock import run_lock
 from repoactive.platforms.base import MRParams, Platform
@@ -180,10 +180,12 @@ class RunContext:
     ``selection`` is the live selection object (``_run_jobs`` splices
     generator-emitted jobs into ``selection.jobs`` in place), so ``selection.jobs``
     is always every job in the run.
+    ``repo`` is the prepared, colocated ``JJ`` bound to ``repo_path``.
     """
 
     config: Config
     repo_path: Path
+    repo: JJ
     summary: RunSummary
     blocked: set[str]
     selection: JobSelection
@@ -821,7 +823,7 @@ def _absorb_no_diff_bookmark(
         )
 
 
-def _absorb_results(ctx: RunContext, *, repo: JJ) -> None:
+def _absorb_results(ctx: RunContext) -> None:
     """Phase 2: absorb fresh phase-1 commits into pre-existing commits.
 
     Iterates ``ctx.selection.jobs`` — every job in the run, including
@@ -840,101 +842,96 @@ def _absorb_results(ctx: RunContext, *, repo: JJ) -> None:
     """
     summary = ctx.summary
     plan = ctx.plan
-    with contextlib.ExitStack() as stack:
-        abs_ws: JJ | None = None
+    repo = ctx.repo
 
-        # Maps each phase-1 new_change_id to the canonical change-id post-absorb so
-        # dependent jobs are rebased onto the right commit, not the abandoned fresh one.
-        absorbed: dict[str, str] = {}
+    # Maps each phase-1 new_change_id to the canonical change-id post-absorb so
+    # dependent jobs are rebased onto the right commit, not the abandoned fresh one.
+    absorbed: dict[str, str] = {}
 
-        for job in ctx.selection.jobs:
-            result = summary.results.get(job.name)
-            if result is None:
-                logger.debug("absorb: [%s] no result, skipping", job.name)
-                continue
+    for job in ctx.selection.jobs:
+        result = summary.results.get(job.name)
+        if result is None:
+            logger.debug("absorb: [%s] no result, skipping", job.name)
+            continue
 
-            bookmark = result.job.branch_name()
+        bookmark = result.job.branch_name()
+        logger.debug(
+            "absorb: [%s] produced_diff=%s new=%s old=%s parents=%s",
+            job.name,
+            result.produced_diff,
+            result.new_change_id,
+            result.old_change_id,
+            result.parents,
+        )
+
+        if not result.produced_diff:
+            # Only delete the bookmark when the command ran and produced no
+            # diff. Cooldown and successor skips are intentional — leave
+            # their bookmarks alone so the branch is not destroyed.
+            if job.name not in summary.on_cooldown | summary.successor_skipped:
+                _absorb_no_diff_bookmark(job, result, bookmark, repo=repo, plan=plan)
+            continue
+
+        assert result.new_change_id is not None
+        new_cid = result.new_change_id
+        message = _build_commit_message(
+            result.job, CommandResult(output=result.command_output, elapsed=0.0)
+        )
+
+        # Translate phase-1 parent change-ids to their canonical post-absorb ids.
+        canonical_parents = [absorbed.get(p, p) for p in result.parents]
+
+        if result.old_change_id:
+            old_cid = result.old_change_id
+            repo.rebase_revision(old_cid, *canonical_parents)
+            content_unchanged = repo.same_content(old_cid, new_cid)
             logger.debug(
-                "absorb: [%s] produced_diff=%s new=%s old=%s parents=%s",
+                "absorb: [%s] rebased %s onto %s, content %s",
                 job.name,
-                result.produced_diff,
-                result.new_change_id,
-                result.old_change_id,
-                result.parents,
+                old_cid,
+                canonical_parents,
+                "unchanged" if content_unchanged else "differs, restoring",
             )
+            if not content_unchanged:
+                # restore names both revisions, so it rewrites old_cid directly
+                # without touching any working copy — no scratch workspace needed.
+                repo.restore(source_rev=new_cid, destination_rev=old_cid)
+                repo.describe_revision(old_cid, message)
+            elif _strip_boxquote_and_trailers(
+                repo.get_description(old_cid)
+            ) != _strip_boxquote_and_trailers(message):
+                repo.describe_revision(old_cid, message)
+            repo.abandon_revision(new_cid)
+            # No bookmark_set needed: the bookmark follows old_cid through
+            # the rewrites above (jj moves local bookmarks with the commit).
+            absorbed[new_cid] = old_cid
+        else:
+            logger.debug("absorb: [%s] new job, bookmark %s -> %s", job.name, bookmark, new_cid)
+            repo.bookmark_set(bookmark, new_cid)
+            absorbed[new_cid] = new_cid
 
-            if not result.produced_diff:
-                # Only delete the bookmark when the command ran and produced no
-                # diff. Cooldown and successor skips are intentional — leave
-                # their bookmarks alone so the branch is not destroyed.
-                if job.name not in summary.on_cooldown | summary.successor_skipped:
-                    _absorb_no_diff_bookmark(job, result, bookmark, repo=repo, plan=plan)
-                continue
-
-            assert result.new_change_id is not None
-            new_cid = result.new_change_id
-            message = _build_commit_message(
-                result.job, CommandResult(output=result.command_output, elapsed=0.0)
+        mr: MRUpdate | None = None
+        if result.job.create_mr is not CreateMR.never:
+            mr = MRUpdate(
+                source_branch=bookmark,
+                target_branch=result.job.base_branch,
+                title=f"{result.job.mr_title_prefix}{result.job.title}",
+                description=result.job.description or "",
+                command=result.job.command,
+                command_output=result.command_output,
+                labels=result.job.labels,
+                draft=result.job.draft,
+                auto_merge=result.job.auto_merge or False,
+                depends_on=list(result.job.depends_on),
             )
-
-            # Translate phase-1 parent change-ids to their canonical post-absorb ids.
-            canonical_parents = [absorbed.get(p, p) for p in result.parents]
-
-            if result.old_change_id:
-                old_cid = result.old_change_id
-                repo.rebase_revision(old_cid, *canonical_parents)
-                content_unchanged = repo.same_content(old_cid, new_cid)
-                logger.debug(
-                    "absorb: [%s] rebased %s onto %s, content %s",
-                    job.name,
-                    old_cid,
-                    canonical_parents,
-                    "unchanged" if content_unchanged else "differs, restoring",
-                )
-                if not content_unchanged:
-                    if abs_ws is None:
-                        abs_ws = stack.enter_context(
-                            repo.temp_workspace("repoactive-absorb", Colocation.PLAIN)
-                        )
-                    abs_ws.restore(source_rev=new_cid, destination_rev=old_cid)
-                    repo.describe_revision(old_cid, message)
-                elif _strip_boxquote_and_trailers(
-                    repo.get_description(old_cid)
-                ) != _strip_boxquote_and_trailers(message):
-                    repo.describe_revision(old_cid, message)
-                repo.abandon_revision(new_cid)
-                # No bookmark_set needed: the bookmark follows old_cid through
-                # the rewrites above (jj moves local bookmarks with the commit).
-                absorbed[new_cid] = old_cid
-            else:
-                logger.debug(
-                    "absorb: [%s] new job, bookmark %s -> %s", job.name, bookmark, new_cid
-                )
-                repo.bookmark_set(bookmark, new_cid)
-                absorbed[new_cid] = new_cid
-
-            mr: MRUpdate | None = None
-            if result.job.create_mr is not CreateMR.never:
-                mr = MRUpdate(
-                    source_branch=bookmark,
-                    target_branch=result.job.base_branch,
-                    title=f"{result.job.mr_title_prefix}{result.job.title}",
-                    description=result.job.description or "",
-                    command=result.job.command,
-                    command_output=result.command_output,
-                    labels=result.job.labels,
-                    draft=result.job.draft,
-                    auto_merge=result.job.auto_merge or False,
-                    depends_on=list(result.job.depends_on),
-                )
-            plan.updates.append(
-                JobUpdate(
-                    job_name=job.name,
-                    title=result.job.title,
-                    push=BookmarkPush(bookmark=bookmark),
-                    mr=mr,
-                )
+        plan.updates.append(
+            JobUpdate(
+                job_name=job.name,
+                title=result.job.title,
+                push=BookmarkPush(bookmark=bookmark),
+                mr=mr,
             )
+        )
 
 
 @contextlib.contextmanager
@@ -967,7 +964,7 @@ def _prepare_repo(*, config: Config, repo_path: Path) -> Generator[JJ]:
         )
 
 
-def _run_jobs(*, ctx: RunContext, repo: JJ) -> None:
+def _run_jobs(ctx: RunContext) -> None:
     """Run ``ctx.selection`` in topological order, expanding generators in place.
 
     ``ctx.selection.jobs`` is topologically sorted, so the first job not yet in
@@ -1004,7 +1001,7 @@ def _run_jobs(*, ctx: RunContext, repo: JJ) -> None:
             # Track the new jobs' bookmarks so a branch an earlier run already
             # pushed is reused rather than recreated, then splice them into the
             # selection and re-sort so they run after their dependencies.
-            repo.bookmark_track(*sorted(j.branch_name() for j in resolved_emitted))
+            ctx.repo.bookmark_track(*sorted(j.branch_name() for j in resolved_emitted))
             selection.jobs = topological_sort(selection.jobs + resolved_emitted)
             print_job_table(format_job_forest(selection.jobs), indent="  ")
 
@@ -1081,6 +1078,7 @@ def run_all(  # noqa: PLR0913
         ctx = RunContext(
             config=config,
             repo_path=repo_path,
+            repo=repo,
             summary=summary,
             blocked=set(),
             selection=selection,
@@ -1095,11 +1093,11 @@ def run_all(  # noqa: PLR0913
         # Generator-emitted jobs are spliced into ctx.selection.jobs so the absorb
         # phase processes them too. Jobs pulled in for refresh bypass the cooldown
         # skip so their branches are rebased (ADR 0003).
-        _run_jobs(ctx=ctx, repo=repo)
+        _run_jobs(ctx)
 
         # Phase 2: absorb fresh commits into old commits (preserving change-ids),
         # set bookmarks for new jobs, delete bookmarks for empty jobs, fill ctx.plan.
-        _absorb_results(ctx, repo=repo)
+        _absorb_results(ctx)
 
         # Resolve "unless-superseded" now that every job has run: a job's MR is
         # dropped from the plan when a dependent's MR in this run contains it.
