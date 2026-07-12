@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.5 - unreleased
+## 0.2.5 - 2026-07-12
 
 - A new `cooldown_on` field on a job lists the names of broader jobs whose
   recent landing should also count as a cooldown trigger. Once any listed
