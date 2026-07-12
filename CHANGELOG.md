@@ -18,6 +18,23 @@
   ran: it bypasses its own cooldown when the selected job updates, and is
   skipped (bookmark untouched) when the selected job was itself
   cooldown-skipped.
+- **Bug fix:** on GitHub, a job with `auto_merge = true` no longer aborts
+  the remaining MR updates when auto-merge cannot be enabled (the repository
+  disallows it or the PR is not mergeable). repoactive now prints a warning
+  and continues, matching the existing GitLab behaviour; the PR is still
+  created.
+- **Bug fix:** a per-job `mr_title_prefix` containing a newline is now
+  rejected at config-load time with a clear error, like `title` and
+  `commit_title_prefix` already were. Previously the bad value slipped
+  through and only surfaced at MR-creation time.
+- **Bug fix:** the "last run" time used for cooldown reporting no longer
+  assumes jj lists commits newest-first. A rebased or late-landed commit
+  sitting topologically above a newer one could yield a wrong timestamp; the
+  newest date is now chosen explicitly.
+- **Bug fix:** a job skipped by `run_only_if_changed` no longer triggers a
+  spurious remote bookmark deletion, and a job whose open branch is being
+  refreshed is no longer subject to the `run_only_if_changed` gate (the
+  refresh rebases the branch regardless).
 
 ## 0.2.4 - 2026-07-08
 
