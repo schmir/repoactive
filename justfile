@@ -18,7 +18,7 @@ coverage *args:
 # Run quick CI checks: treefmt, type check, tests, config + schema validation
 ci:
     treefmt
-    uv run nox -s ty tests-3.14 check_schema validate_config  -- -m 'not slow'
+    uv run nox -s ty tests-3.14 check-schema validate-config  -- -m 'not slow'
     # scripts/prek.sh run --all-files
 
 # Run pyright (from PATH if available, else bundled node.js via uvx)
@@ -37,6 +37,10 @@ dev:
 docker-build:
     docker build -t repoactive .
     docker image ls repoactive
+
+# Build the Docker image and smoke-test it against a fresh clone (needs docker + network)
+docker-smoketest:
+    uv run nox -s docker-smoketest
 
 # Update the nix flake lockfile
 update-flake:
