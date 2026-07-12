@@ -31,3 +31,14 @@ repos:
     rev: v0.0.58
     hooks:
       - id: ty
+
+  - repo: local
+    hooks:
+      - id: shfmt
+        name: shfmt
+        description: Run shfmt to format shell scripts
+        entry: shfmt -w -i 4
+        types: [shell]
+        language: golang
+        pass_filenames: true
+        additional_dependencies: ["mvdan.cc/sh/v3/cmd/shfmt@v3.13.1"]

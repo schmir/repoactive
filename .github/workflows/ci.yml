@@ -20,6 +20,11 @@ jobs:
         with:
           python-version: "3.14"
 
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.25"
+
       - name: pre-commit
         uses: j178/prek-action@v2
 
