@@ -27,10 +27,10 @@ jobs:
         run: uv run ty check
 
       - name: Validate config
-        run: uv run nox -s validate_config
+        run: uv run nox -s validate-config
 
       - name: Ensure config-schema.json is up-to-date
-        run: uv run nox -s check_schema
+        run: uv run nox -s check-schema
 
   tests:
     runs-on: ubuntu-latest
@@ -59,3 +59,19 @@ jobs:
 
       - name: Tests
         run: uv run nox -p ${{ matrix.python-version }} -s tests
+
+  docker-smoketest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.2.0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
+      - name: Docker smoke test
+        run: uv run nox -s docker-smoketest
