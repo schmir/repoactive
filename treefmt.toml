@@ -18,10 +18,16 @@ command = "taplo"
 options = ["format"]
 includes = ["*.toml"]
 
+[formatter.shellcheck]
+command = "shellcheck"
+includes = ["*.sh", "*.bash"]
+priority = 1
+
 [formatter.shfmt]
 command = "shfmt"
 options = ["-w", "-i", "4"]
 includes = ["*.sh", "*.bash"]
+priority = 2
 
 [formatter.prettier]
 command = "prettier"

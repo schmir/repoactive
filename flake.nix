@@ -37,6 +37,7 @@
               prettier
               pyright
               ruff
+              shellcheck
               shfmt
               taplo
               treefmt
