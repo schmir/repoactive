@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from enum import StrEnum
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, Literal, cast
 
 from pydantic import (
     AfterValidator,
@@ -154,40 +154,6 @@ class GeneratedByInBodyError(ValueError):
         super().__init__(
             f"job {name!r} must not set 'generated_by'; "
             "that field is set by repoactive on generator-emitted jobs"
-        )
-
-
-class JobNotTableError(ValueError):
-    """Raised when a [job.<name>] entry is not a table."""
-
-    def __init__(self, name: str) -> None:
-        super().__init__(f"job {name!r} must be a table ([job.{name}])")
-
-
-class JobsNotTableError(ValueError):
-    """Raised when 'job' is not a table keyed by name (e.g. the old array form)."""
-
-    def __init__(self) -> None:
-        super().__init__(
-            "jobs must be a table keyed by name ([job.<name>]); the [[job]] array form "
-            "with a 'name' field is no longer supported"
-        )
-
-
-class PlatformNotTableError(ValueError):
-    """Raised when a [platform.<name>] entry is not a table."""
-
-    def __init__(self, name: str) -> None:
-        super().__init__(f"platform {name!r} must be a table ([platform.{name}])")
-
-
-class PlatformsNotTableError(ValueError):
-    """Raised when 'platform' is not a table keyed by name (e.g. the old array form)."""
-
-    def __init__(self) -> None:
-        super().__init__(
-            "platforms must be a table keyed by name ([platform.<name>]); the [[platform]] "
-            "array form is no longer supported"
         )
 
 
@@ -449,14 +415,16 @@ class Config(BaseModel):
         TOML stores jobs as a table keyed by name; the name comes from the key
         and is injected into each job. A non-mapping value (e.g. an already-built
         ``list[Job]`` passed programmatically) passes through unchanged.
+
+        Each entry is assumed to be a table: ``load_config`` validates every
+        source against ``ConfigShape`` first, and programmatic callers must
+        pass tables as well.
         """
         if not isinstance(value, dict):
             return value
         jobs: list[dict] = []
-        for key, body in value.items():
+        for key, body in cast("dict[str, dict]", value).items():
             name = str(key)
-            if not isinstance(body, dict):
-                raise JobNotTableError(name)
             if "name" in body:
                 raise JobNameInBodyError(name)
             if "generated_by" in body:
@@ -473,15 +441,14 @@ class Config(BaseModel):
         (platforms are matched by ``url``), so it is dropped here. A non-mapping
         value (e.g. an already-built ``list`` passed programmatically) passes
         through unchanged.
+
+        Each entry is assumed to be a table: ``load_config`` validates every
+        source against ``ConfigShape`` first, and programmatic callers must
+        pass tables as well.
         """
         if not isinstance(value, dict):
             return value
-        platforms: list[dict] = []
-        for key, body in value.items():
-            if not isinstance(body, dict):
-                raise PlatformNotTableError(str(key))
-            platforms.append(body)
-        return platforms
+        return list(value.values())
 
     @model_validator(mode="after")
     def validate_unique_platform_hosts(self) -> Config:
@@ -560,28 +527,35 @@ class Config(BaseModel):
         return {p.token_env for p in self.platforms}
 
 
-def jobs_table(value: object) -> dict:
-    """Return ``value`` as a job table, rejecting the old ``[[job]]`` array form.
+class ConfigShape(BaseModel):
+    """Structural shape of a raw config source, validated before merging.
 
-    TOML parses ``[job.<name>]`` tables into a dict keyed by name; an array of
-    tables (the format used before) parses into a list, which is no longer
-    accepted.
+    Merging digs into the ``job`` and ``platform`` tables, so each must be a
+    table of tables, and ``job-defaults`` must be a table; an odd shape (e.g.
+    ``job.foo = "hello"``) would otherwise crash the merge with an unhelpful
+    error. Only the shape is checked here — field contents and any other keys
+    are validated by ``Config`` after the merge.
     """
-    if not isinstance(value, dict):
-        raise JobsNotTableError
-    return value
+
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    job: dict[str, dict] = Field(default_factory=dict)
+    platform: dict[str, dict] = Field(default_factory=dict)
+    job_defaults: dict = Field(alias="job-defaults", default_factory=dict)
 
 
-def platforms_table(value: object) -> dict:
-    """Return ``value`` as a platform table, rejecting the old ``[[platform]]`` array.
+class FragmentShape(BaseModel):
+    """Structural shape of a generator-emitted job fragment.
 
-    TOML parses ``[platform.<name>]`` tables into a dict keyed by name; an array
-    of tables (the format used before) parses into a list, which is no longer
-    accepted.
+    Generators may only emit ``[job.<name>]`` tables: the generator job itself
+    acts as the scoped job-defaults for its emitted jobs (ADR 0004), so a
+    ``[job-defaults]`` or ``[platform]`` in a fragment would never apply and
+    is rejected instead of silently ignored.
     """
-    if not isinstance(value, dict):
-        raise PlatformsNotTableError
-    return value
+
+    model_config = ConfigDict(extra="forbid")
+
+    job: dict[str, dict] = Field(default_factory=dict)
 
 
 def _deep_merge(*, base: dict, override: dict) -> dict:
@@ -736,10 +710,13 @@ def _merge_config(sources: Iterable[_ConfigSource]) -> Config:
     for source in sources:
         data = source.data
         try:
-            jobs = merge_jobs(base=merged.get("job", {}), override=jobs_table(data.get("job", {})))
+            # Reject odd shapes (e.g. job.foo = "hello") up front; the merge
+            # helpers assume tables of tables and would fail cryptically.
+            shape = ConfigShape.model_validate(data)
+            jobs = merge_jobs(base=merged.get("job", {}), override=shape.job)
             platforms = merge_platforms(
                 base=merged.get("platform", {}),
-                override=platforms_table(data.get("platform", {})),
+                override=shape.platform,
             )
             merged = _deep_merge(base=merged, override=data)
             merged["job"] = jobs

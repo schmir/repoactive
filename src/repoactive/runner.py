@@ -21,9 +21,9 @@ from repoactive.boxquote import boxquote, strip_boxquotes
 from repoactive.config import (
     Config,
     CreateMR,
+    FragmentShape,
     Job,
     expand_config_paths,
-    jobs_table,
     merge_jobs,
 )
 from repoactive.graph import CircularDependencyError, detect_dependency_cycle, topological_sort
@@ -523,13 +523,14 @@ def _load_job_specs(jobs_dir: Path) -> dict[str, dict]:
 
     Files are read in sorted order and their ``[job.<name>]`` tables merged by
     name (later files win), the same machinery used for the ``.repoactive.d``
-    directory. Returns the raw job-spec table keyed by name, before
+    directory. Fragments may only contain ``[job.<name>]`` tables (see
+    ``FragmentShape``). Returns the raw job-spec table keyed by name, before
     inheritance/validation.
     """
     specs: dict[str, dict] = {}
     for path in expand_config_paths([jobs_dir]):
         data = tomllib.loads(path.read_text())
-        specs = merge_jobs(base=specs, override=jobs_table(data.get("job", {})))
+        specs = merge_jobs(base=specs, override=FragmentShape.model_validate(data).job)
     return specs
 
 

@@ -949,6 +949,10 @@ command = "uv lock --upgrade --package pkg-a"
 title = "build: upgrade pkg-a"
 ```
 
+Fragments may only contain `[job.<name>]` tables; anything else (e.g.
+`[job-defaults]`) fails the generator. To set defaults for the emitted jobs,
+set them on the generator itself — they are inherited (see below).
+
 Key points:
 
 - **Selection is unchanged.** A generator is selected like any job (by the

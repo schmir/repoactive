@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from pydantic import ValidationError
 
 from repoactive.config import Config, CreateMR, Job, JobDefaults
 from repoactive.jj import JJ
@@ -1338,6 +1339,18 @@ class TestLoadJobSpecs:
 
     def test_empty_directory_yields_nothing(self, tmp_path: Path) -> None:
         assert _load_job_specs(tmp_path) == {}
+
+    def test_non_table_job_entry_rejected(self, tmp_path: Path) -> None:
+        (tmp_path / "01.toml").write_text('[job]\nfoo = "hello"\n')
+        with pytest.raises(ValidationError, match=r"Input should be a valid dictionary"):
+            _load_job_specs(tmp_path)
+
+    def test_job_defaults_in_fragment_rejected(self, tmp_path: Path) -> None:
+        (tmp_path / "01.toml").write_text(
+            '[job-defaults]\ntimeout = "5m"\n[job.a]\ncommand = "c"\ntitle = "A"\n'
+        )
+        with pytest.raises(ValidationError, match=r"job-defaults"):
+            _load_job_specs(tmp_path)
 
 
 class TestRunGeneratorJob:

@@ -3,6 +3,7 @@
 from datetime import timedelta
 from pathlib import Path
 
+import pydantic
 import pytest
 
 from repoactive.config import (
@@ -10,7 +11,9 @@ from repoactive.config import (
     Config,
     ConfigError,
     ConfigNotFoundError,
+    ConfigShape,
     CreateMR,
+    FragmentShape,
     InvalidDurationError,
     Job,
     JobDefaults,
@@ -425,6 +428,77 @@ class TestTimeout:
         assert job.resolve(JobDefaults()).timeout == "2m"
 
 
+class TestConfigShape:
+    def test_missing_tables_default_to_empty(self) -> None:
+        shape = ConfigShape.model_validate({})
+        assert shape.job == {}
+        assert shape.platform == {}
+        assert shape.job_defaults == {}
+
+    def test_passes_through_tables(self) -> None:
+        shape = ConfigShape.model_validate(
+            {
+                "job": {"a": {"command": "cmd"}},
+                "platform": {"gl": {"url": "u"}},
+                "job-defaults": {"branch_prefix": "bot/"},
+            }
+        )
+        assert shape.job == {"a": {"command": "cmd"}}
+        assert shape.platform == {"gl": {"url": "u"}}
+        assert shape.job_defaults == {"branch_prefix": "bot/"}
+
+    @pytest.mark.parametrize("body", ["hello", 5, ["x"], True])
+    def test_non_table_job_entry_rejected(self, body: object) -> None:
+        with pytest.raises(pydantic.ValidationError) as exc_info:
+            ConfigShape.model_validate({"job": {"foo": body}})
+        assert exc_info.value.errors()[0]["loc"] == ("job", "foo")
+
+    @pytest.mark.parametrize("body", ["hello", 5, ["x"], True])
+    def test_non_table_platform_entry_rejected(self, body: object) -> None:
+        with pytest.raises(pydantic.ValidationError) as exc_info:
+            ConfigShape.model_validate({"platform": {"gl": body}})
+        assert exc_info.value.errors()[0]["loc"] == ("platform", "gl")
+
+    @pytest.mark.parametrize("body", ["hello", 5, ["x"], True])
+    def test_non_table_job_defaults_rejected(self, body: object) -> None:
+        with pytest.raises(pydantic.ValidationError, match=r"job-defaults"):
+            ConfigShape.model_validate({"job-defaults": body})
+
+    def test_job_array_form_rejected(self) -> None:
+        with pytest.raises(pydantic.ValidationError) as exc_info:
+            ConfigShape.model_validate({"job": [{"name": "a"}]})
+        assert exc_info.value.errors()[0]["loc"] == ("job",)
+
+    def test_platform_array_form_rejected(self) -> None:
+        with pytest.raises(pydantic.ValidationError) as exc_info:
+            ConfigShape.model_validate({"platform": [{"url": "u"}]})
+        assert exc_info.value.errors()[0]["loc"] == ("platform",)
+
+
+class TestFragmentShape:
+    def test_accepts_job_tables(self) -> None:
+        shape = FragmentShape.model_validate({"job": {"a": {"command": "cmd"}}})
+        assert shape.job == {"a": {"command": "cmd"}}
+
+    def test_empty_fragment_yields_no_jobs(self) -> None:
+        assert FragmentShape.model_validate({}).job == {}
+
+    @pytest.mark.parametrize("key", ["job-defaults", "platform", "unknown"])
+    def test_other_top_level_keys_rejected(self, key: str) -> None:
+        with pytest.raises(pydantic.ValidationError, match="Extra inputs are not permitted"):
+            FragmentShape.model_validate({key: {}, "job": {"a": {"command": "cmd"}}})
+
+    def test_error_names_each_unexpected_key(self) -> None:
+        with pytest.raises(pydantic.ValidationError) as exc_info:
+            FragmentShape.model_validate({"platform": {}, "job-defaults": {}})
+        assert {e["loc"] for e in exc_info.value.errors()} == {("platform",), ("job-defaults",)}
+
+    def test_non_table_job_entry_rejected(self) -> None:
+        with pytest.raises(pydantic.ValidationError) as exc_info:
+            FragmentShape.model_validate({"job": {"foo": "hello"}})
+        assert exc_info.value.errors()[0]["loc"] == ("job", "foo")
+
+
 class TestLoadConfig:
     def test_minimal_config(self, tmp_path: Path) -> None:
         f = tmp_path / ".repoactive.toml"
@@ -672,7 +746,7 @@ class TestLoadConfig:
         bad.write_text(
             '[[platform]]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
         )
-        with pytest.raises(ConfigError, match=r"\[platform.<name>\]"):
+        with pytest.raises(ConfigError, match=r"Input should be a valid dictionary"):
             load_config([bad])
 
     def test_override_invalid_toml_names_set_label(self, tmp_path: Path) -> None:
@@ -712,7 +786,60 @@ class TestLoadConfig:
             load_config([f])
         assert "must not set 'generated_by'" in str(exc_info.value)
 
-    def test_old_job_array_form_rejected_with_migration_hint(self, tmp_path: Path) -> None:
+    def test_non_table_job_entry_rejected(self, tmp_path: Path) -> None:
+        f = tmp_path / "odd.toml"
+        f.write_text(
+            '[platform.gitlab]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
+            '[job]\nfoo = "hello"\n'
+        )
+        with pytest.raises(ConfigError, match=str(f)) as exc_info:
+            load_config([f])
+        assert "job.foo" in str(exc_info.value)
+        assert "Input should be a valid dictionary" in str(exc_info.value)
+
+    def test_non_table_job_entry_in_second_source_names_that_source(self, tmp_path: Path) -> None:
+        base = tmp_path / "base.toml"
+        base.write_text(
+            '[platform.gitlab]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
+            '[job.a]\ncommand = "cmd"\ntitle = "A"\n'
+        )
+        override = tmp_path / "override.toml"
+        override.write_text('[job]\na = "hello"\n')
+        with pytest.raises(ConfigError, match=str(override)) as exc_info:
+            load_config([base, override])
+        assert "job.a" in str(exc_info.value)
+        assert "Input should be a valid dictionary" in str(exc_info.value)
+
+    def test_non_table_platform_entry_rejected(self, tmp_path: Path) -> None:
+        f = tmp_path / "odd.toml"
+        f.write_text('[platform]\ngitlab = "https://gitlab.com"\n')
+        with pytest.raises(ConfigError, match=str(f)) as exc_info:
+            load_config([f])
+        assert "platform.gitlab" in str(exc_info.value)
+        assert "Input should be a valid dictionary" in str(exc_info.value)
+
+    def test_non_table_job_entry_in_set_override_rejected(self, tmp_path: Path) -> None:
+        base = tmp_path / "base.toml"
+        base.write_text(
+            '[platform.gitlab]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
+            '[job.a]\ncommand = "cmd"\ntitle = "A"\n'
+        )
+        with pytest.raises(ConfigError, match=r"--set") as exc_info:
+            load_config([base], overrides=['job.a = "hello"'])
+        assert "job.a" in str(exc_info.value)
+        assert "Input should be a valid dictionary" in str(exc_info.value)
+
+    def test_non_table_job_defaults_rejected(self, tmp_path: Path) -> None:
+        f = tmp_path / "odd.toml"
+        f.write_text(
+            'job-defaults = "hello"\n'
+            '[platform.gitlab]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
+        )
+        with pytest.raises(ConfigError, match=str(f)) as exc_info:
+            load_config([f])
+        assert "job-defaults" in str(exc_info.value)
+
+    def test_old_job_array_form_rejected(self, tmp_path: Path) -> None:
         f = tmp_path / "legacy.toml"
         f.write_text(
             '[platform.gitlab]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
@@ -720,7 +847,7 @@ class TestLoadConfig:
         )
         with pytest.raises(ConfigError, match=str(f)) as exc_info:
             load_config([f])
-        assert "[[job]] array form" in str(exc_info.value)
+        assert "Input should be a valid dictionary" in str(exc_info.value)
 
     def test_directory_reads_toml_files_sorted(self, tmp_path: Path) -> None:
         conf_dir = tmp_path / "conf.d"
