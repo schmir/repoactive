@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.6 - 2026-07-13
+
+- **Bug fix:** on GitLab, `auto_merge = true` now takes effect on the run
+  that creates the MR. A freshly created MR is not immediately mergeable
+  (GitLab runs its mergeability check and builds the MR pipeline in the
+  background), so enabling auto-merge in that window failed with a 422 and
+  the flag was only set on a later run. repoactive now polls until the MR is
+  ready and a pipeline exists before enabling "merge when pipeline
+  succeeds". A repository with no CI never grows a pipeline, so the poll
+  times out and falls back to an immediate merge.
+
 ## 0.2.5 - 2026-07-12
 
 - A new `cooldown_on` field on a job lists the names of broader jobs whose
