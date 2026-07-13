@@ -336,14 +336,12 @@ class TestGitLabEnsureMR:
         mr = MagicMock()
         mr.web_url = "https://example.com/mr/1"
         project.mergerequests.list.return_value = [mr]
-        # ensure_mr re-fetches the MR to read its merge status and pipeline.
-        project.mergerequests.get.return_value = self._ready_mr()
 
         platform.ensure_mr(_mr_params(auto_merge=True))
 
-        project.mergerequests.get.return_value.merge.assert_called_once_with(
-            merge_when_pipeline_succeeds=True
-        )
+        # The first call succeeds (GitLab >= 17.11), so no re-fetch/poll.
+        mr.merge.assert_called_once_with(merge_when_pipeline_succeeds=True, auto_merge=True)
+        project.mergerequests.get.assert_not_called()
 
     @patch("repoactive.platforms.gitlab.gitlab")
     def test_auto_merge_calls_merge_on_new(self, mock_gitlab: MagicMock) -> None:
@@ -351,23 +349,24 @@ class TestGitLabEnsureMR:
         project.mergerequests.list.return_value = []
         new_mr = project.mergerequests.create.return_value
         new_mr.web_url = "https://example.com/mr/2"
-        project.mergerequests.get.return_value = self._ready_mr()
 
         platform.ensure_mr(_mr_params(auto_merge=True))
 
-        project.mergerequests.get.return_value.merge.assert_called_once_with(
-            merge_when_pipeline_succeeds=True
-        )
+        new_mr.merge.assert_called_once_with(merge_when_pipeline_succeeds=True, auto_merge=True)
+        project.mergerequests.get.assert_not_called()
 
     @patch("repoactive.platforms.gitlab.time.sleep")
     @patch("repoactive.platforms.gitlab.gitlab")
-    def test_auto_merge_waits_for_check_and_pipeline(
+    def test_auto_merge_rejected_waits_for_check_and_pipeline(
         self, mock_gitlab: MagicMock, mock_sleep: MagicMock
     ) -> None:
         platform, project = self._platform(mock_gitlab)
         project.mergerequests.list.return_value = []
         new_mr = project.mergerequests.create.return_value
         new_mr.iid = 7
+        # Old GitLab (< 17.11) rejects the first merge call while the MR is
+        # not ready, triggering the poll fallback.
+        new_mr.merge.side_effect = GitlabMRClosedError("Branch cannot be merged")
         # First re-fetch: mergeability check still running, no pipeline yet.
         pending = MagicMock()
         pending.detailed_merge_status = "checking"
@@ -380,7 +379,7 @@ class TestGitLabEnsureMR:
 
         project.mergerequests.get.assert_called_with(7)
         pending.merge.assert_not_called()
-        ready.merge.assert_called_once_with(merge_when_pipeline_succeeds=True)
+        ready.merge.assert_called_once_with(merge_when_pipeline_succeeds=True, auto_merge=True)
         mock_sleep.assert_called_once_with(3.0)
 
     @patch("repoactive.platforms.gitlab._AUTO_MERGE_TIMEOUT", 0.0)
@@ -391,6 +390,8 @@ class TestGitLabEnsureMR:
     ) -> None:
         platform, project = self._platform(mock_gitlab)
         project.mergerequests.list.return_value = []
+        new_mr = project.mergerequests.create.return_value
+        new_mr.merge.side_effect = GitlabMRClosedError("Branch cannot be merged")
         # Repo has no CI: a pipeline never appears. The poll times out and the
         # merge call falls back to an immediate merge.
         no_ci = MagicMock()
@@ -400,7 +401,7 @@ class TestGitLabEnsureMR:
 
         platform.ensure_mr(_mr_params(auto_merge=True))
 
-        no_ci.merge.assert_called_once_with(merge_when_pipeline_succeeds=True)
+        no_ci.merge.assert_called_once_with(merge_when_pipeline_succeeds=True, auto_merge=True)
         mock_sleep.assert_not_called()
 
     @patch("repoactive.platforms.gitlab.gitlab")
@@ -408,7 +409,10 @@ class TestGitLabEnsureMR:
         self, mock_gitlab: MagicMock, capsys: pytest.CaptureFixture[str]
     ) -> None:
         platform, project = self._platform(mock_gitlab)
-        project.mergerequests.list.return_value = [MagicMock()]
+        mr = MagicMock()
+        mr.merge.side_effect = GitlabMRClosedError("Branch cannot be merged")
+        project.mergerequests.list.return_value = [mr]
+        # The poll fallback also fails; only then is the warning printed.
         ready = self._ready_mr()
         ready.merge.side_effect = GitlabMRClosedError("Branch cannot be merged")
         project.mergerequests.get.return_value = ready

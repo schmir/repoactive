@@ -11,14 +11,16 @@ from repoactive.platforms.base import MRParams, Platform, PlatformError
 _DRAFT_PREFIX = "Draft: "
 
 # detailed_merge_status / merge_status values that mean GitLab's async
-# mergeability check hasn't finished yet. Setting auto-merge while the check is
-# pending returns 422 "Branch cannot be merged".
+# mergeability check hasn't finished yet. On GitLab without the auto_merge
+# parameter (< 17.11), setting auto-merge while the check is pending returns
+# 422 "Branch cannot be merged".
 _MERGE_CHECK_PENDING = frozenset({"unchecked", "checking", "preparing"})
 
-# A freshly created MR is not immediately ready for auto-merge: GitLab runs the
-# mergeability check and creates the MR pipeline in the background. Poll for
-# that to settle, bounded by this timeout; the next run re-attempts if it never
-# does.
+# Fallback for GitLab without the auto_merge parameter: a freshly created MR is
+# not immediately ready for merge_when_pipeline_succeeds because GitLab runs
+# the mergeability check and creates the MR pipeline in the background. Poll
+# for that to settle, bounded by this timeout; the next run re-attempts if it
+# never does.
 _AUTO_MERGE_TIMEOUT = 60.0
 _AUTO_MERGE_POLL_INTERVAL = 3.0
 
@@ -92,13 +94,27 @@ class GitLabPlatform(Platform):
         return web_url
 
     def _enable_auto_merge(self, mr: ProjectMergeRequest) -> None:
-        """Set merge_when_pipeline_succeeds once the MR is ready, else warn.
+        """Enable auto-merge on ``mr``, falling back to a readiness poll.
 
-        Re-fetches the MR (the list/create payloads omit head_pipeline) and
-        polls until it is ready for auto-merge or the timeout passes. A repo
-        with no CI never grows a pipeline; there the poll times out and the
-        final call merges immediately, the best available behavior.
+        The merge call sends both auto-merge parameters. On GitLab >= 17.11
+        ``auto_merge`` selects the "merge when checks pass" strategy, which is
+        accepted while the mergeability check is still running and needs no
+        pipeline, so the first call normally succeeds right away. Older GitLab
+        ignores the unknown parameter and honors the deprecated
+        merge_when_pipeline_succeeds, which is rejected until the check is
+        done and a pipeline exists; when the first call is rejected, poll the
+        MR (re-fetched, since list/create payloads omit head_pipeline) until
+        it is ready or the timeout passes and retry once. A repo with no CI
+        never grows a pipeline; there the poll times out and the final call
+        merges immediately, the best available behavior.
         """
+        try:
+            mr.merge(merge_when_pipeline_succeeds=True, auto_merge=True)
+            return
+        except GitlabMRClosedError:
+            # python-gitlab wraps every merge failure in GitlabMRClosedError;
+            # this is the 422/405 "not ready yet" case, not a closed MR.
+            pass
         iid = mr.iid
         deadline = time.monotonic() + _AUTO_MERGE_TIMEOUT
         while True:
@@ -107,6 +123,6 @@ class GitLabPlatform(Platform):
                 break
             time.sleep(_AUTO_MERGE_POLL_INTERVAL)
         try:
-            mr.merge(merge_when_pipeline_succeeds=True)
+            mr.merge(merge_when_pipeline_succeeds=True, auto_merge=True)
         except GitlabMRClosedError as e:
             print(f"  warning: could not enable auto-merge ({e})")
