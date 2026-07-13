@@ -428,6 +428,42 @@ class TestTimeout:
         assert job.resolve(JobDefaults()).timeout == "2m"
 
 
+class TestRequiredApprovals:
+    def test_valid_value_accepted(self) -> None:
+        approvals = 2
+        job = Job(name="x", command="cmd", title="X", required_approvals=approvals)
+        assert job.required_approvals == approvals
+
+    def test_zero_accepted(self) -> None:
+        # Zero is meaningful: it overrides a job-defaults value back to
+        # "no approvals required" (TOML cannot express null).
+        job = Job(name="x", command="cmd", title="X", required_approvals=0)
+        assert job.required_approvals == 0
+
+    def test_negative_value_rejected(self) -> None:
+        with pytest.raises(pydantic.ValidationError, match="greater than or equal to 0"):
+            Job(name="x", command="cmd", title="X", required_approvals=-1)
+
+    def test_negative_value_rejected_in_defaults(self) -> None:
+        with pytest.raises(pydantic.ValidationError, match="greater than or equal to 0"):
+            JobDefaults(required_approvals=-1)
+
+    def test_none_when_unset(self) -> None:
+        job = Job(name="x", command="cmd", title="X")
+        assert job.required_approvals is None
+
+    def test_falls_back_to_defaults(self) -> None:
+        approvals = 3
+        job = Job(name="x", command="cmd", title="X")
+        resolved = job.resolve(JobDefaults(required_approvals=approvals))
+        assert resolved.required_approvals == approvals
+
+    def test_per_job_overrides_defaults(self) -> None:
+        job = Job(name="x", command="cmd", title="X", required_approvals=1)
+        resolved = job.resolve(JobDefaults(required_approvals=3))
+        assert resolved.required_approvals == 1
+
+
 class TestConfigShape:
     def test_missing_tables_default_to_empty(self) -> None:
         shape = ConfigShape.model_validate({})

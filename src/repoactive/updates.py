@@ -47,6 +47,7 @@ class MRUpdate(BaseModel):
     labels: list[str]
     draft: bool
     auto_merge: bool = False
+    required_approvals: int | None = None
     depends_on: list[str] = Field(default_factory=list)
 
 

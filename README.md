@@ -431,6 +431,11 @@ block.
   every MR/PR so it merges automatically once its pipeline passes. On
   GitHub, the repository must have "Allow auto-merge" enabled in its
   settings.
+- **`required_approvals`** (default: none) - Minimum number of approvals
+  required before the MR can be merged. **GitLab only** - this sets the
+  per-MR approval requirement. GitHub has no per-PR equivalent (required
+  approvals are a repository-wide branch protection setting), so a job that
+  sets `required_approvals` against a GitHub repository fails with an error.
 
 **Branch and commit options:**
 
@@ -479,6 +484,9 @@ underscores.
   already contains this job's changes - see [Stacking MRs](#stacking-mrs)).
 - **`auto_merge`** (default: inherited from `job-defaults`) - When `true`,
   enable auto-merge on this job's MR/PR.
+- **`required_approvals`** (default: inherited from `job-defaults`) -
+  Minimum number of approvals required before this job's MR can be merged.
+  GitLab only; see `job-defaults.required_approvals`.
 
 **Branch and commit options:**
 

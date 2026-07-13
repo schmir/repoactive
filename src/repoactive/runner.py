@@ -956,6 +956,7 @@ def _absorb_results(ctx: RunContext) -> None:
                 labels=result.job.labels,
                 draft=result.job.draft,
                 auto_merge=result.job.auto_merge or False,
+                required_approvals=result.job.required_approvals,
                 depends_on=list(result.job.depends_on),
             )
         plan.updates.append(
@@ -1204,6 +1205,7 @@ def _apply_plan_publish(
                 labels=update.mr.labels,
                 draft=update.mr.draft,
                 auto_merge=update.mr.auto_merge,
+                required_approvals=update.mr.required_approvals,
             )
             url = platform.ensure_mr(params)
         except Exception as e:

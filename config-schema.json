@@ -198,6 +198,19 @@
           ],
           "default": null,
           "title": "Auto Merge"
+        },
+        "required_approvals": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Required Approvals"
         }
       },
       "required": [
@@ -273,6 +286,19 @@
           "default": false,
           "title": "Auto Merge",
           "type": "boolean"
+        },
+        "required_approvals": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Required Approvals"
         }
       },
       "title": "JobDefaults",

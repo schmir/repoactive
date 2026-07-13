@@ -264,6 +264,7 @@ class JobDefaults(BaseModel):
     cooldown_period: _Duration | None = None
     timeout: _Duration | None = "2m"
     auto_merge: bool = False
+    required_approvals: int | None = Field(default=None, ge=0)
 
 
 # Fields Job.resolve fills in from JobDefaults when the job does not set them
@@ -276,6 +277,7 @@ _DEFAULTED_FIELDS = (
     "cooldown_period",
     "timeout",
     "auto_merge",
+    "required_approvals",
 )
 
 
@@ -317,6 +319,7 @@ class Job(BaseModel):
     cooldown_period: _Duration | None = None
     timeout: _Duration | None = None
     auto_merge: bool | None = None
+    required_approvals: int | None = Field(default=None, ge=0)
 
     @field_validator("name")
     @classmethod

@@ -26,6 +26,7 @@ class MRParams:
     labels: list[str]
     draft: bool
     auto_merge: bool = False
+    required_approvals: int | None = None
 
 
 class Platform(ABC):

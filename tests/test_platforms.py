@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from github import GithubException
-from gitlab.exceptions import GitlabAuthenticationError, GitlabMRClosedError
+from gitlab.exceptions import GitlabAuthenticationError, GitlabError, GitlabMRClosedError
 
 from repoactive.config import Config, PlatformConfig, load_config
 from repoactive.platforms import (
@@ -18,7 +18,7 @@ from repoactive.platforms import (
     get_platform,
 )
 from repoactive.platforms.base import MRParams, PlatformError, extract_host, parse_repo_from_url
-from repoactive.platforms.github import GitHubPlatform
+from repoactive.platforms.github import GitHubPlatform, RequiredApprovalsNotSupportedError
 from repoactive.platforms.gitlab import GitLabPlatform
 
 
@@ -235,6 +235,19 @@ class TestGitHubEnsureMR:
         pr.enable_automerge.assert_not_called()
 
     @patch("repoactive.platforms.github.Github")
+    def test_required_approvals_raises_not_supported(self, mock_github: MagicMock) -> None:
+        # GitHub has no per-PR approval requirement, so a job that sets
+        # required_approvals must fail rather than silently do nothing. The PR
+        # is not touched.
+        platform, repo = self._platform(mock_github)
+
+        with pytest.raises(RequiredApprovalsNotSupportedError, match="not supported on GitHub"):
+            platform.ensure_mr(_mr_params(required_approvals=1))
+
+        repo.get_pulls.assert_not_called()
+        repo.create_pull.assert_not_called()
+
+    @patch("repoactive.platforms.github.Github")
     def test_auto_merge_failure_warns_and_returns_url(
         self, mock_github: MagicMock, capsys: pytest.CaptureFixture[str]
     ) -> None:
@@ -415,6 +428,48 @@ class TestGitLabEnsureMR:
 
         mr.merge.assert_not_called()
         project.mergerequests.get.assert_not_called()
+
+    @patch("repoactive.platforms.gitlab.gitlab")
+    def test_required_approvals_sets_approvals_on_mr(self, mock_gitlab: MagicMock) -> None:
+        platform, project = self._platform(mock_gitlab)
+        mr = MagicMock()
+        mr.web_url = "https://example.com/mr/1"
+        project.mergerequests.list.return_value = [mr]
+
+        platform.ensure_mr(_mr_params(required_approvals=2))
+
+        approvals = mr.approvals.get.return_value
+        assert approvals.approvals_required == 2  # noqa: PLR2004
+        approvals.save.assert_called_once_with()
+
+    @patch("repoactive.platforms.gitlab.gitlab")
+    def test_no_required_approvals_skips_approvals_call(self, mock_gitlab: MagicMock) -> None:
+        platform, project = self._platform(mock_gitlab)
+        mr = MagicMock()
+        mr.web_url = "https://example.com/mr/1"
+        project.mergerequests.list.return_value = [mr]
+
+        platform.ensure_mr(_mr_params())
+
+        mr.approvals.get.assert_not_called()
+
+    @patch("repoactive.platforms.gitlab.gitlab")
+    def test_required_approvals_failure_warns_and_returns_url(
+        self, mock_gitlab: MagicMock, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # Setting an MR-level approval requirement needs a GitLab tier/permission
+        # that may be unavailable. The URL is already known, so a failure must
+        # warn and return the URL rather than abort the remaining MR updates.
+        platform, project = self._platform(mock_gitlab)
+        mr = MagicMock()
+        mr.web_url = "https://example.com/mr/1"
+        project.mergerequests.list.return_value = [mr]
+        mr.approvals.get.side_effect = GitlabError("403 Forbidden")
+
+        url = platform.ensure_mr(_mr_params(required_approvals=1))
+
+        assert url == "https://example.com/mr/1"
+        assert "could not set required approvals" in capsys.readouterr().out
 
 
 REPO = Path("/repo")

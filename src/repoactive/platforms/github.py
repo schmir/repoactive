@@ -8,6 +8,22 @@ _DEFAULT_API_URL = "https://api.github.com"
 _PUBLIC_GITHUB_URL = "https://github.com"
 
 
+class RequiredApprovalsNotSupportedError(Exception):
+    """Raised when a job sets required_approvals but its platform is GitHub.
+
+    GitHub has no per-PR approval requirement: the number of required
+    approvals is a repository-wide branch protection setting, so repoactive
+    cannot honor a per-job value there. required_approvals is GitLab-only.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            "required_approvals is not supported on GitHub: the number of required "
+            "approvals is a repository-wide branch protection setting, not a per-PR "
+            "value. Remove required_approvals from the job (it is supported on GitLab only)."
+        )
+
+
 class GitHubPlatform(Platform):
     def __init__(self, *, url: str | None, token: str, repo: str) -> None:
         normalized = (url or "").rstrip("/")
@@ -26,6 +42,8 @@ class GitHubPlatform(Platform):
         return self._repo.default_branch
 
     def ensure_mr(self, params: MRParams) -> str:
+        if params.required_approvals is not None:
+            raise RequiredApprovalsNotSupportedError
         owner = self._repo.owner.login
         # Look up by head only: filtering on base would miss the PR after the
         # job's base_branch changed, and a new PR would be opened next to the

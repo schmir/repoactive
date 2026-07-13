@@ -80,6 +80,13 @@ class GitLabPlatform(Platform):
                 }
             )
         web_url = mr.web_url
+        if params.required_approvals is not None:
+            try:
+                approvals = mr.approvals.get()
+                approvals.approvals_required = params.required_approvals
+                approvals.save()
+            except GitlabError as e:
+                print(f"  warning: could not set required approvals ({e})")
         if params.auto_merge:
             self._enable_auto_merge(mr)
         return web_url
