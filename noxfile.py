@@ -49,10 +49,12 @@ def docker_smoketest(session: nox.Session) -> None:
     """Build the Docker image and smoke-test it against a fresh clone of repoactive.
 
     Requires a running Docker daemon and network access. Not part of `just ci`;
-    run manually with `nox -s docker-smoketest`.
+    run manually with `nox -s docker-smoketest`. Pass `-- --no-build` to reuse
+    an existing `repoactive` image (CI pre-builds it with layer caching).
     """
-    # Mirrors `just docker-build`.
-    session.run("docker", "build", "-t", "repoactive", ".", external=True)
+    if "--no-build" not in session.posargs:
+        # Mirrors `just docker-build`.
+        session.run("docker", "build", "-t", "repoactive", ".", external=True)
 
     # The smoke test itself lives in scripts/docker-smoketest.sh (a real shell
     # file so it can be linted and edited without a Python-string layer). We read

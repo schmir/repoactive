@@ -78,5 +78,20 @@ jobs:
         with:
           python-version: "3.14"
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Pre-build the image with GitHub Actions layer caching so the apt and
+      # jj-download layers are reused across runs; the nox session then skips
+      # its own uncached build.
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          tags: repoactive
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
       - name: Docker smoke test
-        run: uv run nox -s docker-smoketest
+        run: uv run nox -s docker-smoketest -- --no-build
