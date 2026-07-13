@@ -27,6 +27,7 @@ from repoactive.runner import (
     _build_generated_jobs,
     _compute_parents,
     _dispatch_job,
+    _format_duration,
     _load_job_specs,
     _prepare_repo,
     _run_command,
@@ -554,6 +555,34 @@ class TestStripBoxquoteAndTrailers:
         assert _strip_boxquote_and_trailers(self._msg(without)) != _strip_boxquote_and_trailers(
             self._msg(with_)
         )
+
+
+class TestFormatDuration:
+    @pytest.mark.parametrize(
+        ("seconds", "expected"),
+        [
+            (0, "0s"),
+            (1, "1s"),
+            (59, "59s"),
+            (60, "1m"),
+            (61, "1m"),  # leftover seconds are dropped
+            (3599, "59m"),
+            (3600, "1h"),
+            (3601, "1h"),  # no "0m" component
+            (3660, "1h 1m"),
+            (7380, "2h 3m"),
+            (86400, "1d"),
+            (86460, "1d"),  # minutes not shown alongside days
+            (90000, "1d 1h"),
+            (266400, "3d 2h"),
+        ],
+    )
+    def test_formats(self, seconds: float, expected: str) -> None:
+        assert _format_duration(seconds) == expected
+
+    def test_truncates_fractional_seconds(self) -> None:
+        assert _format_duration(59.9) == "59s"
+        assert _format_duration(60.4) == "1m"
 
 
 class TestComputeParents:
