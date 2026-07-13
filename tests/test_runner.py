@@ -586,6 +586,19 @@ class TestFormatDuration:
         assert _format_duration(60.4) == "1m"
 
 
+class TestPrintReport:
+    def test_includes_run_time_when_set(self, capsys: pytest.CaptureFixture[str]) -> None:
+        summary = RunSummary(elapsed=192.4)
+        summary.print_report()
+        assert "(3m 12s)" in capsys.readouterr().out
+
+    def test_omits_run_time_when_unset(self, capsys: pytest.CaptureFixture[str]) -> None:
+        summary = RunSummary()
+        summary.print_report()
+        out = capsys.readouterr().out
+        assert out.endswith(".\n")
+
+
 class TestComputeParents:
     def test_no_deps_uses_trunk(self) -> None:
         assert _compute_parents(_job("a"), {}) == ["trunk()"]

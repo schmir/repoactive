@@ -23,6 +23,18 @@ console = Console()
 err_console = Console(stderr=True)
 
 
+def print_status(name: str, *parts: str | tuple[str, str]) -> None:
+    """Print a ``==> [<name>] ...`` status line with the job name in cyan.
+
+    ``parts`` are ``Text.assemble`` segments: plain strings or (text, style)
+    pairs, e.g. ``("committed", "green")``. Rendered as Text (no markup), so
+    brackets in command output cannot be misparsed. soft_wrap keeps long lines
+    (e.g. a failure carrying the full command output) unwrapped, matching plain
+    ``print``; piped/CI output stays plain because rich emits no ANSI there.
+    """
+    console.print(Text.assemble("==> ", (f"[{name}]", "cyan"), " ", *parts), soft_wrap=True)
+
+
 def print_undo_hint(*, title: str, body: str, command: str, style: str, err: bool = False) -> None:
     """Print an undo hint: a bordered panel holding the ``body`` prose and ``command``.
 

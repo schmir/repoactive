@@ -31,11 +31,11 @@ from repoactive.jj import JJ, workspace_name
 from repoactive.jobtree import format_job_forest, print_job_table
 from repoactive.lock import run_lock
 from repoactive.platforms.base import MRParams, Platform
-from repoactive.progress import ProgressView
+from repoactive.progress import ProgressView, format_elapsed
 from repoactive.selection import JobSelection, JobSelector
 from repoactive.settings import load_settings
 from repoactive.trailers import strip_trailers
-from repoactive.ui import print_undo_hint
+from repoactive.ui import print_status, print_undo_hint
 from repoactive.updates import (
     BookmarkPush,
     JobUpdate,
@@ -145,6 +145,8 @@ class RunSummary:
     # produced a diff). Like on_cooldown, an intentional skip: the job's
     # bookmark is left alone in the absorb phase.
     run_only_if_changed_skipped: set[str] = field(default_factory=set)
+    # Wall time of the whole run, filled in by run_all just before print_report.
+    elapsed: float | None = None
 
     @property
     def ok(self) -> bool:
@@ -175,6 +177,7 @@ class RunSummary:
                 else ""
             )
             + "."
+            + (f" ({format_elapsed(self.elapsed)})" if self.elapsed is not None else "")
         )
 
 
@@ -330,12 +333,16 @@ def _run_command(
     # for the commit message and the success result) while feeding a live tail of
     # the last few lines (see repoactive.progress).
     output_lines: list[str] = []
+    timeout = job.timeout_seconds()
     view = ProgressView(
-        header=f"==> [{job.name}] running…", max_lines=load_settings().progress_lines
+        name=job.name,
+        command=job.command,
+        max_lines=load_settings().progress_lines,
+        timeout=timeout,
     )
     with _spawn(job, cwd, env) as proc:
         assert proc.stdout is not None
-        with _watchdog(proc, job.timeout_seconds()) as timed_out, view:
+        with _watchdog(proc, timeout) as timed_out, view:
             for line in proc.stdout:
                 output_lines.append(line)
                 view.feed(line)
@@ -380,12 +387,11 @@ def _discard_empty_job(
     dependents still have a base.
     """
     repo.abandon()
+    elapsed = format_elapsed(command_result.elapsed)
     if old_change_id:
-        print(
-            f"==> [{job.name}] no changes, bookmark will be deleted ({command_result.elapsed:.1f}s)"
-        )
+        print_status(job.name, ("no changes", "dim"), f", bookmark will be deleted ({elapsed})")
     else:
-        print(f"==> [{job.name}] no changes ({command_result.elapsed:.1f}s)")
+        print_status(job.name, ("no changes", "dim"), f" ({elapsed})")
     return JobResult(
         job=job,
         effective_revsets=parents,
@@ -450,7 +456,11 @@ def _commit_job(
     repo.describe(_build_commit_message(job, command_result))
     new_change_id = repo.change_id()
 
-    print(f"==> [{job.name}] committed [{new_change_id}] ({command_result.elapsed:.1f}s)")
+    print_status(
+        job.name,
+        ("committed", "green"),
+        f" [{new_change_id}] ({format_elapsed(command_result.elapsed)})",
+    )
     if stat:
         print("\n".join(f"    {line}" for line in stat.splitlines()))
         print()
@@ -667,7 +677,9 @@ def _dispatch_job(ctx: RunContext, *, job: Job) -> list[Job]:
     selection = ctx.selection
     blocking_deps = [d for d in job.depends_on if d in ctx.blocked]
     if blocking_deps:
-        print(f"==> [{job.name}] skipped (dependency failed: {', '.join(blocking_deps)})")
+        print_status(
+            job.name, ("skipped", "yellow"), f" (dependency failed: {', '.join(blocking_deps)})"
+        )
         summary.skipped.add(job.name)
         ctx.blocked.add(job.name)
         return []
@@ -685,9 +697,10 @@ def _dispatch_job(ctx: RunContext, *, job: Job) -> list[Job]:
             if (r := summary.results.get(d)) is not None
         )
         if not any_changed:
-            print(
-                f"==> [{job.name}] skipped"
-                f" (run_only_if_changed: none of {job.run_only_if_changed} produced changes)"
+            print_status(
+                job.name,
+                ("skipped", "yellow"),
+                f" (run_only_if_changed: none of {job.run_only_if_changed} produced changes)",
             )
             summary.run_only_if_changed_skipped.add(job.name)
             summary.results[job.name] = JobResult(
@@ -708,7 +721,7 @@ def _dispatch_job(ctx: RunContext, *, job: Job) -> list[Job]:
         and job.depends_on
         and all(dep in not_run for dep in job.depends_on)
     ):
-        print(f"==> [{job.name}] skipped (successor: no dependency ran)")
+        print_status(job.name, ("skipped", "yellow"), " (successor: no dependency ran)")
         summary.successor_skipped.add(job.name)
         summary.results[job.name] = JobResult(
             job=job, effective_revsets=parents, produced_diff=False
@@ -734,9 +747,10 @@ def _dispatch_job(ctx: RunContext, *, job: Job) -> list[Job]:
     ):
         elapsed = datetime.now(UTC) - last_run
         elapsed_str = _format_duration(elapsed.total_seconds())
-        print(
-            f"==> [{job.name}] on cooldown ({job.cooldown_period}),"
-            f" last run {elapsed_str} ago, skipped"
+        print_status(
+            job.name,
+            ("on cooldown", "yellow"),
+            f" ({job.cooldown_period}), last run {elapsed_str} ago, skipped",
         )
         summary.on_cooldown.add(job.name)
         # Treat like a no-op run so dependents proceed on the base branch.
@@ -759,7 +773,7 @@ def _dispatch_job(ctx: RunContext, *, job: Job) -> list[Job]:
         # success prints); other failures have no command time, so fall back
         # to the wall time spent in run_job.
         elapsed = e.elapsed if isinstance(e, CommandError) else time.monotonic() - start
-        print(f"==> [{job.name}] failed: {e} ({elapsed:.1f}s)")
+        print_status(job.name, ("failed", "red"), f": {e} ({format_elapsed(elapsed)})")
         summary.failed[job.name] = e
         ctx.blocked.add(job.name)
         return []
@@ -810,7 +824,7 @@ def _run_generator_job(
     )
 
     names = ", ".join(j.name for j in emitted) if emitted else "none"
-    print(f"==> [{job.name}] generated {len(emitted)} job(s): {names}")
+    print_status(job.name, f"generated {len(emitted)} job(s): {names}")
 
     return JobResult(job=job, effective_revsets=parents, produced_diff=False), emitted
 
@@ -1049,7 +1063,7 @@ def _suppress_superseded_mrs(*, plan: UpdatePlan, results: dict[str, JobResult])
         if update is not None and update.mr is not None:
             if job.create_mr is CreateMR.unless_superseded and name in covered_by:
                 update.mr = None
-                print(f"==> [{name}] MR superseded by [{covered_by[name]}]")
+                print_status(name, "MR superseded by ", (f"[{covered_by[name]}]", "cyan"))
             else:
                 has_mr = True
         cover = name if has_mr else covered_by.get(name)
@@ -1072,6 +1086,7 @@ def run_all(  # noqa: PLR0913
     assert (mode is RunMode.publish) == (platform is not None), (
         f"mode={mode} is inconsistent with platform={platform!r}"
     )
+    run_start = time.monotonic()
     # Building the selector validates the request, failing on a mistyped job name
     # or tag before the lock is taken and before _prepare_repo mutates anything
     # (or promises an undo hint for a run that never started).
@@ -1133,6 +1148,7 @@ def run_all(  # noqa: PLR0913
             # its branch was pushed) but the run still counts as failed.
             summary.failed.update(applied.failed)
 
+        summary.elapsed = time.monotonic() - run_start
         summary.print_report()
         return summary
 
@@ -1191,14 +1207,14 @@ def _apply_plan_publish(
             )
             url = platform.ensure_mr(params)
         except Exception as e:
-            print(f"==> [{update.job_name}] failed to create/update MR: {e}")
+            print_status(update.job_name, ("failed", "red"), f" to create/update MR: {e}")
             result.failed[update.job_name] = e
             remaining = [u.job_name for u in pending[i + 1 :]]
             if remaining:
                 print(f"==> aborting MR updates, not attempted: {', '.join(remaining)}")
             break
         result.mr_urls[update.job_name] = url
-        print(f"==> [{update.job_name}] {url}")
+        print_status(update.job_name, url)
     return result
 
 
