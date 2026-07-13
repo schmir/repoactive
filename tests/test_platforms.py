@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Literal
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 from github import GithubException
@@ -380,7 +380,8 @@ class TestGitLabEnsureMR:
         project.mergerequests.get.assert_called_with(7)
         pending.merge.assert_not_called()
         ready.merge.assert_called_once_with(merge_when_pipeline_succeeds=True, auto_merge=True)
-        mock_sleep.assert_called_once_with(3.0)
+        # One sleep after the rejected attempt, one while the MR is pending.
+        assert mock_sleep.call_args_list == [call(3.0), call(3.0)]
 
     @patch("repoactive.platforms.gitlab._AUTO_MERGE_TIMEOUT", 0.0)
     @patch("repoactive.platforms.gitlab.time.sleep")
@@ -402,17 +403,41 @@ class TestGitLabEnsureMR:
         platform.ensure_mr(_mr_params(auto_merge=True))
 
         no_ci.merge.assert_called_once_with(merge_when_pipeline_succeeds=True, auto_merge=True)
-        mock_sleep.assert_not_called()
+        # Only the pause after the rejected first attempt; the wait loop exits
+        # immediately on the expired deadline.
+        mock_sleep.assert_called_once_with(3.0)
 
+    @patch("repoactive.platforms.gitlab.time.sleep")
+    @patch("repoactive.platforms.gitlab.gitlab")
+    def test_auto_merge_retries_after_transient_rejection(
+        self, mock_gitlab: MagicMock, mock_sleep: MagicMock, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        platform, project = self._platform(mock_gitlab)
+        mr = MagicMock()
+        # Right after a push GitLab rejects auto-merge while its state is
+        # still settling; the retry a moment later succeeds.
+        mr.merge.side_effect = GitlabMRClosedError("405 Method Not Allowed")
+        project.mergerequests.list.return_value = [mr]
+        ready = self._ready_mr()
+        project.mergerequests.get.return_value = ready
+
+        platform.ensure_mr(_mr_params(auto_merge=True))
+
+        ready.merge.assert_called_once_with(merge_when_pipeline_succeeds=True, auto_merge=True)
+        assert "could not enable auto-merge" not in capsys.readouterr().out
+
+    @patch("repoactive.platforms.gitlab._AUTO_MERGE_TIMEOUT", 0.0)
+    @patch("repoactive.platforms.gitlab.time.sleep")
     @patch("repoactive.platforms.gitlab.gitlab")
     def test_auto_merge_failure_warns(
-        self, mock_gitlab: MagicMock, capsys: pytest.CaptureFixture[str]
+        self, mock_gitlab: MagicMock, mock_sleep: MagicMock, capsys: pytest.CaptureFixture[str]
     ) -> None:
         platform, project = self._platform(mock_gitlab)
         mr = MagicMock()
         mr.merge.side_effect = GitlabMRClosedError("Branch cannot be merged")
         project.mergerequests.list.return_value = [mr]
-        # The poll fallback also fails; only then is the warning printed.
+        # The retry after the deadline also fails; only then is the warning
+        # printed.
         ready = self._ready_mr()
         ready.merge.side_effect = GitlabMRClosedError("Branch cannot be merged")
         project.mergerequests.get.return_value = ready

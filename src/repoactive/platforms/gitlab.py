@@ -94,35 +94,39 @@ class GitLabPlatform(Platform):
         return web_url
 
     def _enable_auto_merge(self, mr: ProjectMergeRequest) -> None:
-        """Enable auto-merge on ``mr``, falling back to a readiness poll.
+        """Enable auto-merge on ``mr``, retrying until it is accepted.
 
-        The merge call sends both auto-merge parameters. On GitLab >= 17.11
-        ``auto_merge`` selects the "merge when checks pass" strategy, which is
-        accepted while the mergeability check is still running and needs no
-        pipeline, so the first call normally succeeds right away. Older GitLab
-        ignores the unknown parameter and honors the deprecated
-        merge_when_pipeline_succeeds, which is rejected until the check is
-        done and a pipeline exists; when the first call is rejected, poll the
-        MR (re-fetched, since list/create payloads omit head_pipeline) until
-        it is ready or the timeout passes and retry once. A repo with no CI
-        never grows a pipeline; there the poll times out and the final call
+        The merge call sends both auto-merge parameters: on GitLab >= 17.11
+        ``auto_merge`` selects the "merge when checks pass" strategy and older
+        GitLab ignores it and honors the deprecated
+        merge_when_pipeline_succeeds. Right after a push GitLab rejects the
+        call (405/422) while its state is still settling - the mergeability
+        check runs, the MR pipeline gets created and linked - so a rejection
+        is retried until the deadline, waiting in between for the MR to look
+        ready (re-fetched, since list/create payloads omit head_pipeline).
+        That readiness gate keeps the old-GitLab semantics: retrying without a
+        pipeline there would merge immediately and skip CI. A repo with no CI
+        never grows a pipeline; there the wait times out and one final call
         merges immediately, the best available behavior.
         """
-        try:
-            mr.merge(merge_when_pipeline_succeeds=True, auto_merge=True)
-            return
-        except GitlabMRClosedError:
-            # python-gitlab wraps every merge failure in GitlabMRClosedError;
-            # this is the 422/405 "not ready yet" case, not a closed MR.
-            pass
         iid = mr.iid
         deadline = time.monotonic() + _AUTO_MERGE_TIMEOUT
+        final_attempt = False
         while True:
-            mr = self._project.mergerequests.get(iid)
-            if _ready_for_auto_merge(mr) or time.monotonic() >= deadline:
-                break
+            try:
+                mr.merge(merge_when_pipeline_succeeds=True, auto_merge=True)
+                return
+            except GitlabMRClosedError as e:
+                # python-gitlab wraps every merge failure in
+                # GitlabMRClosedError; this is usually the 422/405 "not ready
+                # yet" case, not a closed MR.
+                if final_attempt:
+                    print(f"  warning: could not enable auto-merge ({e})")
+                    return
             time.sleep(_AUTO_MERGE_POLL_INTERVAL)
-        try:
-            mr.merge(merge_when_pipeline_succeeds=True, auto_merge=True)
-        except GitlabMRClosedError as e:
-            print(f"  warning: could not enable auto-merge ({e})")
+            while True:
+                mr = self._project.mergerequests.get(iid)
+                if _ready_for_auto_merge(mr) or time.monotonic() >= deadline:
+                    break
+                time.sleep(_AUTO_MERGE_POLL_INTERVAL)
+            final_attempt = time.monotonic() >= deadline
