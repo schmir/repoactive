@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.2.7 - 2026-07-13
+
+- A new `required_approvals` field on a job (or in `[job-defaults]`) sets
+  the minimum number of approvals a merge request needs before it can be
+  merged. **GitLab only:** it sets the per-MR approval requirement. GitHub
+  has no per-PR equivalent (required approvals are a repository-wide branch
+  protection setting), so a job that sets `required_approvals` against a
+  GitHub repository fails with a clear error.
+- The live per-job progress view was overhauled. Its header shows the job
+  name, a ticking elapsed/timeout clock, and the running command, and the
+  `==> [name]` status lines are now colorized (green committed, red failed,
+  yellow skipped/on cooldown). The clock turns red once the command passes
+  80% of its timeout, a "no output for Ns" note appears when a command goes
+  quiet so a hang is distinguishable from a slow command, and the run
+  summary ends with the total wall-clock time. Output stays plain when piped
+  or non-interactive.
+- `cooldown_on` may now name jobs that are not present in the current
+  config. The names match `Repoactive-Job` trailers already landed on the
+  base branch, which can come from jobs since removed or renamed, so they
+  are no longer rejected at config load time (each is still validated
+  against the job-name format).
+- Malformed configuration is now reported with a clear, source-attributed
+  error instead of a cryptic crash: a source with an odd shape (e.g.
+  `job.foo = "hello"`) fails validation naming the offending file or
+  `--set`. Generator-emitted job fragments may only contain `[job.<name>]`
+  tables — a `[job-defaults]` or `[platform]` in a fragment now fails the
+  generator instead of being silently ignored.
+
 ## 0.2.6 - 2026-07-13
 
 - **Bug fix:** on GitLab, `auto_merge = true` now takes effect on the run
