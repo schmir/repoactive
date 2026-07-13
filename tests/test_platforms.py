@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from github import GithubException
-from gitlab.exceptions import GitlabAuthenticationError
+from gitlab.exceptions import GitlabAuthenticationError, GitlabMRClosedError
 
 from repoactive.config import Config, PlatformConfig, load_config
 from repoactive.platforms import (
@@ -309,16 +309,28 @@ class TestGitLabEnsureMR:
         )
         assert url == "https://example.com/mr/2"
 
+    @staticmethod
+    def _ready_mr() -> MagicMock:
+        """Build an MR whose mergeability check is done and that has a pipeline."""
+        mr = MagicMock()
+        mr.detailed_merge_status = "ci_still_running"
+        mr.head_pipeline = {"id": 1}
+        return mr
+
     @patch("repoactive.platforms.gitlab.gitlab")
     def test_auto_merge_calls_merge_on_existing(self, mock_gitlab: MagicMock) -> None:
         platform, project = self._platform(mock_gitlab)
         mr = MagicMock()
         mr.web_url = "https://example.com/mr/1"
         project.mergerequests.list.return_value = [mr]
+        # ensure_mr re-fetches the MR to read its merge status and pipeline.
+        project.mergerequests.get.return_value = self._ready_mr()
 
         platform.ensure_mr(_mr_params(auto_merge=True))
 
-        mr.merge.assert_called_once_with(merge_when_pipeline_succeeds=True)
+        project.mergerequests.get.return_value.merge.assert_called_once_with(
+            merge_when_pipeline_succeeds=True
+        )
 
     @patch("repoactive.platforms.gitlab.gitlab")
     def test_auto_merge_calls_merge_on_new(self, mock_gitlab: MagicMock) -> None:
@@ -326,10 +338,71 @@ class TestGitLabEnsureMR:
         project.mergerequests.list.return_value = []
         new_mr = project.mergerequests.create.return_value
         new_mr.web_url = "https://example.com/mr/2"
+        project.mergerequests.get.return_value = self._ready_mr()
 
         platform.ensure_mr(_mr_params(auto_merge=True))
 
-        new_mr.merge.assert_called_once_with(merge_when_pipeline_succeeds=True)
+        project.mergerequests.get.return_value.merge.assert_called_once_with(
+            merge_when_pipeline_succeeds=True
+        )
+
+    @patch("repoactive.platforms.gitlab.time.sleep")
+    @patch("repoactive.platforms.gitlab.gitlab")
+    def test_auto_merge_waits_for_check_and_pipeline(
+        self, mock_gitlab: MagicMock, mock_sleep: MagicMock
+    ) -> None:
+        platform, project = self._platform(mock_gitlab)
+        project.mergerequests.list.return_value = []
+        new_mr = project.mergerequests.create.return_value
+        new_mr.iid = 7
+        # First re-fetch: mergeability check still running, no pipeline yet.
+        pending = MagicMock()
+        pending.detailed_merge_status = "checking"
+        pending.head_pipeline = None
+        # Second re-fetch: check done and a pipeline exists.
+        ready = self._ready_mr()
+        project.mergerequests.get.side_effect = [pending, ready]
+
+        platform.ensure_mr(_mr_params(auto_merge=True))
+
+        project.mergerequests.get.assert_called_with(7)
+        pending.merge.assert_not_called()
+        ready.merge.assert_called_once_with(merge_when_pipeline_succeeds=True)
+        mock_sleep.assert_called_once_with(3.0)
+
+    @patch("repoactive.platforms.gitlab._AUTO_MERGE_TIMEOUT", 0.0)
+    @patch("repoactive.platforms.gitlab.time.sleep")
+    @patch("repoactive.platforms.gitlab.gitlab")
+    def test_auto_merge_no_pipeline_merges_after_timeout(
+        self, mock_gitlab: MagicMock, mock_sleep: MagicMock
+    ) -> None:
+        platform, project = self._platform(mock_gitlab)
+        project.mergerequests.list.return_value = []
+        # Repo has no CI: a pipeline never appears. The poll times out and the
+        # merge call falls back to an immediate merge.
+        no_ci = MagicMock()
+        no_ci.detailed_merge_status = "mergeable"
+        no_ci.head_pipeline = None
+        project.mergerequests.get.return_value = no_ci
+
+        platform.ensure_mr(_mr_params(auto_merge=True))
+
+        no_ci.merge.assert_called_once_with(merge_when_pipeline_succeeds=True)
+        mock_sleep.assert_not_called()
+
+    @patch("repoactive.platforms.gitlab.gitlab")
+    def test_auto_merge_failure_warns(
+        self, mock_gitlab: MagicMock, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        platform, project = self._platform(mock_gitlab)
+        project.mergerequests.list.return_value = [MagicMock()]
+        ready = self._ready_mr()
+        ready.merge.side_effect = GitlabMRClosedError("Branch cannot be merged")
+        project.mergerequests.get.return_value = ready
+
+        platform.ensure_mr(_mr_params(auto_merge=True))
+
+        assert "could not enable auto-merge" in capsys.readouterr().out
 
     @patch("repoactive.platforms.gitlab.gitlab")
     def test_no_auto_merge_skips_merge_call(self, mock_gitlab: MagicMock) -> None:
@@ -341,6 +414,7 @@ class TestGitLabEnsureMR:
         platform.ensure_mr(_mr_params(auto_merge=False))
 
         mr.merge.assert_not_called()
+        project.mergerequests.get.assert_not_called()
 
 
 REPO = Path("/repo")
