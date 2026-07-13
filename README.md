@@ -880,7 +880,9 @@ cooldown_on = ["full-lock"]
 inherited from `[job-defaults]`); without a window there is nothing to
 throttle against, so a config that sets one without the other is rejected.
 The relationship is one-directional and needs no change to the broad job -
-it still writes only its own trailer.
+it still writes only its own trailer. The listed names need not match a job
+in the current config: they match trailers already landed on the base
+branch, which may come from jobs that have since been removed or renamed.
 
 This only suppresses _starting_ a redundant run. A narrow job that already
 has an open, unmerged branch is always refreshed regardless of cooldown (see

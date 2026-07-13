@@ -273,9 +273,15 @@ class TestCooldownOnValidation:
         )
         assert cfg.jobs[1].cooldown_on == ["full-lock"]
 
-    def test_unknown_target_raises(self) -> None:
-        with pytest.raises(ValueError, match="cooldown_on references unknown job"):
-            _config(jobs=[_job("a", cooldown_period="7d", cooldown_on=["nonexistent"])])
+    def test_unknown_target_is_allowed(self) -> None:
+        # The named job need not exist in the config; the trailers it matches may
+        # come from jobs since removed or renamed.
+        cfg = _config(jobs=[_job("a", cooldown_period="7d", cooldown_on=["removed-job"])])
+        assert cfg.jobs[0].cooldown_on == ["removed-job"]
+
+    def test_invalid_target_name_raises(self) -> None:
+        with pytest.raises(ValueError, match="invalid job name"):
+            _config(jobs=[_job("a", cooldown_period="7d", cooldown_on=["bad name"])])
 
     def test_self_reference_raises(self) -> None:
         with pytest.raises(ValueError, match="cooldown_on lists itself"):

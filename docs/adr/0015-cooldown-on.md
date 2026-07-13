@@ -40,10 +40,13 @@ window is measured from the superset's landing.
   matching line in a commit body is ignored. Job names are regex-restricted,
   so interpolating several into the revset template is as safe as one.
 
-**Validation** (a `Config`-level `model_validator`, at load time):
+**Validation** (at load time):
 
-- Every name in `cooldown_on` must refer to a known job
-  (`UnknownCooldownOnError`).
+- Names in `cooldown_on` are **not** required to refer to a configured job:
+  they match trailers already landed on the base branch, which may come from
+  jobs since removed or renamed from the config. They must, however, be
+  syntactically valid job names (`InvalidJobNameError`), since they are
+  interpolated into the cooldown revset.
 - A job may not list itself (`SelfCooldownOnError`); it is always throttled
   by its own landings, so self-reference is a no-op mistake.
 - `cooldown_on` requires an effective `cooldown_period` (own or inherited

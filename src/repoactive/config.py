@@ -112,15 +112,6 @@ class UnknownRunOnlyIfChangedError(ValueError):
         )
 
 
-class UnknownCooldownOnError(ValueError):
-    """Raised when cooldown_on references a job that does not exist."""
-
-    def __init__(self, name: str, unknown: list[str]) -> None:
-        super().__init__(
-            f"job '{name}' cooldown_on references unknown job(s): {', '.join(unknown)}"
-        )
-
-
 class SelfCooldownOnError(ValueError):
     """Raised when a job lists itself in cooldown_on."""
 
@@ -368,6 +359,17 @@ class Job(BaseModel):
             raise InvalidJobNameError(value)
         return value
 
+    @field_validator("cooldown_on")
+    @classmethod
+    def _check_cooldown_on(cls, value: list[str]) -> list[str]:
+        # The names need not match a configured job (the trailers they match may
+        # come from jobs since removed from the config), but they are interpolated
+        # into the cooldown revset, so they must stay within the job-name alphabet.
+        for name in value:
+            if not _JOB_NAME_RE.match(name):
+                raise InvalidJobNameError(name)
+        return value
+
     @field_validator("tags")
     @classmethod
     def _check_tags(cls, value: list[str]) -> list[str]:
@@ -517,13 +519,12 @@ class Config(BaseModel):
 
     @model_validator(mode="after")
     def validate_cooldown_on(self) -> Config:
-        names = {j.name for j in self.jobs}
+        # cooldown_on names are deliberately not checked against the configured
+        # jobs: they match trailers already landed on the base branch, which may
+        # come from jobs since removed or renamed from the config.
         for job in self.jobs:
             if not job.cooldown_on:
                 continue
-            unknown = sorted(set(job.cooldown_on) - names)
-            if unknown:
-                raise UnknownCooldownOnError(job.name, unknown)
             if job.name in job.cooldown_on:
                 raise SelfCooldownOnError(job.name)
             # cooldown_on only throttles against a cooldown window; without one
