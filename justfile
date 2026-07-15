@@ -19,7 +19,6 @@ coverage *args:
 ci:
     treefmt
     uv run nox -s ty tests-3.14 check-schema validate-config  -- -m 'not slow'
-    # scripts/prek.sh run --all-files
 
 # Run pyright (from PATH if available, else bundled node.js via uvx)
 pyright:

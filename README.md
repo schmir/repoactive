@@ -804,12 +804,12 @@ changed anything in the current run, the job is skipped.
 
 ```toml
 [job.prek-autoupdate]
-command = "./scripts/prek.sh autoupdate"
+command = "uvx prek autoupdate"
 title = "ci: update pre-commit hooks"
 tags = ["weekly"]
 
 [job.prek-run-all]
-command = "sh -c './scripts/prek.sh run -a; true'"
+command = "sh -c 'uvx prek run -a; true'"
 title = "ci: apply pre-commit fixes"
 depends_on = ["prek-autoupdate"]
 run_only_if_changed = ["prek-autoupdate"]
