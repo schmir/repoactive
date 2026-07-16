@@ -19,6 +19,24 @@ class TestBoxquote:
     def test_preserves_blank_lines(self) -> None:
         assert boxquote("a\n\nb") == ",----\n| a\n| \n| b\n`----"
 
+    def test_multiline_title_is_bracketed_across_lines(self) -> None:
+        # A multi-line command title is wrapped: first line on the opening
+        # line, the rest indented to align under it, "]" trailing the last,
+        # then a blank "|" separator before the output.
+        assert boxquote("out", title="set -e\ndate >f") == (
+            ",----[ set -e\n|      date >f ]\n|\n| out\n`----"
+        )
+
+    def test_multiline_title_trailing_newline_dropped(self) -> None:
+        # A TOML literal multi-line command ends with a newline; it must not
+        # produce an empty final title line before the "]".
+        assert boxquote("out", title="set -e\ndate >f\n") == (
+            ",----[ set -e\n|      date >f ]\n|\n| out\n`----"
+        )
+
+    def test_title_with_only_trailing_newline_stays_single_line(self) -> None:
+        assert boxquote("out", title="date\n") == ",----[ date ]\n| out\n`----"
+
 
 class TestStripBoxquotes:
     def test_lone_boxquote_is_removed(self) -> None:
@@ -26,6 +44,9 @@ class TestStripBoxquotes:
 
     def test_titled_boxquote_is_removed(self) -> None:
         assert strip_boxquotes(boxquote("out", title="cmd")) == ""
+
+    def test_multiline_title_boxquote_is_removed(self) -> None:
+        assert strip_boxquotes(boxquote("out", title="set -e\ndate >f")) == ""
 
     def test_text_before_boxquote_is_kept(self) -> None:
         message = "Title\n\n" + boxquote("out", title="cmd")

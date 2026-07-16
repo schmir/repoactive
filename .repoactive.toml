@@ -39,3 +39,14 @@ command = "uvx prek run -a || true"
 title = "ci: apply pre-commit fixes"
 depends_on = ["prek-autoupdate"]
 run_only_if_changed = ["prek-autoupdate"]
+
+[job.shell-demo]
+command = '''
+set -euo pipefail
+printf "this is multiline shell script\n"
+printf "CWD: %s\n" "$(pwd)"
+env | grep RA_
+date >i-was-here
+'''
+title = "shell: multiline shell script demo"
+tags = ["demo"]

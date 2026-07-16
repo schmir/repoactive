@@ -11,13 +11,32 @@ _BOXQUOTE_BLOCK = re.compile(r"^,----.*?^`----[ \t]*$", re.MULTILINE | re.DOTALL
 def boxquote(msg: str, title: str = "") -> str:
     """Render ``msg`` inside a boxquote.el-style box.
 
-    The first line is ``,----[ title ]`` (or just ``,----`` when ``title`` is
+    The box opens with ``,----[ title ]`` (or just ``,----`` when ``title`` is
     empty), each line of ``msg`` is prefixed with ``| ``, and the box closes
     with ``` `---- ```.
+
+    A multi-line ``title`` (e.g. a multi-line job command) is bracketed across
+    several lines instead of jammed onto the opening line: the first title line
+    follows ``,----[ ``, the remaining lines are ``|``-prefixed and indented to
+    align under that first line, the closing ``]`` trails the last of them, and
+    a blank ``|`` line then separates the bracketed title from ``msg``. A
+    trailing newline on ``title`` is dropped so it does not produce an empty
+    final title line.
     """
-    top = f",----[ {title} ]" if title else ",----"
     body = "\n".join(f"| {line}" for line in msg.splitlines())
-    return f"{top}\n{body}\n`----"
+    title = title.rstrip("\n")
+    if "\n" not in title:
+        top = f",----[ {title} ]" if title else ",----"
+        return f"{top}\n{body}\n`----"
+    open_bracket = ",----[ "
+    # Indent continuation lines so the title text aligns under the first line;
+    # the "|" replaces the leading "," so the bar still runs down the left edge.
+    indent = "|" + " " * (len(open_bracket) - 1)
+    head, *rest = title.split("\n")
+    header_lines = [f"{open_bracket}{head}", *(f"{indent}{line}" for line in rest[:-1])]
+    header_lines.append(f"{indent}{rest[-1]} ]")
+    header = "\n".join(header_lines)
+    return f"{header}\n|\n{body}\n`----"
 
 
 def strip_boxquotes(text: str) -> str:
