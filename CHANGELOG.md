@@ -18,6 +18,11 @@
   working directory, but naming it explicitly lets a command that changes
   directory find its way back. See
   [ADR 0016](docs/adr/0016-injected-env-var-prefix.md).
+- Job commands now also receive `RA_JOB_BRANCH`, the bookmark/branch
+  repoactive uses for the job's output. The command runs on a fresh commit
+  while that bookmark still points at the previous run's commit, so a
+  command can inspect what it produced last time (e.g. to diff against it).
+  See [ADR 0016](docs/adr/0016-injected-env-var-prefix.md).
 - **Breaking:** the environment variable a generator receives was renamed
   from `REPOACTIVE_JOBS_DIR` to `RA_JOBS_DIR`. `REPOACTIVE_` is now reserved
   for variables that configure repoactive; variables repoactive injects into

@@ -17,6 +17,7 @@ from repoactive.config import Config, CreateMR, Job, JobDefaults
 from repoactive.jj import JJ
 from repoactive.runner import (
     RA_CONFIG_SOURCE_DIR_ENV,
+    RA_JOB_BRANCH_ENV,
     RA_JOBS_DIR_ENV,
     ApplyResult,
     CommandError,
@@ -841,6 +842,19 @@ class TestRunCommand:
 
         assert result.output == f"[{tmp_path}]"
 
+    def test_branch_visible_to_command(self, tmp_path: Path) -> None:
+        # The command sees its target bookmark/branch as RA_JOB_BRANCH.
+        job = Job(
+            name="foo",
+            command="echo [$RA_JOB_BRANCH]",
+            title="t",
+            branch_prefix="repoactive/",
+            commit_title_prefix="",
+        )
+        result = _run_command(job, tmp_path, extra_env=_job_extra_env(job))
+
+        assert result.output == "[repoactive/foo]"
+
     def test_default_shell_is_sh(self, tmp_path: Path) -> None:
         # With shell unset the command runs under /bin/sh. subprocess sets the
         # shell as argv[0], so $0 is the interpreter path (this holds regardless
@@ -876,21 +890,29 @@ class TestRunCommand:
 
 
 class TestJobExtraEnv:
-    def test_none_when_nothing_to_add(self) -> None:
-        assert _job_extra_env(_job("foo")) is None
+    def test_always_adds_branch(self) -> None:
+        # Every job command gets RA_JOB_BRANCH, even with nothing else to add.
+        assert _job_extra_env(_job("foo")) == {RA_JOB_BRANCH_ENV: "repoactive/foo"}
 
     def test_adds_config_source_dir(self) -> None:
         job = _job("foo").model_copy(update={"config_source_dir": "/cfg"})
-        assert _job_extra_env(job) == {RA_CONFIG_SOURCE_DIR_ENV: "/cfg"}
+        assert _job_extra_env(job) == {
+            RA_JOB_BRANCH_ENV: "repoactive/foo",
+            RA_CONFIG_SOURCE_DIR_ENV: "/cfg",
+        }
 
     def test_merges_with_extra_without_dropping_it(self) -> None:
         job = _job("foo").model_copy(update={"config_source_dir": "/cfg"})
         env = _job_extra_env(job, {RA_JOBS_DIR_ENV: "/jobs"})
-        assert env == {RA_JOBS_DIR_ENV: "/jobs", RA_CONFIG_SOURCE_DIR_ENV: "/cfg"}
+        assert env == {
+            RA_JOBS_DIR_ENV: "/jobs",
+            RA_JOB_BRANCH_ENV: "repoactive/foo",
+            RA_CONFIG_SOURCE_DIR_ENV: "/cfg",
+        }
 
     def test_passes_extra_through_when_no_config_source_dir(self) -> None:
         env = _job_extra_env(_job("foo"), {RA_JOBS_DIR_ENV: "/jobs"})
-        assert env == {RA_JOBS_DIR_ENV: "/jobs"}
+        assert env == {RA_JOBS_DIR_ENV: "/jobs", RA_JOB_BRANCH_ENV: "repoactive/foo"}
 
 
 class TestRunJob:
@@ -927,7 +949,10 @@ class TestRunJob:
         run_job(_ctx(), job=job, parents=["trunk()"])
 
         extra_env = mock_run_command.call_args.kwargs["extra_env"]
-        assert extra_env == {RA_CONFIG_SOURCE_DIR_ENV: "/cfg/dir"}
+        assert extra_env == {
+            RA_JOB_BRANCH_ENV: "repoactive/foo",
+            RA_CONFIG_SOURCE_DIR_ENV: "/cfg/dir",
+        }
 
     @patch("repoactive.runner._run_command", return_value=CommandResult(output="", elapsed=0.0))
     @patch("repoactive.runner.JJ")
@@ -939,7 +964,10 @@ class TestRunJob:
 
         run_job(_ctx(), job=_job("foo"), parents=["trunk()"])
 
-        assert mock_run_command.call_args.kwargs["extra_env"] is None
+        # RA_JOB_BRANCH is always present; RA_CONFIG_SOURCE_DIR is not, since unset.
+        assert mock_run_command.call_args.kwargs["extra_env"] == {
+            RA_JOB_BRANCH_ENV: "repoactive/foo"
+        }
 
     @patch("repoactive.runner.JJ")
     @patch("repoactive.runner.subprocess.Popen")
@@ -1506,6 +1534,7 @@ class TestRunGeneratorJob:
         mock_jj.abandon.assert_called_once_with()
         extra_env = mock_run_command.call_args.kwargs["extra_env"]
         assert RA_JOBS_DIR_ENV in extra_env
+        assert RA_JOB_BRANCH_ENV in extra_env
         assert [j.name for j in emitted] == ["child"]
         assert result.produced_diff is False
 

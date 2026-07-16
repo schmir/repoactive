@@ -654,6 +654,7 @@ itself.
 | Variable               | Value                                                                                  | Set when                                                                            |
 | ---------------------- | -------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
 | `RA_WORKSPACE_DIR`     | The temporary jj workspace created for the job (also the command's working directory). | Always.                                                                             |
+| `RA_JOB_BRANCH`        | The bookmark/branch repoactive uses for the job's output.                              | Always.                                                                             |
 | `RA_CONFIG_SOURCE_DIR` | The directory of the config file that defined the command.                             | The command came from a config file (not a `--set` override or a built-in default). |
 | `RA_JOBS_DIR`          | The directory a generator writes its `*.toml` job fragments into.                      | The command is a [generator](#generating-jobs-dynamically) (`emits_jobs`).          |
 
@@ -668,6 +669,24 @@ that changes directory can still find its way back:
 command = "cd subdir && make && cp result $RA_WORKSPACE_DIR/subdir/"
 title = "build in a subdirectory"
 ```
+
+#### `RA_JOB_BRANCH`
+
+`RA_JOB_BRANCH` holds the bookmark (git branch) repoactive uses for the
+job's output, e.g. `repoactive/uv-lock-upgrade`. The command runs on a fresh
+commit while that bookmark still points at the **previous** run's commit, so
+a command can inspect what it produced last time - for example to build on
+it or diff against it:
+
+```toml
+[job.notes]
+command = "jj diff --from $RA_JOB_BRANCH --to @ > /tmp/delta || true; ./make-notes.sh"
+title = "regenerate release notes from what changed since last run"
+```
+
+The bookmark may not exist yet: a job's first run, a run that produced no
+diff, and a generator all leave it unset on the remote, so a command that
+reads it should tolerate a missing ref.
 
 #### `RA_CONFIG_SOURCE_DIR`
 

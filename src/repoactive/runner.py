@@ -61,6 +61,14 @@ RA_CONFIG_SOURCE_DIR_ENV = "RA_CONFIG_SOURCE_DIR"
 # naming it explicitly lets a command that changes directory find its way back.
 RA_WORKSPACE_DIR_ENV = "RA_WORKSPACE_DIR"
 
+# Environment variable exposing to a job command the bookmark/branch repoactive
+# uses for the job's output (Job.branch_name). The command runs on a fresh commit
+# while this bookmark still points at the previous run's commit, so the command
+# can inspect what it produced last time (e.g. `git diff $RA_JOB_BRANCH`). The
+# bookmark may not exist yet: a first run, a run that produced no diff, or a
+# generator never creates it.
+RA_JOB_BRANCH_ENV = "RA_JOB_BRANCH"
+
 # Fields an emitted job inherits from its generator when the emitted entry does
 # not set them itself (``tags`` and ``depends_on`` are handled separately because
 # their defaults are not a plain copy). See docs/adr/0004-job-generators.md.
@@ -264,18 +272,19 @@ def _command_env(
     return env
 
 
-def _job_extra_env(job: Job, extra: dict[str, str] | None = None) -> dict[str, str] | None:
-    """Extra environment for ``job``'s command: its config dir plus any ``extra``.
+def _job_extra_env(job: Job, extra: dict[str, str] | None = None) -> dict[str, str]:
+    """Extra environment for ``job``'s command: its branch, config dir, ``extra``.
 
+    Always adds RA_JOB_BRANCH (the bookmark repoactive uses for the job's output).
     Adds RA_CONFIG_SOURCE_DIR when the job has a ``config_source_dir`` (the
     directory of the config source that defined its command), on top of any
-    caller-supplied entries (e.g. RA_JOBS_DIR for a generator). Returns None when
-    there is nothing to add, matching the ``_run_command`` default.
+    caller-supplied entries (e.g. RA_JOBS_DIR for a generator).
     """
     env = dict(extra or {})
+    env[RA_JOB_BRANCH_ENV] = job.branch_name()
     if job.config_source_dir is not None:
         env[RA_CONFIG_SOURCE_DIR_ENV] = job.config_source_dir
-    return env or None
+    return env
 
 
 @contextlib.contextmanager

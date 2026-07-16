@@ -50,6 +50,9 @@ Injected variables:
   job's command (the change that prompted this convention).
 - `RA_WORKSPACE_DIR` — the throwaway jj workspace repoactive created for the
   job (always the command's working directory).
+- `RA_JOB_BRANCH` — the bookmark/branch repoactive uses for the job's output
+  (`Job.branch_name`), so the command can inspect the previous run's commit
+  still pointed at by that bookmark.
 
 **`RA_CONFIG_SOURCE_DIR` semantics.** A job's command runs in a throwaway
 workspace, so it cannot otherwise locate files kept beside its config (a
