@@ -69,6 +69,11 @@ RA_WORKSPACE_DIR_ENV = "RA_WORKSPACE_DIR"
 # generator never creates it.
 RA_JOB_BRANCH_ENV = "RA_JOB_BRANCH"
 
+# Environment variable exposing to a job command the name of the job it belongs
+# to (Job.name), so a command shared by several jobs can tell which one is
+# running (e.g. to label its output).
+RA_JOB_NAME_ENV = "RA_JOB_NAME"
+
 # Fields an emitted job inherits from its generator when the emitted entry does
 # not set them itself (``tags`` and ``depends_on`` are handled separately because
 # their defaults are not a plain copy). See docs/adr/0004-job-generators.md.
@@ -273,14 +278,16 @@ def _command_env(
 
 
 def _job_extra_env(job: Job, extra: dict[str, str] | None = None) -> dict[str, str]:
-    """Extra environment for ``job``'s command: its branch, config dir, ``extra``.
+    """Extra environment for ``job``'s command: its name, branch, config dir, ``extra``.
 
-    Always adds RA_JOB_BRANCH (the bookmark repoactive uses for the job's output).
-    Adds RA_CONFIG_SOURCE_DIR when the job has a ``config_source_dir`` (the
-    directory of the config source that defined its command), on top of any
-    caller-supplied entries (e.g. RA_JOBS_DIR for a generator).
+    Always adds RA_JOB_NAME (the job's name) and RA_JOB_BRANCH (the bookmark
+    repoactive uses for the job's output). Adds RA_CONFIG_SOURCE_DIR when the job
+    has a ``config_source_dir`` (the directory of the config source that defined
+    its command), on top of any caller-supplied entries (e.g. RA_JOBS_DIR for a
+    generator).
     """
     env = dict(extra or {})
+    env[RA_JOB_NAME_ENV] = job.name
     env[RA_JOB_BRANCH_ENV] = job.branch_name()
     if job.config_source_dir is not None:
         env[RA_CONFIG_SOURCE_DIR_ENV] = job.config_source_dir

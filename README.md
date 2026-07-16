@@ -653,10 +653,23 @@ itself.
 
 | Variable               | Value                                                                                  | Set when                                                                            |
 | ---------------------- | -------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `RA_JOB_NAME`          | The name of the job the command belongs to.                                            | Always.                                                                             |
 | `RA_WORKSPACE_DIR`     | The temporary jj workspace created for the job (also the command's working directory). | Always.                                                                             |
 | `RA_JOB_BRANCH`        | The bookmark/branch repoactive uses for the job's output.                              | Always.                                                                             |
 | `RA_CONFIG_SOURCE_DIR` | The directory of the config file that defined the command.                             | The command came from a config file (not a `--set` override or a built-in default). |
 | `RA_JOBS_DIR`          | The directory a generator writes its `*.toml` job fragments into.                      | The command is a [generator](#generating-jobs-dynamically) (`emits_jobs`).          |
+
+#### `RA_JOB_NAME`
+
+`RA_JOB_NAME` holds the name of the job the command belongs to. A command
+shared by several jobs (for instance one set in `[job-defaults]` or emitted
+by a generator) can read it to tell which job is running:
+
+```toml
+[job.lint]
+command = "./run-check.sh $RA_JOB_NAME"
+title = "run the shared check script for this job"
+```
 
 #### `RA_WORKSPACE_DIR`
 

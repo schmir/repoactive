@@ -53,6 +53,8 @@ Injected variables:
 - `RA_JOB_BRANCH` — the bookmark/branch repoactive uses for the job's output
   (`Job.branch_name`), so the command can inspect the previous run's commit
   still pointed at by that bookmark.
+- `RA_JOB_NAME` — the name of the job the command belongs to (`Job.name`),
+  so a command shared by several jobs can tell which one is running.
 
 **`RA_CONFIG_SOURCE_DIR` semantics.** A job's command runs in a throwaway
 workspace, so it cannot otherwise locate files kept beside its config (a

@@ -7,22 +7,16 @@
   interpreter binary (a bare name resolved on `PATH` like `bash`, or an
   absolute path) and runs the command as `<shell> -c <command>`. Unset, it
   keeps the previous behaviour of `/bin/sh`.
-- Job commands now receive `RA_CONFIG_SOURCE_DIR`, the directory of the
-  config file that defined the job's command (a job in
-  `.repoactive.d/foo.toml` gets `.repoactive.d`; a job in `.repoactive.toml`
-  gets the repo directory). A command can use it to reach helper files kept
-  beside its config, e.g. `command = "$RA_CONFIG_SOURCE_DIR/fixup.sh"`. It
-  is unset for a command set by a `--set` override.
-- Job commands now also receive `RA_WORKSPACE_DIR`, the throwaway jj
-  workspace repoactive created for the job. It is always the command's
-  working directory, but naming it explicitly lets a command that changes
-  directory find its way back. See
-  [ADR 0016](docs/adr/0016-injected-env-var-prefix.md).
-- Job commands now also receive `RA_JOB_BRANCH`, the bookmark/branch
-  repoactive uses for the job's output. The command runs on a fresh commit
-  while that bookmark still points at the previous run's commit, so a
-  command can inspect what it produced last time (e.g. to diff against it).
-  See [ADR 0016](docs/adr/0016-injected-env-var-prefix.md).
+- Job commands now receive several `RA_`-prefixed environment variables. See
+  [ADR 0016](docs/adr/0016-injected-env-var-prefix.md) and the README for
+  details:
+  - `RA_JOB_NAME` - the name of the job the command belongs to.
+  - `RA_WORKSPACE_DIR` - the jj workspace created for the job (also its
+    working directory).
+  - `RA_JOB_BRANCH` - the bookmark/branch repoactive uses for the job's
+    output.
+  - `RA_CONFIG_SOURCE_DIR` - the directory of the config file that defined
+    the command (unset for a `--set` override).
 - **Breaking:** the environment variable a generator receives was renamed
   from `REPOACTIVE_JOBS_DIR` to `RA_JOBS_DIR`. `REPOACTIVE_` is now reserved
   for variables that configure repoactive; variables repoactive injects into
@@ -55,7 +49,7 @@
   error instead of a cryptic crash: a source with an odd shape (e.g.
   `job.foo = "hello"`) fails validation naming the offending file or
   `--set`. Generator-emitted job fragments may only contain `[job.<name>]`
-  tables — a `[job-defaults]` or `[platform]` in a fragment now fails the
+  tables - a `[job-defaults]` or `[platform]` in a fragment now fails the
   generator instead of being silently ignored.
 
 ## 0.2.6 - 2026-07-13
@@ -81,8 +75,8 @@
   lingering. Cooldown now gates only the start of fresh work; if the job
   already has an open branch it is still refreshed and the empty-diff path
   closes the MR normally.
-- Explicitly selecting a job now pulls in its successors — jobs whose
-  commits sit above the selected job's bookmark — so the whole stack is
+- Explicitly selecting a job now pulls in its successors - jobs whose
+  commits sit above the selected job's bookmark - so the whole stack is
   rebuilt in one run. A successor runs only when something below it actually
   ran: it bypasses its own cooldown when the selected job updates, and is
   skipped (bookmark untouched) when the selected job was itself
@@ -208,7 +202,7 @@
   tree `info jobs` shows. The trees printed by `run`, `info jobs` and
   `info tags` are colorized when stdout is a terminal.
 - `run --tag` now fails with a clean error when a requested tag is carried
-  by no configured job, exactly like naming an unknown job — previously a
+  by no configured job, exactly like naming an unknown job - previously a
   mistyped tag silently selected zero jobs and exited successfully.
 - Setting `REPOACTIVE_UI=noninteractive` now turns off the "how to undo"
   hint panels, e.g. for unattended CI runs.
@@ -236,9 +230,9 @@
   changes, so a dependency chain yields a single MR on the topmost job that
   produced a diff, falling back to the job below when the jobs above came up
   empty (ADR 0009).
-- Anticipated failures — a mistyped job name, no platform matching the git
+- Anticipated failures - a mistyped job name, no platform matching the git
   remote, an unset or rejected platform token, an inaccessible repository,
-  or a failing jj/git invocation — are now reported as a clean error line
+  or a failing jj/git invocation - are now reported as a clean error line
   instead of a traceback.
 - An existing MR/PR is now retargeted when a job's `base_branch` changes;
   previously GitLab silently kept the MR on the old target branch and GitHub
