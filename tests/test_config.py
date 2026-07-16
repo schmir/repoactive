@@ -59,6 +59,10 @@ class TestBranchPrefixValidation:
     def test_none_accepted(self) -> None:
         Job(name="x", command="cmd", title="T", branch_prefix=None)
 
+    def test_empty_prefix_accepted(self) -> None:
+        job = Job(name="x", command="cmd", title="T", branch_prefix="")
+        assert job.branch_name() == "x"
+
     def test_leading_slash_rejected(self) -> None:
         with pytest.raises(ValueError, match="invalid branch_prefix"):
             Job(name="x", command="cmd", title="T", branch_prefix="/bot/")

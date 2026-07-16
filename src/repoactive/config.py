@@ -33,7 +33,8 @@ logger = logging.getLogger(__name__)
 _DURATION_RE = re.compile(r"^(\d+)([smhdw])$")
 _JOB_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 _TAG_RE = re.compile(r"^[A-Za-z0-9_-]+$")
-_BRANCH_PREFIX_RE = re.compile(r"^(?!/)(?!.*//)[a-zA-Z0-9_\-/]+$")
+# An empty prefix is allowed (branch name == job name); hence * not +.
+_BRANCH_PREFIX_RE = re.compile(r"^(?!/)(?!.*//)[a-zA-Z0-9_\-/]*$")
 _DURATION_UNITS = {"s": "seconds", "m": "minutes", "h": "hours", "d": "days", "w": "weeks"}
 
 # Reserved tags driving job selection. A plain job carries DEFAULT_TAG, which is

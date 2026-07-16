@@ -440,7 +440,10 @@ block.
 **Branch and commit options:**
 
 - **`branch_prefix`** (default: `"repoactive/"`) - Prefix prepended to the
-  job name to form the branch name.
+  job name to form the branch name. Set to `""` to use the job name alone.
+  With an empty prefix the branch name is exactly the job name, so make sure
+  no job is named after your base branch (e.g. a job named `main`) - the two
+  branches would otherwise collide.
 - **`mr_title_prefix`** (default: `"[repoactive] "`) - Prefix prepended to
   every MR/PR title. Set to `""` to disable.
 - **`commit_title_prefix`** (default: `"[repoactive] "`) - Prefix prepended
