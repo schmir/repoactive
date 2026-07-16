@@ -2,6 +2,12 @@
 
 ## 0.2.8 - unreleased
 
+- Job commands now receive `RA_CONFIG_SOURCE_DIR`, the directory of the
+  config file that defined the job's command (a job in
+  `.repoactive.d/foo.toml` gets `.repoactive.d`; a job in `.repoactive.toml`
+  gets the repo directory). A command can use it to reach helper files kept
+  beside its config, e.g. `command = "$RA_CONFIG_SOURCE_DIR/fixup.sh"`. It
+  is unset for a command set by a `--set` override.
 - **Breaking:** the environment variable a generator receives was renamed
   from `REPOACTIVE_JOBS_DIR` to `RA_JOBS_DIR`. `REPOACTIVE_` is now reserved
   for variables that configure repoactive; variables repoactive injects into

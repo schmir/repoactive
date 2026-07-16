@@ -953,6 +953,76 @@ class TestLoadConfig:
         assert cfg.job_defaults.branch_prefix == "file/"
 
 
+class TestConfigSourceDir:
+    """config_source_dir: the directory of the config source that set a job's command."""
+
+    _PLATFORM = '[platform.gitlab]\nurl = "https://gitlab.com"\ntype = "gitlab"\ntoken_env = "T"\n'
+
+    def test_file_job_gets_the_files_directory(self, tmp_path: Path) -> None:
+        f = tmp_path / ".repoactive.toml"
+        f.write_text(self._PLATFORM + '[job.a]\ncommand = "cmd"\ntitle = "A"\n')
+        cfg = load_config([f])
+        assert cfg.jobs[0].config_source_dir == str(tmp_path)
+
+    def test_config_dir_job_gets_that_directory(self, tmp_path: Path) -> None:
+        conf_dir = tmp_path / "conf.d"
+        conf_dir.mkdir()
+        (conf_dir / "a.toml").write_text(
+            self._PLATFORM + '[job.a]\ncommand = "cmd"\ntitle = "A"\n'
+        )
+        # Whether the directory is expanded or the file is named directly, the
+        # job's command lives in conf.d/a.toml, so it gets conf.d itself.
+        via_dir = load_config([conf_dir]).jobs[0]
+        via_file = load_config([conf_dir / "a.toml"]).jobs[0]
+        assert via_dir.config_source_dir == str(conf_dir)
+        assert via_file.config_source_dir == str(conf_dir)
+
+    def test_absolute_even_for_relative_path(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        (tmp_path / ".repoactive.toml").write_text(
+            self._PLATFORM + '[job.a]\ncommand = "cmd"\ntitle = "A"\n'
+        )
+        monkeypatch.chdir(tmp_path)
+        cfg = load_config([Path(".repoactive.toml")])
+        assert cfg.jobs[0].config_source_dir == str(tmp_path.resolve())
+
+    def test_override_of_other_field_keeps_command_source(self, tmp_path: Path) -> None:
+        base = tmp_path / "base.toml"
+        base.write_text(self._PLATFORM + '[job.a]\ncommand = "cmd"\ntitle = "A"\n')
+        other = tmp_path / "conf.d" / "over.toml"
+        other.parent.mkdir()
+        other.write_text('[job.a]\ntitle = "A2"\n')
+        cfg = load_config([base, other])
+        # over.toml sets only the title; the command still comes from base.toml.
+        assert cfg.jobs[0].config_source_dir == str(tmp_path)
+
+    def test_later_source_setting_command_moves_source_dir(self, tmp_path: Path) -> None:
+        base = tmp_path / "base.toml"
+        base.write_text(self._PLATFORM + '[job.a]\ncommand = "cmd"\ntitle = "A"\n')
+        other = tmp_path / "conf.d" / "over.toml"
+        other.parent.mkdir()
+        other.write_text('[job.a]\ncommand = "cmd2"\n')
+        cfg = load_config([base, other])
+        assert cfg.jobs[0].config_source_dir == str(other.parent)
+
+    def test_set_override_of_command_clears_source_dir(self, tmp_path: Path) -> None:
+        base = tmp_path / "base.toml"
+        base.write_text(self._PLATFORM + '[job.a]\ncommand = "cmd"\ntitle = "A"\n')
+        cfg = load_config([base], overrides=['job.a.command = "cmd2"'])
+        # A --set source has no file, so the command dir is cleared.
+        assert cfg.jobs[0].config_source_dir is None
+
+    def test_config_source_dir_in_job_body_rejected(self, tmp_path: Path) -> None:
+        f = tmp_path / "csd.toml"
+        f.write_text(
+            self._PLATFORM + '[job.a]\nconfig_source_dir = "/evil"\ncommand = "cmd"\ntitle = "A"\n'
+        )
+        with pytest.raises(ConfigError, match=str(f)) as exc_info:
+            load_config([f])
+        assert "must not set 'config_source_dir'" in str(exc_info.value)
+
+
 class TestDefaultConfigPaths:
     def test_picks_up_file_and_directory(self, tmp_path: Path) -> None:
         (tmp_path / ".repoactive.toml").write_text("")

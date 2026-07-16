@@ -51,6 +51,11 @@ logger = logging.getLogger(__name__)
 # writes its ``*.toml`` job fragments into. See docs/adr/0004-job-generators.md.
 RA_JOBS_DIR_ENV = "RA_JOBS_DIR"
 
+# Environment variable exposing to a job command the directory of the config
+# source that defined the command (Job.config_source_dir), so the command can
+# reach files kept beside its config. See docs/adr/0016-injected-env-var-prefix.md.
+RA_CONFIG_SOURCE_DIR_ENV = "RA_CONFIG_SOURCE_DIR"
+
 # Fields an emitted job inherits from its generator when the emitted entry does
 # not set them itself (``tags`` and ``depends_on`` are handled separately because
 # their defaults are not a plain copy). See docs/adr/0004-job-generators.md.
@@ -252,6 +257,20 @@ def _command_env(
     if extra_env:
         env.update(extra_env)
     return env
+
+
+def _job_extra_env(job: Job, extra: dict[str, str] | None = None) -> dict[str, str] | None:
+    """Extra environment for ``job``'s command: its config dir plus any ``extra``.
+
+    Adds RA_CONFIG_SOURCE_DIR when the job has a ``config_source_dir`` (the
+    directory of the config source that defined its command), on top of any
+    caller-supplied entries (e.g. RA_JOBS_DIR for a generator). Returns None when
+    there is nothing to add, matching the ``_run_command`` default.
+    """
+    env = dict(extra or {})
+    if job.config_source_dir is not None:
+        env[RA_CONFIG_SOURCE_DIR_ENV] = job.config_source_dir
+    return env or None
 
 
 @contextlib.contextmanager
@@ -498,7 +517,12 @@ def run_job(
         repo.git_sync_head()
         logger.debug("[%s] running command: %s", job.name, job.command)
         try:
-            command_result = _run_command(job, repo.cwd, secret_env_names=ctx.secret_env_names)
+            command_result = _run_command(
+                job,
+                repo.cwd,
+                secret_env_names=ctx.secret_env_names,
+                extra_env=_job_extra_env(job),
+            )
         except CommandError:
             # The command timed out or failed; discard only the fresh commit.
             # The old bookmark is completely unaffected.
@@ -571,6 +595,9 @@ def _build_generated_job(
     for f in _INHERITED_FIELDS:
         merged.setdefault(f, getattr(generator, f))
     merged["generated_by"] = generator.name
+    # The generator's fragments live in a throwaway temp dir, so an emitted job's
+    # meaningful config location is the generator's own config source.
+    merged["config_source_dir"] = generator.config_source_dir
     try:
         return Job.model_validate(merged)
     except ValidationError as e:
@@ -808,7 +835,7 @@ def _run_generator_job(
                 job,
                 repo.cwd,
                 secret_env_names=ctx.secret_env_names,
-                extra_env={RA_JOBS_DIR_ENV: str(jobs_dir)},
+                extra_env=_job_extra_env(job, {RA_JOBS_DIR_ENV: str(jobs_dir)}),
             )
             specs = _load_job_specs(jobs_dir)
         finally:

@@ -636,6 +636,33 @@ directory of `*.toml` files, and may be repeated to merge several sources;
 later sources win. Explicit paths are resolved relative to the current
 directory, not `--repo`.
 
+### Finding files next to a job's config
+
+A job's command runs in a temporary workspace, not in the directory its
+config lives in, so a relative path cannot reach a helper file kept beside
+the config. To bridge that, `repoactive` sets `RA_CONFIG_SOURCE_DIR` in
+every command's environment to the directory of the config file that defined
+the job's command:
+
+- a job defined in `.repoactive.toml` gets the directory holding it (the
+  repo directory, by default);
+- a job defined in `.repoactive.d/foo.toml` gets the `.repoactive.d`
+  directory.
+
+```toml
+[job.fixup]
+command = "$RA_CONFIG_SOURCE_DIR/fixup.sh"
+title = "run the fixup script kept beside the config"
+```
+
+The value is the config file's real location on disk, so it is the same
+whether the file was discovered automatically or named with `-c`. A command
+whose value came from a `--set` override has no config file, so
+`RA_CONFIG_SOURCE_DIR` is unset for it. (This is one of the `RA_`-prefixed
+variables `repoactive` provides to job commands, alongside `RA_JOBS_DIR` for
+[generators](#generating-jobs-dynamically); the `REPOACTIVE_`-prefixed
+variables above configure `repoactive` itself.)
+
 ### Overriding values on the command line
 
 `--set NAME=VALUE`/`-s` tweaks individual config values without editing a

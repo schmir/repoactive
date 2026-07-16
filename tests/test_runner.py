@@ -15,6 +15,7 @@ from pydantic import ValidationError
 from repoactive.config import Config, CreateMR, Job, JobDefaults
 from repoactive.jj import JJ
 from repoactive.runner import (
+    RA_CONFIG_SOURCE_DIR_ENV,
     RA_JOBS_DIR_ENV,
     ApplyResult,
     CommandError,
@@ -29,6 +30,7 @@ from repoactive.runner import (
     _compute_parents,
     _dispatch_job,
     _format_duration,
+    _job_extra_env,
     _load_job_specs,
     _prepare_repo,
     _run_command,
@@ -811,6 +813,38 @@ class TestRunCommand:
 
         assert result.output == "[visible]"
 
+    def test_config_source_dir_visible_to_command(self, tmp_path: Path) -> None:
+        # A job with a config_source_dir sees it as RA_CONFIG_SOURCE_DIR.
+        job = Job(
+            name="foo",
+            command="echo [$RA_CONFIG_SOURCE_DIR]",
+            title="t",
+            branch_prefix="repoactive/",
+            commit_title_prefix="",
+            config_source_dir="/cfg/dir",
+        )
+        result = _run_command(job, tmp_path, extra_env=_job_extra_env(job))
+
+        assert result.output == "[/cfg/dir]"
+
+
+class TestJobExtraEnv:
+    def test_none_when_nothing_to_add(self) -> None:
+        assert _job_extra_env(_job("foo")) is None
+
+    def test_adds_config_source_dir(self) -> None:
+        job = _job("foo").model_copy(update={"config_source_dir": "/cfg"})
+        assert _job_extra_env(job) == {RA_CONFIG_SOURCE_DIR_ENV: "/cfg"}
+
+    def test_merges_with_extra_without_dropping_it(self) -> None:
+        job = _job("foo").model_copy(update={"config_source_dir": "/cfg"})
+        env = _job_extra_env(job, {RA_JOBS_DIR_ENV: "/jobs"})
+        assert env == {RA_JOBS_DIR_ENV: "/jobs", RA_CONFIG_SOURCE_DIR_ENV: "/cfg"}
+
+    def test_passes_extra_through_when_no_config_source_dir(self) -> None:
+        env = _job_extra_env(_job("foo"), {RA_JOBS_DIR_ENV: "/jobs"})
+        assert env == {RA_JOBS_DIR_ENV: "/jobs"}
+
 
 class TestRunJob:
     @patch("repoactive.runner.JJ")
@@ -833,6 +867,32 @@ class TestRunJob:
         # Dependents use the new change-id directly as their parent revset.
         assert result.effective_revsets == [mock_jj.change_id.return_value]
         assert result.new_change_id == mock_jj.change_id.return_value
+
+    @patch("repoactive.runner._run_command", return_value=CommandResult(output="", elapsed=0.0))
+    @patch("repoactive.runner.JJ")
+    def test_passes_config_source_dir_to_command(
+        self, mock_jj_cls: MagicMock, mock_run_command: MagicMock
+    ) -> None:
+        mock_jj = _mock_jj(mock_jj_cls)
+        mock_jj.is_empty.return_value = True
+        job = _job("foo").model_copy(update={"config_source_dir": "/cfg/dir"})
+
+        run_job(_ctx(), job=job, parents=["trunk()"])
+
+        extra_env = mock_run_command.call_args.kwargs["extra_env"]
+        assert extra_env == {RA_CONFIG_SOURCE_DIR_ENV: "/cfg/dir"}
+
+    @patch("repoactive.runner._run_command", return_value=CommandResult(output="", elapsed=0.0))
+    @patch("repoactive.runner.JJ")
+    def test_omits_config_source_dir_when_unset(
+        self, mock_jj_cls: MagicMock, mock_run_command: MagicMock
+    ) -> None:
+        mock_jj = _mock_jj(mock_jj_cls)
+        mock_jj.is_empty.return_value = True
+
+        run_job(_ctx(), job=_job("foo"), parents=["trunk()"])
+
+        assert mock_run_command.call_args.kwargs["extra_env"] is None
 
     @patch("repoactive.runner.JJ")
     @patch("repoactive.runner.subprocess.Popen")
@@ -1221,6 +1281,16 @@ class TestBuildGeneratedJobs:
         assert job.depends_on == ["gen"]
         assert job.generated_by == "gen"
 
+    def test_inherits_config_source_dir(self) -> None:
+        gen = _gen().model_copy(update={"config_source_dir": "/cfg"})
+        [job] = _build_generated_jobs(
+            generator=gen,
+            specs={"child": {"command": "c", "title": "Child"}},
+            run_names={"gen"},
+            all_config_names=set(),
+        )
+        assert job.config_source_dir == "/cfg"
+
     def test_plain_generator_children_inherit_enabled(self) -> None:
         # A plain generator carries the implicit 'enabled' tag; children do too.
         [job] = _build_generated_jobs(
@@ -1391,6 +1461,24 @@ class TestRunGeneratorJob:
         assert RA_JOBS_DIR_ENV in extra_env
         assert [j.name for j in emitted] == ["child"]
         assert result.produced_diff is False
+
+    @patch(
+        "repoactive.runner._load_job_specs",
+        return_value={"child": {"command": "c", "title": "Child"}},
+    )
+    @patch("repoactive.runner._run_command")
+    @patch("repoactive.runner.JJ")
+    def test_command_gets_both_jobs_dir_and_config_source_dir(
+        self, mock_jj_cls: MagicMock, mock_run_command: MagicMock, mock_load: MagicMock
+    ) -> None:
+        _mock_jj(mock_jj_cls)
+        gen = _gen().model_copy(update={"config_source_dir": "/cfg"})
+
+        _run_generator_job(_ctx(selection=_selection(gen)), job=gen, parents=["trunk()"])
+
+        extra_env = mock_run_command.call_args.kwargs["extra_env"]
+        assert RA_JOBS_DIR_ENV in extra_env
+        assert extra_env[RA_CONFIG_SOURCE_DIR_ENV] == "/cfg"
 
     @patch("repoactive.runner._run_command", side_effect=CommandError("boom", elapsed=1.0))
     @patch("repoactive.runner.JJ")

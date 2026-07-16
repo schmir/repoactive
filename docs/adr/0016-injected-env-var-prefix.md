@@ -42,12 +42,27 @@ alias**: a breaking change, acceptable pre-1.0 because the only consumers
 are generator scripts, which repoactive projects own alongside their config.
 A generator that read `REPOACTIVE_JOBS_DIR` must switch to `RA_JOBS_DIR`.
 
-Injected variables, going forward:
+Injected variables:
 
 - `RA_JOBS_DIR` — the directory a generator (`emits_jobs`) writes job
   fragments into (was `REPOACTIVE_JOBS_DIR`).
 - `RA_CONFIG_SOURCE_DIR` — the directory of the config source that defined a
-  job's command (forthcoming; the change that prompted this convention).
+  job's command (the change that prompted this convention).
+
+**`RA_CONFIG_SOURCE_DIR` semantics.** A job's command runs in a throwaway
+workspace, so it cannot otherwise locate files kept beside its config (a
+helper script next to an out-of-repo `.repoactive.toml`). The value is the
+**physical directory of the config file that last set the job's command** —
+a job in `.repoactive.d/foo.toml` gets `.repoactive.d`, a job in
+`.repoactive.toml` gets the repo directory, a job from `/central/prod.toml`
+gets `/central`. It is taken from the file's real location, not the path
+typed on the command line, so `repoactive run` and
+`repoactive run -c .repoactive.d/foo.toml` agree. When the command was last
+set by a `--set` override or the built-in defaults there is no file, so the
+variable is unset. Generator-emitted jobs inherit the generator's value
+(their fragments live in a throwaway temp dir). The directory is carried on
+a machinery-set `Job.config_source_dir` field, which — like `generated_by` —
+is rejected if written in user config.
 
 **Why `RA_`.** It is short (low noise in a command's shell) and namespaced
 against unrelated variables a command already sees (`PATH`, CI variables). A

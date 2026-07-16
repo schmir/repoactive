@@ -158,6 +158,20 @@ class GeneratedByInBodyError(ValueError):
         )
 
 
+class ConfigSourceDirInBodyError(ValueError):
+    """Raised when a [job.<name>] table sets a 'config_source_dir' field.
+
+    'config_source_dir' is set by repoactive to the directory of the config
+    source that defined the job's command; it is not a user-facing config field.
+    """
+
+    def __init__(self, name: str) -> None:
+        super().__init__(
+            f"job {name!r} must not set 'config_source_dir'; "
+            "that field is set by repoactive to the job's config directory"
+        )
+
+
 class DuplicatePlatformHostError(ValueError):
     """Raised when two platforms resolve to the same host.
 
@@ -311,6 +325,11 @@ class Job(BaseModel):
     # the generator's name, recorded as a second Repoactive-Job trailer so the
     # generator gets a meaningful cooldown over the whole fan-out.
     generated_by: str | None = None
+    # Set by repoactive (never written in config): the absolute directory of the
+    # config source that defined this job's command, exported to the command as
+    # RA_CONFIG_SOURCE_DIR so it can reach files kept beside its config. None when
+    # the command came from a --set override or the built-in defaults.
+    config_source_dir: str | None = None
 
     # the following fields will be resolved from the defaults
     branch_prefix: _BranchPrefix | None = None
@@ -433,6 +452,8 @@ class Config(BaseModel):
                 raise JobNameInBodyError(name)
             if "generated_by" in body:
                 raise GeneratedByInBodyError(name)
+            if "config_source_dir" in body:
+                raise ConfigSourceDirInBodyError(name)
             jobs.append({**body, "name": name})
         return jobs
 
@@ -668,6 +689,10 @@ class _ConfigSource:
 
     label: str
     data: dict
+    # Absolute directory of the file this source was read from, or None for
+    # sources without a file (built-in defaults, --set overrides). Exposed to a
+    # command as RA_CONFIG_SOURCE_DIR for the job whose command this source sets.
+    source_dir: Path | None = None
 
 
 def _built_in_defaults() -> list[_ConfigSource]:
@@ -704,7 +729,9 @@ def _parse_override(text: str) -> _ConfigSource:
 
 def _read_toml_file(path: Path) -> _ConfigSource:
     try:
-        return _ConfigSource(str(path), tomllib.loads(path.read_text()))
+        return _ConfigSource(
+            str(path), tomllib.loads(path.read_text()), source_dir=path.resolve().parent
+        )
     except (OSError, tomllib.TOMLDecodeError) as e:
         raise ConfigError(str(path), e) from e
 
@@ -721,12 +748,19 @@ def load_config(paths: list[Path], overrides: list[str] | None = None) -> Config
 
 def _merge_config(sources: Iterable[_ConfigSource]) -> Config:
     merged = {}
+    # Directory of the config source that last set each job's command, keyed by
+    # job name. Exported to the command as RA_CONFIG_SOURCE_DIR (see
+    # Job.config_source_dir). None when that source has no file (--set, built-in).
+    command_source_dir: dict[str, Path | None] = {}
     for source in sources:
         data = source.data
         try:
             # Reject odd shapes (e.g. job.foo = "hello") up front; the merge
             # helpers assume tables of tables and would fail cryptically.
             shape = ConfigShape.model_validate(data)
+            for name, body in shape.job.items():
+                if "command" in body:
+                    command_source_dir[name] = source.source_dir
             jobs = merge_jobs(base=merged.get("job", {}), override=shape.job)
             platforms = merge_platforms(
                 base=merged.get("platform", {}),
@@ -743,5 +777,18 @@ def _merge_config(sources: Iterable[_ConfigSource]) -> Config:
         except (ValueError, ValidationError) as e:
             raise ConfigError(source.label, e) from e
     config = Config.model_validate(merged)
+    # Stamp each job with the directory of the source that defined its command.
+    # Done after validation (not injected into the raw table) so it bypasses the
+    # ConfigSourceDirInBodyError guard, which only rejects user-written values.
+    config = config.model_copy(
+        update={
+            "jobs": [
+                job.model_copy(update={"config_source_dir": str(command_source_dir[job.name])})
+                if command_source_dir.get(job.name) is not None
+                else job
+                for job in config.jobs
+            ]
+        }
+    )
     logger.debug("loaded config: %s", config.model_dump_json(indent=2))
     return config
