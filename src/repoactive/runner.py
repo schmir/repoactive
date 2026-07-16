@@ -56,6 +56,11 @@ RA_JOBS_DIR_ENV = "RA_JOBS_DIR"
 # reach files kept beside its config. See docs/adr/0016-injected-env-var-prefix.md.
 RA_CONFIG_SOURCE_DIR_ENV = "RA_CONFIG_SOURCE_DIR"
 
+# Environment variable exposing to a job command the throwaway jj workspace
+# repoactive created for it. This is always the command's working directory, but
+# naming it explicitly lets a command that changes directory find its way back.
+RA_WORKSPACE_DIR_ENV = "RA_WORKSPACE_DIR"
+
 # Fields an emitted job inherits from its generator when the emitted entry does
 # not set them itself (``tags`` and ``depends_on`` are handled separately because
 # their defaults are not a plain copy). See docs/adr/0004-job-generators.md.
@@ -349,7 +354,12 @@ def _run_command(
     extra_env: dict[str, str] | None = None,
 ) -> CommandResult:
     start = time.monotonic()
-    env = _command_env(extra_env=extra_env, secret_env_names=secret_env_names)
+    # The workspace is always cwd, but expose it explicitly so a command that
+    # cd's elsewhere can still find the workspace repoactive prepared for it.
+    env = _command_env(
+        extra_env={**(extra_env or {}), RA_WORKSPACE_DIR_ENV: str(cwd)},
+        secret_env_names=secret_env_names,
+    )
 
     # Stream the merged stdout/stderr line by line: keep the full output (needed
     # for the commit message and the success result) while feeding a live tail of

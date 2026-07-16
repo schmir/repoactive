@@ -28,6 +28,7 @@ and (with `--mode publish`) the full MR lifecycle.
   - [Example](#example)
   - [`[platform.<name>]`](#platformname)
   - [Config file locations](#config-file-locations)
+  - [Variables passed to job commands](#variables-passed-to-job-commands)
   - [Overriding values on the command line](#overriding-values-on-the-command-line)
 - [Selecting jobs with tags](#selecting-jobs-with-tags)
   - [Keeping unmerged branches current](#keeping-unmerged-branches-current)
@@ -643,13 +644,37 @@ directory of `*.toml` files, and may be repeated to merge several sources;
 later sources win. Explicit paths are resolved relative to the current
 directory, not `--repo`.
 
-### Finding files next to a job's config
+### Variables passed to job commands
 
-A job's command runs in a temporary workspace, not in the directory its
-config lives in, so a relative path cannot reach a helper file kept beside
-the config. To bridge that, `repoactive` sets `RA_CONFIG_SOURCE_DIR` in
-every command's environment to the directory of the config file that defined
-the job's command:
+`repoactive` injects a few `RA_`-prefixed environment variables into every
+job command's environment. These are distinct from the `REPOACTIVE_`
+variables [above](#environment-variables), which configure `repoactive`
+itself.
+
+| Variable               | Value                                                                                  | Set when                                                                            |
+| ---------------------- | -------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `RA_WORKSPACE_DIR`     | The temporary jj workspace created for the job (also the command's working directory). | Always.                                                                             |
+| `RA_CONFIG_SOURCE_DIR` | The directory of the config file that defined the command.                             | The command came from a config file (not a `--set` override or a built-in default). |
+| `RA_JOBS_DIR`          | The directory a generator writes its `*.toml` job fragments into.                      | The command is a [generator](#generating-jobs-dynamically) (`emits_jobs`).          |
+
+#### `RA_WORKSPACE_DIR`
+
+A job's command runs in a temporary jj workspace, which is also its working
+directory. `RA_WORKSPACE_DIR` names that directory explicitly, so a command
+that changes directory can still find its way back:
+
+```toml
+[job.build]
+command = "cd subdir && make && cp result $RA_WORKSPACE_DIR/subdir/"
+title = "build in a subdirectory"
+```
+
+#### `RA_CONFIG_SOURCE_DIR`
+
+Because the command runs in that throwaway workspace rather than in the
+directory its config lives in, a relative path cannot reach a helper file
+kept beside the config. `RA_CONFIG_SOURCE_DIR` bridges that: it holds the
+directory of the config file that defined the job's command:
 
 - a job defined in `.repoactive.toml` gets the directory holding it (the
   repo directory, by default);
@@ -665,10 +690,7 @@ title = "run the fixup script kept beside the config"
 The value is the config file's real location on disk, so it is the same
 whether the file was discovered automatically or named with `-c`. A command
 whose value came from a `--set` override has no config file, so
-`RA_CONFIG_SOURCE_DIR` is unset for it. (This is one of the `RA_`-prefixed
-variables `repoactive` provides to job commands, alongside `RA_JOBS_DIR` for
-[generators](#generating-jobs-dynamically); the `REPOACTIVE_`-prefixed
-variables above configure `repoactive` itself.)
+`RA_CONFIG_SOURCE_DIR` is unset for it.
 
 ### Overriding values on the command line
 

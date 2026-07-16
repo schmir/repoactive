@@ -828,6 +828,19 @@ class TestRunCommand:
 
         assert result.output == "[/cfg/dir]"
 
+    def test_workspace_dir_visible_to_command(self, tmp_path: Path) -> None:
+        # The command sees its workspace (the cwd) as RA_WORKSPACE_DIR.
+        job = Job(
+            name="foo",
+            command="echo [$RA_WORKSPACE_DIR]",
+            title="t",
+            branch_prefix="repoactive/",
+            commit_title_prefix="",
+        )
+        result = _run_command(job, tmp_path)
+
+        assert result.output == f"[{tmp_path}]"
+
     def test_default_shell_is_sh(self, tmp_path: Path) -> None:
         # With shell unset the command runs under /bin/sh. subprocess sets the
         # shell as argv[0], so $0 is the interpreter path (this holds regardless

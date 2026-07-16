@@ -13,6 +13,11 @@
   gets the repo directory). A command can use it to reach helper files kept
   beside its config, e.g. `command = "$RA_CONFIG_SOURCE_DIR/fixup.sh"`. It
   is unset for a command set by a `--set` override.
+- Job commands now also receive `RA_WORKSPACE_DIR`, the throwaway jj
+  workspace repoactive created for the job. It is always the command's
+  working directory, but naming it explicitly lets a command that changes
+  directory find its way back. See
+  [ADR 0016](docs/adr/0016-injected-env-var-prefix.md).
 - **Breaking:** the environment variable a generator receives was renamed
   from `REPOACTIVE_JOBS_DIR` to `RA_JOBS_DIR`. `REPOACTIVE_` is now reserved
   for variables that configure repoactive; variables repoactive injects into

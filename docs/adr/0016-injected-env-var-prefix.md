@@ -48,6 +48,8 @@ Injected variables:
   fragments into (was `REPOACTIVE_JOBS_DIR`).
 - `RA_CONFIG_SOURCE_DIR` — the directory of the config source that defined a
   job's command (the change that prompted this convention).
+- `RA_WORKSPACE_DIR` — the throwaway jj workspace repoactive created for the
+  job (always the command's working directory).
 
 **`RA_CONFIG_SOURCE_DIR` semantics.** A job's command runs in a throwaway
 workspace, so it cannot otherwise locate files kept beside its config (a
