@@ -1,7 +1,12 @@
 # Changelog
 
-## 0.2.8 - unreleased
+## 0.3.0 - 2026-07-17
 
+- `base_branch` may now be a jj revset expression such as `trunk()`,
+  `root()`, or a user-defined revset alias, not just a bookmark name.
+- `branch_prefix` may now be set to `""` (empty), in which case the branch
+  name is exactly the job name. Take care that no job is named after your
+  base branch, or the two branches would collide.
 - Jobs can now choose the interpreter their command runs under via a `shell`
   field, settable per job and in `[job-defaults]`. It names a single
   interpreter binary (a bare name resolved on `PATH` like `bash`, or an
