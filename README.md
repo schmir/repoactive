@@ -656,6 +656,7 @@ itself.
 | `RA_JOB_NAME`          | The name of the job the command belongs to.                                            | Always.                                                                             |
 | `RA_WORKSPACE_DIR`     | The temporary jj workspace created for the job (also the command's working directory). | Always.                                                                             |
 | `RA_JOB_BRANCH`        | The bookmark/branch repoactive uses for the job's output.                              | Always.                                                                             |
+| `RA_JOB_BASE_BRANCH`   | The branch the job's MR targets (`base_branch`, or `trunk()` by default).              | Always.                                                                             |
 | `RA_CONFIG_SOURCE_DIR` | The directory of the config file that defined the command.                             | The command came from a config file (not a `--set` override or a built-in default). |
 | `RA_JOBS_DIR`          | The directory a generator writes its `*.toml` job fragments into.                      | The command is a [generator](#generating-jobs-dynamically) (`emits_jobs`).          |
 
@@ -700,6 +701,24 @@ title = "regenerate release notes from what changed since last run"
 The bookmark may not exist yet: a job's first run, a run that produced no
 diff, and a generator all leave it unset on the remote, so a command that
 reads it should tolerate a missing ref.
+
+#### `RA_JOB_BASE_BRANCH`
+
+`RA_JOB_BASE_BRANCH` holds the branch the job's merge request targets - its
+`base_branch`, or `trunk()` when that is unset. A command can use it to look
+at only what changed relative to the target, for instance to lint or
+reformat just the affected files:
+
+```toml
+[job.format]
+command = "treefmt $(git diff --name-only $RA_JOB_BASE_BRANCH)"
+title = "format files changed since the base branch"
+```
+
+This is the branch you _configured_ as the base. When a job stacks on
+another via `depends_on`, its commit actually sits on top of that other
+job's output, so `RA_JOB_BASE_BRANCH` names the ultimate target of the
+stack, not the immediate parent.
 
 #### `RA_CONFIG_SOURCE_DIR`
 

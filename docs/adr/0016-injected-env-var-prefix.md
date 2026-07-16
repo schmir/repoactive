@@ -55,6 +55,10 @@ Injected variables:
   still pointed at by that bookmark.
 - `RA_JOB_NAME` — the name of the job the command belongs to (`Job.name`),
   so a command shared by several jobs can tell which one is running.
+- `RA_JOB_BASE_BRANCH` — the branch the job's MR targets (`Job.base_branch`,
+  or `trunk()` by default), so a command can diff against its target. This
+  is the _configured_ base; for a stacked job (`depends_on`) the immediate
+  parent commit is another job's output, not this value.
 
 **`RA_CONFIG_SOURCE_DIR` semantics.** A job's command runs in a throwaway
 workspace, so it cannot otherwise locate files kept beside its config (a

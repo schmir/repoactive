@@ -17,6 +17,7 @@ from repoactive.config import Config, CreateMR, Job, JobDefaults
 from repoactive.jj import JJ
 from repoactive.runner import (
     RA_CONFIG_SOURCE_DIR_ENV,
+    RA_JOB_BASE_BRANCH_ENV,
     RA_JOB_BRANCH_ENV,
     RA_JOB_NAME_ENV,
     RA_JOBS_DIR_ENV,
@@ -869,6 +870,20 @@ class TestRunCommand:
 
         assert result.output == "[foo]"
 
+    def test_base_branch_visible_to_command(self, tmp_path: Path) -> None:
+        # The command sees the branch its MR targets as RA_JOB_BASE_BRANCH.
+        job = Job(
+            name="foo",
+            command="echo [$RA_JOB_BASE_BRANCH]",
+            title="t",
+            branch_prefix="repoactive/",
+            commit_title_prefix="",
+            base_branch="release",
+        )
+        result = _run_command(job, tmp_path, extra_env=_job_extra_env(job))
+
+        assert result.output == "[release]"
+
     def test_default_shell_is_sh(self, tmp_path: Path) -> None:
         # With shell unset the command runs under /bin/sh. subprocess sets the
         # shell as argv[0], so $0 is the interpreter path (this holds regardless
@@ -904,19 +919,28 @@ class TestRunCommand:
 
 
 class TestJobExtraEnv:
-    def test_always_adds_name_and_branch(self) -> None:
-        # Every job command gets RA_JOB_NAME and RA_JOB_BRANCH, even with
-        # nothing else to add.
+    def test_always_adds_name_and_branches(self) -> None:
+        # Every job command gets RA_JOB_NAME, RA_JOB_BRANCH, and RA_JOB_BASE_BRANCH,
+        # even with nothing else to add. base_branch is unset, so it defaults to
+        # trunk().
         assert _job_extra_env(_job("foo")) == {
             RA_JOB_NAME_ENV: "foo",
             RA_JOB_BRANCH_ENV: "repoactive/foo",
+            RA_JOB_BASE_BRANCH_ENV: "trunk()",
         }
+
+    def test_base_branch_uses_job_override(self) -> None:
+        # A configured base_branch is exposed verbatim instead of trunk().
+        assert (
+            _job_extra_env(_job("foo", base_branch="release"))[RA_JOB_BASE_BRANCH_ENV] == "release"
+        )
 
     def test_adds_config_source_dir(self) -> None:
         job = _job("foo").model_copy(update={"config_source_dir": "/cfg"})
         assert _job_extra_env(job) == {
             RA_JOB_NAME_ENV: "foo",
             RA_JOB_BRANCH_ENV: "repoactive/foo",
+            RA_JOB_BASE_BRANCH_ENV: "trunk()",
             RA_CONFIG_SOURCE_DIR_ENV: "/cfg",
         }
 
@@ -927,6 +951,7 @@ class TestJobExtraEnv:
             RA_JOBS_DIR_ENV: "/jobs",
             RA_JOB_NAME_ENV: "foo",
             RA_JOB_BRANCH_ENV: "repoactive/foo",
+            RA_JOB_BASE_BRANCH_ENV: "trunk()",
             RA_CONFIG_SOURCE_DIR_ENV: "/cfg",
         }
 
@@ -936,6 +961,7 @@ class TestJobExtraEnv:
             RA_JOBS_DIR_ENV: "/jobs",
             RA_JOB_NAME_ENV: "foo",
             RA_JOB_BRANCH_ENV: "repoactive/foo",
+            RA_JOB_BASE_BRANCH_ENV: "trunk()",
         }
 
 
@@ -976,6 +1002,7 @@ class TestRunJob:
         assert extra_env == {
             RA_JOB_NAME_ENV: "foo",
             RA_JOB_BRANCH_ENV: "repoactive/foo",
+            RA_JOB_BASE_BRANCH_ENV: "trunk()",
             RA_CONFIG_SOURCE_DIR_ENV: "/cfg/dir",
         }
 
@@ -989,11 +1016,12 @@ class TestRunJob:
 
         run_job(_ctx(), job=_job("foo"), parents=["trunk()"])
 
-        # RA_JOB_NAME and RA_JOB_BRANCH are always present; RA_CONFIG_SOURCE_DIR
-        # is not, since unset.
+        # RA_JOB_NAME, RA_JOB_BRANCH, and RA_JOB_BASE_BRANCH are always present;
+        # RA_CONFIG_SOURCE_DIR is not, since unset.
         assert mock_run_command.call_args.kwargs["extra_env"] == {
             RA_JOB_NAME_ENV: "foo",
             RA_JOB_BRANCH_ENV: "repoactive/foo",
+            RA_JOB_BASE_BRANCH_ENV: "trunk()",
         }
 
     @patch("repoactive.runner.JJ")

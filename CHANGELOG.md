@@ -15,6 +15,7 @@
     working directory).
   - `RA_JOB_BRANCH` - the bookmark/branch repoactive uses for the job's
     output.
+  - `RA_JOB_BASE_BRANCH` - the branch the job's MR targets.
   - `RA_CONFIG_SOURCE_DIR` - the directory of the config file that defined
     the command (unset for a `--set` override).
 - **Breaking:** the environment variable a generator receives was renamed

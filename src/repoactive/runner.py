@@ -74,6 +74,13 @@ RA_JOB_BRANCH_ENV = "RA_JOB_BRANCH"
 # running (e.g. to label its output).
 RA_JOB_NAME_ENV = "RA_JOB_NAME"
 
+# Environment variable exposing to a job command the branch the job's MR targets
+# (Job.base_branch, or "trunk()" by default), so a command can diff against its
+# target (e.g. `git diff $RA_JOB_BASE_BRANCH`). This is the *configured* base; for a
+# stacked job (depends_on) the immediate parent commit is another job's output,
+# not this value.
+RA_JOB_BASE_BRANCH_ENV = "RA_JOB_BASE_BRANCH"
+
 # Fields an emitted job inherits from its generator when the emitted entry does
 # not set them itself (``tags`` and ``depends_on`` are handled separately because
 # their defaults are not a plain copy). See docs/adr/0004-job-generators.md.
@@ -278,17 +285,19 @@ def _command_env(
 
 
 def _job_extra_env(job: Job, extra: dict[str, str] | None = None) -> dict[str, str]:
-    """Extra environment for ``job``'s command: its name, branch, config dir, ``extra``.
+    """Extra environment for ``job``'s command: its name, branches, config dir, ``extra``.
 
-    Always adds RA_JOB_NAME (the job's name) and RA_JOB_BRANCH (the bookmark
-    repoactive uses for the job's output). Adds RA_CONFIG_SOURCE_DIR when the job
-    has a ``config_source_dir`` (the directory of the config source that defined
-    its command), on top of any caller-supplied entries (e.g. RA_JOBS_DIR for a
+    Always adds RA_JOB_NAME (the job's name), RA_JOB_BRANCH (the bookmark
+    repoactive uses for the job's output), and RA_JOB_BASE_BRANCH (the branch the
+    job's MR targets). Adds RA_CONFIG_SOURCE_DIR when the job has a
+    ``config_source_dir`` (the directory of the config source that defined its
+    command), on top of any caller-supplied entries (e.g. RA_JOBS_DIR for a
     generator).
     """
     env = dict(extra or {})
     env[RA_JOB_NAME_ENV] = job.name
     env[RA_JOB_BRANCH_ENV] = job.branch_name()
+    env[RA_JOB_BASE_BRANCH_ENV] = job.base_branch or "trunk()"
     if job.config_source_dir is not None:
         env[RA_CONFIG_SOURCE_DIR_ENV] = job.config_source_dir
     return env
