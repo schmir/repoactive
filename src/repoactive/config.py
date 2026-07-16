@@ -517,8 +517,18 @@ class Config(BaseModel):
         return {job.branch_name() for job in self._resolved_jobs()}
 
     def base_branches(self) -> set[str]:
-        """All branches a job uses as base_branch."""
-        return {job.base_branch for job in self._resolved_jobs() if job.base_branch}
+        """Bookmark names a job uses as base_branch.
+
+        These are the branches to track with ``jj bookmark track``. Values that
+        look like a revset function call (``trunk()``, ``root()``, or a
+        user-defined revset alias) are excluded: they are valid base branches but
+        not bookmarks, so tracking them would fail.
+        """
+        return {
+            job.base_branch
+            for job in self._resolved_jobs()
+            if job.base_branch and "()" not in job.base_branch
+        }
 
     def token_env_names(self) -> set[str]:
         """Names of the env vars holding platform API tokens.

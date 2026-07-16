@@ -446,7 +446,8 @@ block.
 - **`commit_title_prefix`** (default: `"[repoactive] "`) - Prefix prepended
   to every commit title. Set to `""` to disable.
 - **`base_branch`** (default: repo default) - Target branch for all jobs
-  that do not set their own.
+  that do not set their own. May also be a jj revset expression such as
+  `trunk()`, `root()`, or a user-defined revset alias.
 
 **Run control:**
 
@@ -491,7 +492,8 @@ underscores.
 **Branch and commit options:**
 
 - **`base_branch`** (default: inherited) - Target branch for this job's
-  MR/PR.
+  MR/PR. May also be a jj revset expression such as `trunk()`, `root()`, or
+  a user-defined revset alias.
 - **`branch_prefix`** (default: inherited) - Override the branch-name prefix
   for this job only.
 - **`mr_title_prefix`** (default: inherited) - Override the MR/PR title

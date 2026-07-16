@@ -183,6 +183,21 @@ class TestBaseBranches:
         cfg = _config(jobs=[_job("a", base_branch="main"), _job("b")])
         assert cfg.base_branches() == {"main"}
 
+    def test_excludes_revset_function_calls(self) -> None:
+        # trunk()/root() and user-defined revset aliases are not bookmarks.
+        cfg = _config(
+            jobs=[
+                _job("a", base_branch="trunk()"),
+                _job("b", base_branch="root()"),
+                _job("c", base_branch="my_alias()"),
+            ]
+        )
+        assert cfg.base_branches() == set()
+
+    def test_keeps_bookmarks_alongside_revset_function_calls(self) -> None:
+        cfg = _config(jobs=[_job("a", base_branch="main"), _job("b", base_branch="trunk()")])
+        assert cfg.base_branches() == {"main"}
+
 
 class TestDependsOnValidation:
     def test_valid_depends_on(self) -> None:
