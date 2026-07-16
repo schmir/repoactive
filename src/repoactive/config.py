@@ -64,6 +64,17 @@ class InvalidBranchPrefixError(ValueError):
         )
 
 
+class InvalidShellError(ValueError):
+    """Raised when a shell value is not a single interpreter binary."""
+
+    def __init__(self, value: str) -> None:
+        super().__init__(
+            f"invalid shell {value!r}: must be a single interpreter binary "
+            "(a name resolved on PATH like 'bash', or an absolute path); "
+            "arguments are not allowed"
+        )
+
+
 class InvalidJobNameError(ValueError):
     """Raised when a job name contains disallowed characters."""
 
@@ -250,6 +261,16 @@ def _validate_duration(value: str) -> str:
     return value
 
 
+def _validate_shell(value: str) -> str:
+    # The value maps to subprocess' executable= (run as `<shell> -c <command>`),
+    # so it must be a single binary, not an argv with flags. Reject empty and any
+    # whitespace so a "full argv" like "bash -e" fails at config load instead of
+    # silently looking up a binary literally named "bash -e".
+    if not value or any(c.isspace() for c in value):
+        raise InvalidShellError(value)
+    return value
+
+
 def _validate_single_line(value: str, info: ValidationInfo) -> str:
     if "\n" in value:
         assert info.field_name is not None
@@ -259,6 +280,7 @@ def _validate_single_line(value: str, info: ValidationInfo) -> str:
 
 _BranchPrefix = Annotated[str, AfterValidator(_validate_branch_prefix)]
 _Duration = Annotated[str, AfterValidator(_validate_duration)]
+_Shell = Annotated[str, AfterValidator(_validate_shell)]
 # Titles and title prefixes end up in commit subjects and MR titles, which are
 # single-line by nature.
 _SingleLine = Annotated[str, AfterValidator(_validate_single_line)]
@@ -280,6 +302,10 @@ class JobDefaults(BaseModel):
     timeout: _Duration | None = "2m"
     auto_merge: bool = False
     required_approvals: int | None = Field(default=None, ge=0)
+    # Interpreter for job commands, passed to subprocess as executable= and run as
+    # `<shell> -c <command>`. None means /bin/sh (the shell=True default). May be a
+    # bare name resolved on PATH (e.g. "bash") or an absolute path.
+    shell: _Shell | None = None
 
 
 # Fields Job.resolve fills in from JobDefaults when the job does not set them
@@ -293,6 +319,7 @@ _DEFAULTED_FIELDS = (
     "timeout",
     "auto_merge",
     "required_approvals",
+    "shell",
 )
 
 
@@ -340,6 +367,7 @@ class Job(BaseModel):
     timeout: _Duration | None = None
     auto_merge: bool | None = None
     required_approvals: int | None = Field(default=None, ge=0)
+    shell: _Shell | None = None
 
     @field_validator("name")
     @classmethod

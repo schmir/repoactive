@@ -2,6 +2,7 @@
 
 import io
 import os
+import shutil
 import signal
 import time
 from collections.abc import Callable, Iterator
@@ -826,6 +827,39 @@ class TestRunCommand:
         result = _run_command(job, tmp_path, extra_env=_job_extra_env(job))
 
         assert result.output == "[/cfg/dir]"
+
+    def test_default_shell_is_sh(self, tmp_path: Path) -> None:
+        # With shell unset the command runs under /bin/sh. subprocess sets the
+        # shell as argv[0], so $0 is the interpreter path (this holds regardless
+        # of what /bin/sh actually is - on macOS it is bash in sh mode).
+        job = Job(
+            name="foo",
+            command="echo [$0]",
+            title="t",
+            branch_prefix="repoactive/",
+            commit_title_prefix="",
+        )
+        result = _run_command(job, tmp_path)
+
+        assert result.output == "[/bin/sh]"
+
+    def test_shell_selects_interpreter(self, tmp_path: Path) -> None:
+        # A configured shell becomes argv[0], so $0 is that interpreter, proving
+        # the command runs under the chosen shell rather than /bin/sh.
+        bash = shutil.which("bash")
+        if bash is None:
+            pytest.skip("bash not available")
+        job = Job(
+            name="foo",
+            command="echo [$0]",
+            title="t",
+            branch_prefix="repoactive/",
+            commit_title_prefix="",
+            shell=bash,
+        )
+        result = _run_command(job, tmp_path)
+
+        assert result.output == f"[{bash}]"
 
 
 class TestJobExtraEnv:

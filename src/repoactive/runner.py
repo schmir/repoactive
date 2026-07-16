@@ -317,6 +317,9 @@ def _spawn(job: Job, cwd: Path, env: dict[str, str]) -> Generator[subprocess.Pop
     proc = subprocess.Popen(
         job.command,
         shell=True,
+        # None keeps subprocess' shell=True default of /bin/sh; a configured shell
+        # runs the command as `<shell> -c <command>` (see Job.shell).
+        executable=job.shell,
         cwd=cwd,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,

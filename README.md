@@ -461,6 +461,10 @@ block.
 - **`timeout`** (default: `"2m"`) - Maximum runtime for a job's command.
   Same format as `cooldown_period`. See
   [Limiting job runtime with `timeout`](#limiting-job-runtime-with-timeout).
+- **`shell`** (default: `/bin/sh`) - Interpreter used to run job commands. A
+  bare name is resolved on `PATH` (e.g. `"bash"`); an absolute path also
+  works. The command runs as `<shell> -c <command>`. Arguments are not
+  allowed - the value must be a single binary.
 
 ### `[job.<name>]`
 
@@ -531,6 +535,9 @@ underscores.
 - **`timeout`** (default: inherited) - Maximum runtime for this job's
   command. Set to `"0s"` to disable the timeout entirely. See
   [Limiting job runtime with `timeout`](#limiting-job-runtime-with-timeout).
+- **`shell`** (default: inherited) - Interpreter used to run this job's
+  command, overriding `job-defaults.shell`. See
+  [`job-defaults.shell`](#job-defaults).
 - **`emits_jobs`** (default: `false`) - Generator job: the command writes
   `*.toml` job fragments into `$RA_JOBS_DIR` instead of producing a diff.
   See [Generating jobs dynamically](#generating-jobs-dynamically).

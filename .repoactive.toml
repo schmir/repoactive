@@ -3,6 +3,7 @@
 [job-defaults]
 branch_prefix = "repoactive/"
 base_branch = "schmir/dev"
+shell = "bash"
 
 # Upgrade every dependency at once in a single MR. Replaced by the per-dependency
 # upgrade-deps generator below; kept here (commented out) as the simpler alternative.
@@ -34,7 +35,7 @@ title = "ci: update pre-commit hooks"
 cooldown_period = "14d"
 
 [job.prek-run-all]
-command = "sh -c 'uvx prek run -a; true'"
+command = "uvx prek run -a || true"
 title = "ci: apply pre-commit fixes"
 depends_on = ["prek-autoupdate"]
 run_only_if_changed = ["prek-autoupdate"]

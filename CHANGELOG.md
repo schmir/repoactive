@@ -2,6 +2,11 @@
 
 ## 0.2.8 - unreleased
 
+- Jobs can now choose the interpreter their command runs under via a `shell`
+  field, settable per job and in `[job-defaults]`. It names a single
+  interpreter binary (a bare name resolved on `PATH` like `bash`, or an
+  absolute path) and runs the command as `<shell> -c <command>`. Unset, it
+  keeps the previous behaviour of `/bin/sh`.
 - Job commands now receive `RA_CONFIG_SOURCE_DIR`, the directory of the
   config file that defined the job's command (a job in
   `.repoactive.d/foo.toml` gets `.repoactive.d`; a job in `.repoactive.toml`

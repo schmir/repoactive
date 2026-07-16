@@ -483,6 +483,43 @@ class TestRequiredApprovals:
         assert resolved.required_approvals == 1
 
 
+class TestShell:
+    def test_bare_name_accepted(self) -> None:
+        job = Job(name="x", command="cmd", title="X", shell="bash")
+        assert job.shell == "bash"
+
+    def test_absolute_path_accepted(self) -> None:
+        job = Job(name="x", command="cmd", title="X", shell="/bin/zsh")
+        assert job.shell == "/bin/zsh"
+
+    def test_none_when_unset(self) -> None:
+        job = Job(name="x", command="cmd", title="X")
+        assert job.shell is None
+
+    @pytest.mark.parametrize("value", ["bash -e", "bash ", " bash", "a\tb", ""])
+    def test_whitespace_rejected(self, value: str) -> None:
+        with pytest.raises(pydantic.ValidationError, match="invalid shell"):
+            Job(name="x", command="cmd", title="X", shell=value)
+
+    def test_rejected_in_defaults(self) -> None:
+        with pytest.raises(pydantic.ValidationError, match="invalid shell"):
+            JobDefaults(shell="bash -e")
+
+    def test_falls_back_to_defaults(self) -> None:
+        job = Job(name="x", command="cmd", title="X")
+        resolved = job.resolve(JobDefaults(shell="bash"))
+        assert resolved.shell == "bash"
+
+    def test_per_job_overrides_defaults(self) -> None:
+        job = Job(name="x", command="cmd", title="X", shell="zsh")
+        resolved = job.resolve(JobDefaults(shell="bash"))
+        assert resolved.shell == "zsh"
+
+    def test_none_when_neither_set(self) -> None:
+        job = Job(name="x", command="cmd", title="X")
+        assert job.resolve(JobDefaults()).shell is None
+
+
 class TestConfigShape:
     def test_missing_tables_default_to_empty(self) -> None:
         shape = ConfigShape.model_validate({})
