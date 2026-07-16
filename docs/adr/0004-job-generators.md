@@ -44,10 +44,10 @@ differences in behavior:
 
 2. **It hands back a job list by writing TOML files into a directory.**
    repoactive creates a fresh empty directory per run and passes its path to
-   the command in the environment variable `REPOACTIVE_JOBS_DIR`. The
-   command writes one or more `*.toml` files there. After the command exits,
-   repoactive loads that directory through the **existing** config machinery
-   — `expand_config_paths` (sorted `*.toml`) and `_merge_jobs`/`Config`
+   the command in the environment variable `RA_JOBS_DIR`. The command writes
+   one or more `*.toml` files there. After the command exits, repoactive
+   loads that directory through the **existing** config machinery —
+   `expand_config_paths` (sorted `*.toml`) and `_merge_jobs`/`Config`
    validation — so a generator's output is validated exactly like a
    checked-in config fragment, `extra="forbid"` and all. Validation errors
    are reported against the generator as their source.

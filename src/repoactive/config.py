@@ -304,7 +304,7 @@ class Job(BaseModel):
     output_in_commit: bool = True
     # When true, the command does not produce a diff to commit; instead it writes
     # one or more *.toml job fragments into the directory named by the
-    # REPOACTIVE_JOBS_DIR environment variable, and those jobs are run in the same
+    # RA_JOBS_DIR environment variable, and those jobs are run in the same
     # invocation. See docs/adr/0004-job-generators.md.
     emits_jobs: bool = False
     # Set by repoactive (never written in config) on jobs produced by a generator:

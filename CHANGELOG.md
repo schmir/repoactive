@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.8 - unreleased
+
+- **Breaking:** the environment variable a generator receives was renamed
+  from `REPOACTIVE_JOBS_DIR` to `RA_JOBS_DIR`. `REPOACTIVE_` is now reserved
+  for variables that configure repoactive; variables repoactive injects into
+  job commands use the `RA_` prefix. A generator script reading the old name
+  must switch to `RA_JOBS_DIR`. See
+  [ADR 0016](docs/adr/0016-injected-env-var-prefix.md).
+
 ## 0.2.7 - 2026-07-13
 
 - A new `required_approvals` field on a job (or in `[job-defaults]`) sets

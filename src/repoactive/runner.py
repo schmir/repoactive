@@ -49,7 +49,7 @@ logger = logging.getLogger(__name__)
 
 # Environment variable naming the directory a generator (``emits_jobs``) command
 # writes its ``*.toml`` job fragments into. See docs/adr/0004-job-generators.md.
-REPOACTIVE_JOBS_DIR_ENV = "REPOACTIVE_JOBS_DIR"
+RA_JOBS_DIR_ENV = "RA_JOBS_DIR"
 
 # Fields an emitted job inherits from its generator when the emitted entry does
 # not set them itself (``tags`` and ``depends_on`` are handled separately because
@@ -245,7 +245,7 @@ def _command_env(
     Starts from the inherited environment (so the command still sees PATH etc.),
     drops the platform token variables (``secret_env_names``) so a command cannot read
     the credential repoactive uses to push/create MRs, then layers on ``extra_env``
-    (e.g. REPOACTIVE_JOBS_DIR for a generator). See
+    (e.g. RA_JOBS_DIR for a generator). See
     docs/adr/0006-job-commands-are-trusted.md.
     """
     env = {k: v for k, v in os.environ.items() if k not in secret_env_names}
@@ -785,7 +785,7 @@ def _run_generator_job(
     """Run a generator and return its emitted jobs (resolved ``job`` required).
 
     The command runs in a fresh workspace on top of ``parents`` with
-    ``REPOACTIVE_JOBS_DIR`` pointing at an empty directory; it writes ``*.toml``
+    ``RA_JOBS_DIR`` pointing at an empty directory; it writes ``*.toml``
     fragments there which are parsed once it exits. The generator itself produces
     no diff: any working-copy change it leaves is discarded (ADR 0004), and a
     no-op ``JobResult`` is recorded so its emitted jobs (which depend on it)
@@ -808,7 +808,7 @@ def _run_generator_job(
                 job,
                 repo.cwd,
                 secret_env_names=ctx.secret_env_names,
-                extra_env={REPOACTIVE_JOBS_DIR_ENV: str(jobs_dir)},
+                extra_env={RA_JOBS_DIR_ENV: str(jobs_dir)},
             )
             specs = _load_job_specs(jobs_dir)
         finally:

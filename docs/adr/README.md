@@ -82,3 +82,7 @@ it.
   then also counts a recent landing of any named job, so once a superset
   lands, the narrower job stays quiet for its `cooldown_period` instead of
   opening a redundant MR. A read-only query, not an extra trailer.
+- [0016 — Injected environment variables use the `RA_` prefix](0016-injected-env-var-prefix.md)
+  — Accepted. `REPOACTIVE_` is reserved for variables repoactive reads to
+  configure itself; variables it injects into job commands use `RA_`.
+  Renames `REPOACTIVE_JOBS_DIR` → `RA_JOBS_DIR` (breaking, no alias).

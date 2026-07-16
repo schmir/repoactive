@@ -73,7 +73,7 @@ def test_main_writes_fragment_to_jobs_dir(tmp_path: Path, monkeypatch: pytest.Mo
     jobs_dir = tmp_path / "jobs"
     jobs_dir.mkdir()
     monkeypatch.chdir(repo)
-    monkeypatch.setenv("REPOACTIVE_JOBS_DIR", str(jobs_dir))
+    monkeypatch.setenv("RA_JOBS_DIR", str(jobs_dir))
 
     assert mod.main() == 0
 
@@ -82,5 +82,5 @@ def test_main_writes_fragment_to_jobs_dir(tmp_path: Path, monkeypatch: pytest.Mo
 
 
 def test_main_fails_without_jobs_dir(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("REPOACTIVE_JOBS_DIR", raising=False)
+    monkeypatch.delenv("RA_JOBS_DIR", raising=False)
     assert mod.main() == 1

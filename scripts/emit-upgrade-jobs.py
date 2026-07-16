@@ -9,7 +9,7 @@ in ``[project.dependencies]``, emits a job named ``upgrade-D`` whose command is
 ``uv lock -P D`` (bump only that one dependency in the lockfile).
 
 repoactive runs this as a generator (a ``[job.<name>]`` with ``emits_jobs =
-true``): it points the ``REPOACTIVE_JOBS_DIR`` environment variable at a
+true``): it points the ``RA_JOBS_DIR`` environment variable at a
 directory this script writes ``*.toml`` job fragments into, and runs the emitted
 jobs in the same invocation. See docs/adr/0004-job-generators.md.
 
@@ -78,10 +78,10 @@ def jobs_document(names: list[str]) -> dict:
 
 
 def main() -> int:
-    jobs_dir = os.environ.get("REPOACTIVE_JOBS_DIR")
+    jobs_dir = os.environ.get("RA_JOBS_DIR")
     if not jobs_dir:
         print(
-            "REPOACTIVE_JOBS_DIR is not set; run this as a repoactive generator "
+            "RA_JOBS_DIR is not set; run this as a repoactive generator "
             "(a [job.<name>] with emits_jobs = true).",
             file=sys.stderr,
         )

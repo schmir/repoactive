@@ -15,7 +15,7 @@ from pydantic import ValidationError
 from repoactive.config import Config, CreateMR, Job, JobDefaults
 from repoactive.jj import JJ
 from repoactive.runner import (
-    REPOACTIVE_JOBS_DIR_ENV,
+    RA_JOBS_DIR_ENV,
     ApplyResult,
     CommandError,
     CommandResult,
@@ -1388,7 +1388,7 @@ class TestRunGeneratorJob:
         # The working copy is abandoned: a generator never produces a diff.
         mock_jj.abandon.assert_called_once_with()
         extra_env = mock_run_command.call_args.kwargs["extra_env"]
-        assert REPOACTIVE_JOBS_DIR_ENV in extra_env
+        assert RA_JOBS_DIR_ENV in extra_env
         assert [j.name for j in emitted] == ["child"]
         assert result.produced_diff is False
 

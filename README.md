@@ -532,8 +532,8 @@ underscores.
   command. Set to `"0s"` to disable the timeout entirely. See
   [Limiting job runtime with `timeout`](#limiting-job-runtime-with-timeout).
 - **`emits_jobs`** (default: `false`) - Generator job: the command writes
-  `*.toml` job fragments into `$REPOACTIVE_JOBS_DIR` instead of producing a
-  diff. See [Generating jobs dynamically](#generating-jobs-dynamically).
+  `*.toml` job fragments into `$RA_JOBS_DIR` instead of producing a diff.
+  See [Generating jobs dynamically](#generating-jobs-dynamically).
 
 ### Stacking MRs
 
@@ -940,8 +940,8 @@ job per package in a monorepo, one per entry in a manifest - and you don't
 want to hand-maintain them. A **generator** is an ordinary `[job.<name>]`
 with `emits_jobs = true`. Instead of producing a diff, its command writes
 one or more `*.toml` job fragments into the directory named by the
-`REPOACTIVE_JOBS_DIR` environment variable, and the jobs it emits run in the
-same invocation.
+`RA_JOBS_DIR` environment variable, and the jobs it emits run in the same
+invocation.
 
 ```toml
 [job.per-package]
@@ -956,7 +956,7 @@ cooldown_period = "7d"
 The command writes fragments using the normal `[job.<name>]` syntax, e.g.
 
 ```toml
-# $REPOACTIVE_JOBS_DIR/pkg-a.toml
+# $RA_JOBS_DIR/pkg-a.toml
 [job.upgrade-pkg-a]
 command = "uv lock --upgrade --package pkg-a"
 title = "build: upgrade pkg-a"
