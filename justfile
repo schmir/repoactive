@@ -44,3 +44,12 @@ docker-smoketest:
 # Update the nix flake lockfile
 update-flake:
     ./scripts/update-flake.sh
+
+# Remove build artifacts, caches, and the virtualenv
+clean:
+    #!/usr/bin/env zsh
+    setopt +O nullglob
+    PS4="  clean: "
+    set -x
+    rm -rf .venv(/) dist(/) htmlcov(/) .coverage(.)
+    rm -rf **/.nox **/.pytest_cache **/.ruff_cache **/.tox **/__pycache__
