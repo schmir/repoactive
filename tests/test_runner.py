@@ -1042,12 +1042,6 @@ class TestResolveGrantedSecrets:
 
 
 class TestStrippedEnvNames:
-    def _make_ctx(self, cfg: Config, selection_jobs: list[Job] | None = None) -> RunContext:
-        return _ctx(
-            config=cfg,
-            selection=JobSelection(jobs=selection_jobs or [], refreshed=frozenset()),
-        )
-
     def test_unions_platform_tokens_and_marked_secrets(self) -> None:
         cfg = Config.model_validate(
             {
@@ -1058,23 +1052,31 @@ class TestStrippedEnvNames:
                 "jobs": [{"name": "a", "command": "c", "title": "t", "secret_env": ["FOO"]}],
             }
         )
-        assert self._make_ctx(cfg).stripped_env_names == frozenset({"GL_TOK", "DEF_SECRET", "FOO"})
+        ctx = _ctx(config=cfg, selection=JobSelection(jobs=[], refreshed=frozenset()))
+        assert ctx.stripped_env_names == frozenset({"GL_TOK", "DEF_SECRET", "FOO"})
 
-    def test_includes_secrets_granted_by_emitted_jobs(self) -> None:
-        # A generator-emitted job is spliced into selection.jobs; a secret it
-        # grants must be marked too, so a non-granting job never inherits it.
+    def test_job_may_deliberately_grant_a_platform_token(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A job may opt back into a platform token by naming it in its own
+        # secret_env (ADR 0006 / ADR 0017). The token stays stripped from the
+        # base environment (so other jobs never see it) but is injected for the
+        # granting job. Config validation does not reject this - it is a
+        # deliberate opt-in.
+        monkeypatch.setenv("GITLAB_TOKEN", "push-cred")
         cfg = Config.model_validate(
             {
                 "platform": [
-                    {"url": "https://gitlab.com", "type": "gitlab", "token_env": "GL_TOK"}
+                    {"url": "https://gitlab.com", "type": "gitlab", "token_env": "GITLAB_TOKEN"}
                 ],
-                "jobs": [{"name": "a", "command": "c", "title": "t"}],
+                "jobs": [
+                    {"name": "a", "command": "c", "title": "t", "secret_env": ["GITLAB_TOKEN"]}
+                ],
             }
         )
-        emitted = Job(name="gen-1", command="c", title="t", secret_env=["EMITTED_SECRET"])
-        assert self._make_ctx(cfg, [emitted]).stripped_env_names == frozenset(
-            {"GL_TOK", "EMITTED_SECRET"}
-        )
+        ctx = _ctx(config=cfg, selection=JobSelection(jobs=[], refreshed=frozenset()))
+        assert "GITLAB_TOKEN" in ctx.stripped_env_names
+        assert _resolve_granted_secrets(cfg.jobs[0]) == {"GITLAB_TOKEN": "push-cred"}
 
 
 class TestRunJob:
@@ -1652,6 +1654,30 @@ class TestBuildGeneratedJobs:
                 specs={"child": {"command": "c", "title": "T", "bogus": 1}},
                 run_names={"gen"},
                 all_config_names=set(),
+            )
+
+    def test_secret_env_marked_in_static_config_allowed(self) -> None:
+        # An emitted job may grant a secret the static config already marked.
+        [job] = _build_generated_jobs(
+            generator=_gen(),
+            specs={"child": {"command": "c", "title": "Child", "secret_env": ["FOO"]}},
+            run_names={"gen"},
+            all_config_names=set(),
+            marked_secret_names=frozenset({"FOO"}),
+        )
+        assert job.secret_env == ["FOO"]
+
+    def test_secret_env_not_marked_in_static_config_raises(self) -> None:
+        # A secret first introduced by an emitted job would not be stripped from
+        # the other jobs' environments (the strip set is static-config derived),
+        # so it is rejected (ADR 0017).
+        with pytest.raises(GeneratedJobError, match="not marked in the static config"):
+            _build_generated_jobs(
+                generator=_gen(),
+                specs={"child": {"command": "c", "title": "Child", "secret_env": ["FOO"]}},
+                run_names={"gen"},
+                all_config_names=set(),
+                marked_secret_names=frozenset(),
             )
 
 

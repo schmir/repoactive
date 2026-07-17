@@ -252,12 +252,8 @@ class RunContext:
         # Names removed from every job command's base environment: the platform
         # tokens (ADR 0006) plus every marked secret (ADR 0017). A job reads a
         # marked secret back only by granting it in its own secret_env; see
-        # _resolve_granted_secrets. selection.jobs includes generator-emitted
-        # jobs, so a secret an emitted job grants is marked too.
-        names = self.config.token_env_names() | self.config.marked_secret_names()
-        for job in self.selection.jobs:
-            names.update(job.secret_env)
-        return frozenset(names)
+        # _resolve_granted_secrets.
+        return frozenset(self.config.token_env_names() | self.config.marked_secret_names())
 
 
 def _compute_parents(job: Job, results: dict[str, JobResult]) -> list[str]:
@@ -649,16 +645,23 @@ def _load_job_specs(jobs_dir: Path) -> dict[str, dict]:
     return specs
 
 
-def _build_generated_job(
-    *, generator: Job, name: str, spec: dict, run_names: set[str], all_config_names: set[str]
+def _build_generated_job(  # noqa: PLR0913
+    *,
+    generator: Job,
+    name: str,
+    spec: dict,
+    run_names: set[str],
+    all_config_names: set[str],
+    marked_secret_names: frozenset[str],
 ) -> Job:
     """Build one emitted ``Job`` from its raw spec, applying inheritance.
 
     ``name`` is the spec's table key. The job inherits the (resolved) generator's
     tags, ``depends_on`` and the ``_INHERITED_FIELDS`` unless the spec overrides
     them, and records the generator in ``generated_by``. Raises GeneratedJobError
-    on a name colliding with an existing job, a nested generator, or a job that
-    fails validation.
+    on a name colliding with an existing job, a nested generator, a job that
+    fails validation, or a ``secret_env`` naming a secret the static config did
+    not already mark (``marked_secret_names``).
     """
     if name in run_names or name in all_config_names:
         raise GeneratedJobError(
@@ -680,13 +683,32 @@ def _build_generated_job(
     # meaningful config location is the generator's own config source.
     merged["config_source_dir"] = generator.config_source_dir
     try:
-        return Job.model_validate(merged)
+        job = Job.model_validate(merged)
     except ValidationError as e:
         raise GeneratedJobError(generator.name, f"emitted job {name!r} is invalid: {e}") from e
+    # A generated job may only grant secrets the static config already marked. The
+    # env strip set is derived from the static config (RunContext.stripped_env_names),
+    # so a secret first introduced by an emitted job would not be stripped from the
+    # other jobs' environments; requiring it be marked up front (e.g. in
+    # [job-defaults].secret_env or on the generator) keeps a secret out of every job
+    # that did not grant it. See docs/adr/0017-secret-env-redaction.md.
+    unmarked = sorted(set(job.secret_env) - marked_secret_names)
+    if unmarked:
+        raise GeneratedJobError(
+            generator.name,
+            f"emitted job {name!r} grants secret(s) not marked in the static config: "
+            f"{unmarked}; add them to [job-defaults].secret_env or the generator's secret_env",
+        )
+    return job
 
 
 def _build_generated_jobs(
-    *, generator: Job, specs: dict[str, dict], run_names: set[str], all_config_names: set[str]
+    *,
+    generator: Job,
+    specs: dict[str, dict],
+    run_names: set[str],
+    all_config_names: set[str],
+    marked_secret_names: frozenset[str] = frozenset(),
 ) -> list[Job]:
     """Turn a generator's raw specs into validated ``Job`` objects.
 
@@ -703,6 +725,7 @@ def _build_generated_jobs(
             spec=spec,
             run_names=run_names,
             all_config_names=all_config_names,
+            marked_secret_names=marked_secret_names,
         )
         for name, spec in specs.items()
     ]
@@ -929,6 +952,7 @@ def _run_generator_job(
         specs=specs,
         run_names={j.name for j in ctx.selection.jobs},
         all_config_names={j.name for j in ctx.config.jobs},
+        marked_secret_names=frozenset(ctx.config.marked_secret_names()),
     )
 
     names = ", ".join(j.name for j in emitted) if emitted else "none"

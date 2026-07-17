@@ -83,9 +83,12 @@ avenues.
 - `output_in_commit` and similar conveniences can stay simple; they are not
   attack surface under this model.
 - Job commands cannot read `platform.token_env` (or any configured
-  platform's token variable) from their environment. A job that legitimately
-  needs a credential must be given its own, separate one — not the
-  repoactive platform token.
+  platform's token variable) from their environment by default. A job that
+  legitimately needs a credential should be given its own, separate one. A
+  job may, however, deliberately opt back into the platform token by naming
+  it in its own `secret_env` ([ADR 0017](0017-secret-env-redaction.md)): the
+  strip here is the safe default against a careless command, not a barrier
+  against a job that explicitly asks.
 - If you ever need to run genuinely untrusted commands, this assumption no
   longer holds and isolation must be added around repoactive (containers,
   restricted users, etc.); the token-stripping above is not a substitute for

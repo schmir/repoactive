@@ -803,6 +803,17 @@ obscurely later. Secret **values** must never be written in config - a
 your environment (or your CI's secret store) supplies the values. The `RA_`
 and `REPOACTIVE_` prefixes are reserved and rejected.
 
+A [generated job](#generating-jobs-dynamically) may only grant a secret that
+the static config already marks; an emitted `secret_env` naming a variable
+no static job or `[job-defaults]` marked is rejected. Mark such a secret up
+front in `[job-defaults].secret_env` (or on the generator), and the emitted
+jobs grant it.
+
+A platform's `token_env` is normally stripped from every command
+([the platform token](#platformname) is kept out of jobs). A job that
+genuinely needs it can opt back in by naming that variable in its own
+`secret_env`; only that job then receives it.
+
 > **Note:** `secret_env` scopes _which jobs_ can read a secret. It does not
 > yet redact secret values from a command's captured output, so a command
 > that echoes a secret it was granted can still write it into the commit

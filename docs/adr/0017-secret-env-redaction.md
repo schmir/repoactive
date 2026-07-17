@@ -118,6 +118,22 @@ in a job that did not ask for it, even via defaults.
 - **Validation:** each entry must match the environment-variable-name
   grammar, and the reserved `RA_` and `REPOACTIVE_` prefixes
   ([ADR 0016](0016-injected-env-var-prefix.md)) are rejected.
+- **Platform tokens are grantable, deliberately:** a job may name a platform
+  `token_env` ([ADR 0006](0006-job-commands-are-trusted.md)) in its own
+  `secret_env`, and doing so injects that token back for that job. The ADR
+  0006 strip is the safe **default** against a careless command, not a wall;
+  an explicit grant is a considered opt-in, so a job that genuinely needs
+  the platform credential can ask for it. The scoping still holds: only the
+  granting job gets it, every other job's environment keeps the token
+  stripped.
+- **Generated jobs:** the marked set is derived from the static config, but
+  a [generator](0004-job-generators.md) discovers jobs mid-run. So a job it
+  emits may only grant secrets the static config already marked; an emitted
+  `secret_env` naming an unmarked variable is rejected. Otherwise a secret a
+  generated job first introduced would not be stripped from the jobs that
+  ran before it, breaking the invariant. The fix for the operator: mark the
+  shared secret up front in `[job-defaults].secret_env` (or on the
+  generator), then the emitted fragments grant it.
 - **Companion, separate concern:** a non-secret `env` map (static literals
   written in config) is deliberately _not_ part of this decision. When both
   exist the rule reads cleanly: literals go in `env`, secret names go in
