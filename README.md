@@ -29,6 +29,7 @@ and (with `--mode publish`) the full MR lifecycle.
   - [`[platform.<name>]`](#platformname)
   - [Config file locations](#config-file-locations)
   - [Variables passed to job commands](#variables-passed-to-job-commands)
+  - [Passing secrets to commands with `secret_env`](#passing-secrets-to-commands-with-secret_env)
   - [Overriding values on the command line](#overriding-values-on-the-command-line)
 - [Selecting jobs with tags](#selecting-jobs-with-tags)
   - [Keeping unmerged branches current](#keeping-unmerged-branches-current)
@@ -467,6 +468,14 @@ block.
   works. The command runs as `<shell> -c <command>`. Arguments are not
   allowed - the value must be a single binary.
 
+**Secrets:**
+
+- **`secret_env`** (default: `[]`) - Names of environment variables to mark
+  as secrets config-wide. Each marked name is stripped from every job
+  command's environment, but a job still reads one only by listing it in its
+  own `secret_env`; `job-defaults` marks names, it does not grant them. See
+  [Passing secrets to commands with `secret_env`](#passing-secrets-to-commands-with-secret_env).
+
 ### `[job.<name>]`
 
 The table key is the job's unique name; the branch is always
@@ -542,6 +551,14 @@ underscores.
 - **`emits_jobs`** (default: `false`) - Generator job: the command writes
   `*.toml` job fragments into `$RA_JOBS_DIR` instead of producing a diff.
   See [Generating jobs dynamically](#generating-jobs-dynamically).
+
+**Secrets:**
+
+- **`secret_env`** (default: `[]`) - Names of environment variables holding
+  secrets this job's command may read. A marked name is stripped from every
+  command's environment; only a job that lists it here has it injected back
+  for its own command. See
+  [Passing secrets to commands with `secret_env`](#passing-secrets-to-commands-with-secret_env).
 
 ### Stacking MRs
 
@@ -742,6 +759,55 @@ The value is the config file's real location on disk, so it is the same
 whether the file was discovered automatically or named with `-c`. A command
 whose value came from a `--set` override has no config file, so
 `RA_CONFIG_SOURCE_DIR` is unset for it.
+
+### Passing secrets to commands with `secret_env`
+
+A job command inherits `repoactive`'s environment, so a secret exported
+before the run (an LLM key, a registry token) reaches it. Left unmanaged
+that secret reaches **every** job, whether it needs it or not. `secret_env`
+scopes secrets to the jobs that ask for them.
+
+The field separates two things:
+
+- **Marking** - naming a variable in _any_ `secret_env` (a job's or
+  `[job-defaults]`') marks it a secret and **removes it from every job
+  command's environment**.
+- **Granting** - a job reads a marked secret back only by listing it in
+  **its own** `secret_env`. `[job-defaults].secret_env` marks names but
+  grants to no job.
+
+So a secret is present only in the jobs that name it, never ambient:
+
+```toml
+[job-defaults]
+secret_env = ["OPENAI_API_KEY"]
+
+[job.rewrite-docs]
+command = "./llm-rewrite.sh"
+title = "docs: rewrite with the LLM"
+secret_env = ["OPENAI_API_KEY"]
+
+[job.format]
+command = "treefmt"
+title = "format the tree"
+```
+
+Here `OPENAI_API_KEY` is marked in `[job-defaults]`, so `format` (which does
+not grant it) runs without it in its environment; only `rewrite-docs`, which
+lists it in its own `secret_env`, can read it.
+
+A job that grants a secret which is **unset** in `repoactive`'s environment
+fails at its start with a clear error, rather than letting the command fail
+obscurely later. Secret **values** must never be written in config - a
+`.repoactive.toml` is checked into the repo; `secret_env` names variables,
+your environment (or your CI's secret store) supplies the values. The `RA_`
+and `REPOACTIVE_` prefixes are reserved and rejected.
+
+> **Note:** `secret_env` scopes _which jobs_ can read a secret. It does not
+> yet redact secret values from a command's captured output, so a command
+> that echoes a secret it was granted can still write it into the commit
+> message. Avoid printing granted secrets. See
+> [ADR 0017](docs/adr/0017-secret-env-redaction.md).
 
 ### Overriding values on the command line
 

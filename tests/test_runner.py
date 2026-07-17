@@ -26,6 +26,7 @@ from repoactive.runner import (
     CommandResult,
     GeneratedJobError,
     JobResult,
+    MissingSecretError,
     RunContext,
     RunMode,
     RunSummary,
@@ -37,6 +38,7 @@ from repoactive.runner import (
     _job_extra_env,
     _load_job_specs,
     _prepare_repo,
+    _resolve_granted_secrets,
     _run_command,
     _run_generator_job,
     _spawn,
@@ -795,7 +797,7 @@ class TestRunCommand:
             branch_prefix="repoactive/",
             commit_title_prefix="",
         )
-        result = _run_command(job, tmp_path, secret_env_names=frozenset({"GITHUB_TOKEN"}))
+        result = _run_command(job, tmp_path, stripped_env_names=frozenset({"GITHUB_TOKEN"}))
 
         assert "token=[unset]" in result.output
         assert "supersecret" not in result.output
@@ -816,6 +818,60 @@ class TestRunCommand:
         result = _run_command(job, tmp_path)
 
         assert result.output == "[visible]"
+
+    def test_granted_secret_injected_into_command(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A secret the job grants (lists in its own secret_env) is stripped from
+        # the base environment as a marked name, then injected back for this
+        # command, so the command sees its value (ADR 0017).
+        monkeypatch.setenv("MY_SECRET", "s3cr3t")
+        job = Job(
+            name="foo",
+            command="echo [${MY_SECRET:-unset}]",
+            title="t",
+            branch_prefix="repoactive/",
+            commit_title_prefix="",
+            secret_env=["MY_SECRET"],
+        )
+        result = _run_command(job, tmp_path, stripped_env_names=frozenset({"MY_SECRET"}))
+
+        assert result.output == "[s3cr3t]"
+
+    def test_marked_secret_stripped_from_non_granting_job(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A marked secret this job does not grant stays stripped: it is in
+        # stripped_env_names but not in the job's own secret_env, so it is never
+        # injected back and the command sees it unset (ADR 0017).
+        monkeypatch.setenv("MY_SECRET", "s3cr3t")
+        job = Job(
+            name="foo",
+            command="echo [${MY_SECRET:-unset}]",
+            title="t",
+            branch_prefix="repoactive/",
+            commit_title_prefix="",
+        )
+        result = _run_command(job, tmp_path, stripped_env_names=frozenset({"MY_SECRET"}))
+
+        assert result.output == "[unset]"
+        assert "s3cr3t" not in result.output
+
+    def test_missing_granted_secret_raises_before_running(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A granted secret that is unset fails fast, before the command runs.
+        monkeypatch.delenv("MY_SECRET", raising=False)
+        job = Job(
+            name="foo",
+            command="echo should-not-run",
+            title="t",
+            branch_prefix="repoactive/",
+            commit_title_prefix="",
+            secret_env=["MY_SECRET"],
+        )
+        with pytest.raises(MissingSecretError, match="requires secret MY_SECRET, not set"):
+            _run_command(job, tmp_path, stripped_env_names=frozenset({"MY_SECRET"}))
 
     def test_config_source_dir_visible_to_command(self, tmp_path: Path) -> None:
         # A job with a config_source_dir sees it as RA_CONFIG_SOURCE_DIR.
@@ -963,6 +1019,62 @@ class TestJobExtraEnv:
             RA_JOB_BRANCH_ENV: "repoactive/foo",
             RA_JOB_BASE_BRANCH_ENV: "trunk()",
         }
+
+
+class TestResolveGrantedSecrets:
+    def test_reads_granted_values_from_environment(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("A_SECRET", "one")
+        monkeypatch.setenv("B_SECRET", "two")
+        job = Job(name="foo", command="c", title="t", secret_env=["A_SECRET", "B_SECRET"])
+        assert _resolve_granted_secrets(job) == {"A_SECRET": "one", "B_SECRET": "two"}
+
+    def test_empty_without_secret_env(self) -> None:
+        assert _resolve_granted_secrets(Job(name="foo", command="c", title="t")) == {}
+
+    def test_raises_on_first_unset_granted_secret(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("A_SECRET", raising=False)
+        job = Job(name="foo", command="c", title="t", secret_env=["A_SECRET"])
+        with pytest.raises(
+            MissingSecretError, match="requires secret A_SECRET, not set"
+        ) as excinfo:
+            _resolve_granted_secrets(job)
+        assert excinfo.value.name == "A_SECRET"
+
+
+class TestStrippedEnvNames:
+    def _make_ctx(self, cfg: Config, selection_jobs: list[Job] | None = None) -> RunContext:
+        return _ctx(
+            config=cfg,
+            selection=JobSelection(jobs=selection_jobs or [], refreshed=frozenset()),
+        )
+
+    def test_unions_platform_tokens_and_marked_secrets(self) -> None:
+        cfg = Config.model_validate(
+            {
+                "platform": [
+                    {"url": "https://gitlab.com", "type": "gitlab", "token_env": "GL_TOK"}
+                ],
+                "job-defaults": {"secret_env": ["DEF_SECRET"]},
+                "jobs": [{"name": "a", "command": "c", "title": "t", "secret_env": ["FOO"]}],
+            }
+        )
+        assert self._make_ctx(cfg).stripped_env_names == frozenset({"GL_TOK", "DEF_SECRET", "FOO"})
+
+    def test_includes_secrets_granted_by_emitted_jobs(self) -> None:
+        # A generator-emitted job is spliced into selection.jobs; a secret it
+        # grants must be marked too, so a non-granting job never inherits it.
+        cfg = Config.model_validate(
+            {
+                "platform": [
+                    {"url": "https://gitlab.com", "type": "gitlab", "token_env": "GL_TOK"}
+                ],
+                "jobs": [{"name": "a", "command": "c", "title": "t"}],
+            }
+        )
+        emitted = Job(name="gen-1", command="c", title="t", secret_env=["EMITTED_SECRET"])
+        assert self._make_ctx(cfg, [emitted]).stripped_env_names == frozenset(
+            {"GL_TOK", "EMITTED_SECRET"}
+        )
 
 
 class TestRunJob:

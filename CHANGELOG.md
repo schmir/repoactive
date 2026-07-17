@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.3.1 - unreleased
+
+- Jobs can now declare the secrets their command may read with a new
+  `secret_env` field (also settable in `[job-defaults]`). A variable named
+  in any `secret_env` is marked a secret and stripped from every job
+  command's environment; a job reads it back only by listing it in its own
+  `secret_env`, so a secret is never present in a job that did not ask for
+  it. `[job-defaults].secret_env` marks names config-wide but grants them to
+  no job. A job that grants a secret unset in repoactive's environment fails
+  fast with a clear error. Names must be valid environment-variable names
+  and may not use the reserved `RA_`/`REPOACTIVE_` prefixes. Redacting
+  secret values from a command's captured output is deferred to a later
+  change; see [ADR 0017](docs/adr/0017-secret-env-redaction.md).
+
 ## 0.3.0 - 2026-07-17
 
 - `base_branch` may now be a jj revset expression such as `trunk()`,

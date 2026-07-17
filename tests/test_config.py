@@ -332,9 +332,53 @@ class TestJobDefaults:
         # Every JobDefaults field must be wired into Job.resolve: either as a
         # fallback field in _DEFAULTED_FIELDS or as the special-cased labels
         # merge. Fails loudly when a new JobDefaults field is added without
-        # updating resolve.
-        assert set(_DEFAULTED_FIELDS) | {"labels"} == set(JobDefaults.model_fields)
+        # updating resolve. secret_env is deliberately excluded: it marks names
+        # config-wide but is never inherited into a job (ADR 0017), so resolve
+        # does not touch it.
+        assert set(_DEFAULTED_FIELDS) | {"labels", "secret_env"} == set(JobDefaults.model_fields)
         assert set(_DEFAULTED_FIELDS) <= set(Job.model_fields)
+
+
+class TestSecretEnv:
+    @pytest.mark.parametrize("name", ["FOO", "OPENAI_API_KEY", "_private", "a1", "X"])
+    def test_valid_names_accepted(self, name: str) -> None:
+        job = Job(name="x", command="cmd", title="T", secret_env=[name])
+        assert job.secret_env == [name]
+
+    @pytest.mark.parametrize("name", ["1FOO", "foo-bar", "foo bar", "foo.bar", ""])
+    def test_invalid_names_rejected(self, name: str) -> None:
+        with pytest.raises(ValueError, match="invalid secret_env name"):
+            Job(name="x", command="cmd", title="T", secret_env=[name])
+
+    @pytest.mark.parametrize("name", ["RA_FOO", "REPOACTIVE_UI"])
+    def test_reserved_prefixes_rejected(self, name: str) -> None:
+        with pytest.raises(ValueError, match="reserved for repoactive"):
+            Job(name="x", command="cmd", title="T", secret_env=[name])
+
+    def test_reserved_prefixes_rejected_in_job_defaults(self) -> None:
+        with pytest.raises(ValueError, match="reserved for repoactive"):
+            JobDefaults(secret_env=["RA_JOBS_DIR"])
+
+    def test_defaults_to_empty(self) -> None:
+        assert Job(name="x", command="cmd", title="T").secret_env == []
+        assert JobDefaults().secret_env == []
+
+    def test_marked_secret_names_unions_defaults_and_jobs(self) -> None:
+        cfg = _config(
+            jobs=[_job("a", secret_env=["FOO"]), _job("b", secret_env=["BAR", "FOO"])],
+            **{"job-defaults": {"secret_env": ["BAZ"]}},
+        )
+        assert cfg.marked_secret_names() == {"FOO", "BAR", "BAZ"}
+
+    def test_marked_secret_names_empty_by_default(self) -> None:
+        assert _config(jobs=[_job("a")]).marked_secret_names() == set()
+
+    def test_job_defaults_secret_env_marks_but_is_not_inherited(self) -> None:
+        # [job-defaults].secret_env marks names config-wide (so marked_secret_names
+        # includes them) but is never granted/inherited into a job (ADR 0017).
+        cfg = _config(jobs=[_job("a")], **{"job-defaults": {"secret_env": ["FOO"]}})
+        assert cfg.marked_secret_names() == {"FOO"}
+        assert cfg._resolved_jobs()[0].secret_env == []
 
 
 class TestParseInterval:

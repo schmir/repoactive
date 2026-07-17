@@ -33,6 +33,10 @@ logger = logging.getLogger(__name__)
 _DURATION_RE = re.compile(r"^(\d+)([smhdw])$")
 _JOB_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 _TAG_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+# Environment-variable name grammar for secret_env entries. The RA_ and
+# REPOACTIVE_ prefixes are repoactive's own (ADR 0016) and are rejected.
+_ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_RESERVED_ENV_PREFIXES = ("RA_", "REPOACTIVE_")
 # An empty prefix is allowed (branch name == job name); hence * not +.
 _BRANCH_PREFIX_RE = re.compile(r"^(?!/)(?!.*//)[a-zA-Z0-9_\-/]*$")
 _DURATION_UNITS = {"s": "seconds", "m": "minutes", "h": "hours", "d": "days", "w": "weeks"}
@@ -89,6 +93,27 @@ class InvalidTagError(ValueError):
 
     def __init__(self, tag: str) -> None:
         super().__init__(f"invalid tag {tag!r}: only letters, digits, '-', and '_' are allowed")
+
+
+class InvalidSecretEnvNameError(ValueError):
+    """Raised when a secret_env entry is not a valid environment-variable name."""
+
+    def __init__(self, name: str) -> None:
+        super().__init__(
+            f"invalid secret_env name {name!r}: must be a valid environment-variable name "
+            "(letters, digits, and '_', not starting with a digit)"
+        )
+
+
+class ReservedSecretEnvNameError(ValueError):
+    """Raised when a secret_env entry uses a prefix reserved for repoactive."""
+
+    def __init__(self, name: str) -> None:
+        super().__init__(
+            f"invalid secret_env name {name!r}: the "
+            f"{' and '.join(_RESERVED_ENV_PREFIXES)} prefixes are reserved for repoactive "
+            "(see docs/adr/0016-injected-env-var-prefix.md)"
+        )
 
 
 class NewlineInTitleError(ValueError):
@@ -278,9 +303,19 @@ def _validate_single_line(value: str, info: ValidationInfo) -> str:
     return value
 
 
+def _validate_secret_env(value: list[str]) -> list[str]:
+    for name in value:
+        if not _ENV_NAME_RE.match(name):
+            raise InvalidSecretEnvNameError(name)
+        if name.startswith(_RESERVED_ENV_PREFIXES):
+            raise ReservedSecretEnvNameError(name)
+    return value
+
+
 _BranchPrefix = Annotated[str, AfterValidator(_validate_branch_prefix)]
 _Duration = Annotated[str, AfterValidator(_validate_duration)]
 _Shell = Annotated[str, AfterValidator(_validate_shell)]
+_SecretEnv = Annotated[list[str], AfterValidator(_validate_secret_env)]
 # Titles and title prefixes end up in commit subjects and MR titles, which are
 # single-line by nature.
 _SingleLine = Annotated[str, AfterValidator(_validate_single_line)]
@@ -306,6 +341,12 @@ class JobDefaults(BaseModel):
     # `<shell> -c <command>`. None means /bin/sh (the shell=True default). May be a
     # bare name resolved on PATH (e.g. "bash") or an absolute path.
     shell: _Shell | None = None
+    # Names of environment variables to mark as secrets config-wide: each is
+    # stripped from every job command's environment, but a job still reads one
+    # only by listing it in its own secret_env. Marks names, never grants them;
+    # deliberately not inherited into jobs like the defaulted fields above. See
+    # docs/adr/0017-secret-env-redaction.md.
+    secret_env: _SecretEnv = Field(default_factory=list)
 
 
 # Fields Job.resolve fills in from JobDefaults when the job does not set them
@@ -328,6 +369,12 @@ class Job(BaseModel):
 
     name: str
     command: str
+    # Names of environment variables holding secrets this job's command may read.
+    # A name listed in any secret_env (here, another job's, or job-defaults') is
+    # stripped from every command's base environment; only a job that lists a name
+    # here has that variable injected back for its own command. See
+    # docs/adr/0017-secret-env-redaction.md.
+    secret_env: _SecretEnv = Field(default_factory=list)
     title: _SingleLine
     description: str | None = None
     base_branch: str | None = None
@@ -588,6 +635,19 @@ class Config(BaseModel):
         docs/adr/0006-job-commands-are-trusted.md).
         """
         return {p.token_env for p in self.platforms}
+
+    def marked_secret_names(self) -> set[str]:
+        """Names marked as managed secrets: every secret_env in the merged config.
+
+        The union of ``job-defaults`` and every job's ``secret_env``. A marked
+        name is stripped from every job command's base environment; a job reads
+        it back only by listing it in its own ``secret_env`` (see
+        runner._run_command and docs/adr/0017-secret-env-redaction.md).
+        """
+        names = set(self.job_defaults.secret_env)
+        for job in self.jobs:
+            names.update(job.secret_env)
+        return names
 
 
 class ConfigShape(BaseModel):

@@ -21,6 +21,13 @@
           "title": "Command",
           "type": "string"
         },
+        "secret_env": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Secret Env",
+          "type": "array"
+        },
         "title": {
           "title": "Title",
           "type": "string"
@@ -335,6 +342,13 @@
           ],
           "default": null,
           "title": "Shell"
+        },
+        "secret_env": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Secret Env",
+          "type": "array"
         }
       },
       "title": "JobDefaults",

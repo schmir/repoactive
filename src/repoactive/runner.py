@@ -130,6 +130,18 @@ class CommandError(RuntimeError):
         self.elapsed = elapsed
 
 
+class MissingSecretError(RuntimeError):
+    """A job granted a secret_env variable that is unset in repoactive's environment.
+
+    Raised before the command runs so the failure is legible (ADR 0017) instead
+    of surfacing as an obscure command error later.
+    """
+
+    def __init__(self, name: str) -> None:
+        super().__init__(f"requires secret {name}, not set")
+        self.name = name
+
+
 class GeneratedJobError(ValueError):
     """Raised when a generator emits an invalid job set.
 
@@ -236,10 +248,16 @@ class RunContext:
     plan: UpdatePlan = field(default_factory=UpdatePlan)
 
     @property
-    def secret_env_names(self) -> frozenset[str]:
-        # Token vars stripped from every job command's environment so a command
-        # cannot read the credential repoactive uses to push/create MRs.
-        return frozenset(self.config.token_env_names())
+    def stripped_env_names(self) -> frozenset[str]:
+        # Names removed from every job command's base environment: the platform
+        # tokens (ADR 0006) plus every marked secret (ADR 0017). A job reads a
+        # marked secret back only by granting it in its own secret_env; see
+        # _resolve_granted_secrets. selection.jobs includes generator-emitted
+        # jobs, so a secret an emitted job grants is marked too.
+        names = self.config.token_env_names() | self.config.marked_secret_names()
+        for job in self.selection.jobs:
+            names.update(job.secret_env)
+        return frozenset(names)
 
 
 def _compute_parents(job: Job, results: dict[str, JobResult]) -> list[str]:
@@ -268,20 +286,42 @@ def _kill_process_group(proc: subprocess.Popen[str]) -> None:
 
 
 def _command_env(
-    *, extra_env: dict[str, str] | None, secret_env_names: frozenset[str]
+    *,
+    extra_env: dict[str, str] | None,
+    stripped_env_names: frozenset[str],
+    granted_secret_env: dict[str, str] | None = None,
 ) -> dict[str, str]:
     """Build the environment a job command runs in.
 
     Starts from the inherited environment (so the command still sees PATH etc.),
-    drops the platform token variables (``secret_env_names``) so a command cannot read
-    the credential repoactive uses to push/create MRs, then layers on ``extra_env``
-    (e.g. RA_JOBS_DIR for a generator). See
-    docs/adr/0006-job-commands-are-trusted.md.
+    drops ``stripped_env_names`` (the platform tokens of ADR 0006 plus every
+    marked secret of ADR 0017), injects back only the secrets this job granted
+    (``granted_secret_env``), then layers on ``extra_env`` (the RA_* variables,
+    e.g. RA_JOBS_DIR for a generator) last so repoactive's own variables win.
     """
-    env = {k: v for k, v in os.environ.items() if k not in secret_env_names}
+    env = {k: v for k, v in os.environ.items() if k not in stripped_env_names}
+    if granted_secret_env:
+        env.update(granted_secret_env)
     if extra_env:
         env.update(extra_env)
     return env
+
+
+def _resolve_granted_secrets(job: Job) -> dict[str, str]:
+    """Values for the secrets ``job`` grants, read from repoactive's own environment.
+
+    Only the names in the job's own ``secret_env`` are granted; ``job-defaults``
+    marks names but grants to no job (ADR 0017). Raises MissingSecretError on the
+    first granted name that is unset, so a misconfigured job fails legibly before
+    its command runs rather than deep inside it.
+    """
+    granted: dict[str, str] = {}
+    for name in job.secret_env:
+        try:
+            granted[name] = os.environ[name]
+        except KeyError:
+            raise MissingSecretError(name) from None
+    return granted
 
 
 def _job_extra_env(job: Job, extra: dict[str, str] | None = None) -> dict[str, str]:
@@ -375,15 +415,18 @@ def _run_command(
     job: Job,
     cwd: Path,
     *,
-    secret_env_names: frozenset[str] = frozenset(),
+    stripped_env_names: frozenset[str] = frozenset(),
     extra_env: dict[str, str] | None = None,
 ) -> CommandResult:
     start = time.monotonic()
+    # Fail before the command runs if a granted secret is unset (ADR 0017).
+    granted_secret_env = _resolve_granted_secrets(job)
     # The workspace is always cwd, but expose it explicitly so a command that
     # cd's elsewhere can still find the workspace repoactive prepared for it.
     env = _command_env(
         extra_env={**(extra_env or {}), RA_WORKSPACE_DIR_ENV: str(cwd)},
-        secret_env_names=secret_env_names,
+        stripped_env_names=stripped_env_names,
+        granted_secret_env=granted_secret_env,
     )
 
     # Stream the merged stdout/stderr line by line: keep the full output (needed
@@ -558,7 +601,7 @@ def run_job(
             command_result = _run_command(
                 job,
                 repo.cwd,
-                secret_env_names=ctx.secret_env_names,
+                stripped_env_names=ctx.stripped_env_names,
                 extra_env=_job_extra_env(job),
             )
         except CommandError:
@@ -872,7 +915,7 @@ def _run_generator_job(
             _run_command(
                 job,
                 repo.cwd,
-                secret_env_names=ctx.secret_env_names,
+                stripped_env_names=ctx.stripped_env_names,
                 extra_env=_job_extra_env(job, {RA_JOBS_DIR_ENV: str(jobs_dir)}),
             )
             specs = _load_job_specs(jobs_dir)
