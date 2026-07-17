@@ -86,3 +86,18 @@ it.
   — Accepted. `REPOACTIVE_` is reserved for variables repoactive reads to
   configure itself; variables it injects into job commands use `RA_`.
   Renames `REPOACTIVE_JOBS_DIR` → `RA_JOBS_DIR` (breaking, no alias).
+- [0017 — Declare command secrets with `secret_env`](0017-secret-env-redaction.md)
+  — Accepted (Phase 1 implemented; Phase 2 redaction deferred). A name in
+  any `secret_env` is marked a managed secret and stripped from the base
+  environment; a job reads it only by granting it in its own `secret_env`,
+  while `[job-defaults]` marks names but grants to no job, so a secret is
+  never present in a job that did not ask for it. Generalizes the
+  platform-token strip of ADR 0006. Redacting secret values from captured
+  output is deferred to Phase 2.
+- [0018 — A non-secret `env` map for commands](0018-non-secret-env-map.md) —
+  Proposed, deferred. The mirror of `secret_env` (0017) for static
+  non-secret values written in config. Deferred because the shell command
+  string already covers the one-off case; the only thing it cannot do -
+  shared values via `[job-defaults]` - is what would justify adding it.
+  Records the intended design (dict merge, layered before `RA_*`,
+  reserved-prefix validation) for when a concrete need arrives.
