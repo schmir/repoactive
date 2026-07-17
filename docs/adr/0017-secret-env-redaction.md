@@ -134,10 +134,13 @@ in a job that did not ask for it, even via defaults.
   ran before it, breaking the invariant. The fix for the operator: mark the
   shared secret up front in `[job-defaults].secret_env` (or on the
   generator), then the emitted fragments grant it.
-- **Companion, separate concern:** a non-secret `env` map (static literals
-  written in config) is deliberately _not_ part of this decision. When both
-  exist the rule reads cleanly: literals go in `env`, secret names go in
-  `secret_env`, never the reverse. `env` can land in its own ADR.
+- **No non-secret companion:** a non-secret `env` map (static literals
+  written in config) is deliberately _not_ part of this decision, and
+  [ADR 0018](0018-non-secret-env-map.md) rejects it outright: a literal has
+  nothing to scope, so the shell command string (one-off) and the launch
+  environment (shared) already cover it. `secret_env` earns dedicated config
+  precisely because secrets need the scoping and stripping a plain literal
+  does not.
 
 ## Phase 2 (deferred): redact secret values from captured output
 

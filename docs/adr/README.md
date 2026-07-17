@@ -95,9 +95,9 @@ it.
   platform-token strip of ADR 0006. Redacting secret values from captured
   output is deferred to Phase 2.
 - [0018 — A non-secret `env` map for commands](0018-non-secret-env-map.md) —
-  Proposed, deferred. The mirror of `secret_env` (0017) for static
-  non-secret values written in config. Deferred because the shell command
-  string already covers the one-off case; the only thing it cannot do -
-  shared values via `[job-defaults]` - is what would justify adding it.
-  Records the intended design (dict merge, layered before `RA_*`,
-  reserved-prefix validation) for when a concrete need arrives.
+  Rejected. The mirror of `secret_env` (0017) for static non-secret values
+  written in config. Rejected because it adds no capability: the shell
+  command string covers a one-off variable for a single job, and the
+  environment repoactive is launched with covers shared values across all
+  jobs. Unlike secrets, a non-secret literal has nothing to scope, so it
+  earns no dedicated config surface.
