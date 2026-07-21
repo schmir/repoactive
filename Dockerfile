@@ -4,7 +4,7 @@ RUN <<EOF
     set -eu
     export DEBIAN_FRONTEND=noninteractive
     apt-get update
-    apt-get install -y --no-install-recommends curl git-core ca-certificates
+    apt-get install -y --no-install-recommends curl git-core ca-certificates libatomic1
     rm -rf /var/lib/apt/lists/*
 EOF
 
