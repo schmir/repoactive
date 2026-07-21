@@ -286,9 +286,20 @@ class JJ:
         return next((b.change_id for b in self.bookmark_list() if b.name == name), None)
 
     def rebase_revision(self, revision: str, *onto: str) -> None:
-        """Rebase a specific revision onto ``onto`` without touching ``@``."""
+        """Rebase a specific revision onto ``onto`` without touching ``@``.
+
+        Uses ``-r``: only ``revision`` moves. Any existing descendant of
+        ``revision`` is left behind, refilled onto ``revision``'s old
+        parent(s) instead of following it to ``onto`` (jj's own "-r" gap-fill
+        behaviour) — use ``rebase_source`` when descendants must follow.
+        """
         onto_args = [arg for parent in onto for arg in ("--onto", parent)]
         self._run("rebase", "-r", revision, *onto_args)
+
+    def rebase_source(self, revision: str, *onto: str) -> None:
+        """Rebase ``revision`` and all its descendants onto ``onto`` without touching ``@``."""
+        onto_args = [arg for parent in onto for arg in ("--onto", parent)]
+        self._run("rebase", "-s", revision, *onto_args)
 
     def describe_revision(self, revision: str, message: str) -> None:
         """Set the commit message of a specific revision without touching ``@``."""

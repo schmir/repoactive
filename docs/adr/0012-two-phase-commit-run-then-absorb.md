@@ -90,8 +90,21 @@ commit:
    Both commits share the same parents, so the same diff applies to the same
    base; the result is identical.
 4. `jj describe -r old_change_id` — set the commit message.
-5. Abandon the new commit (`jj abandon new_change_id`) — it is now
-   redundant.
+5. `jj rebase -s new_change_id --onto old_change_id` — before abandoning the
+   new commit, rebase it (and, critically, its descendants) onto
+   `old_change_id`. A dependent job stacked on this job in the same run
+   still has its own phase-1 fresh commit parented on `new_change_id` at
+   this point (see "Canonical change-id translation" below); `-s` carries
+   that commit along to `old_change_id`'s now-canonical content. This is a
+   content no-op for `new_change_id` itself, since `old_change_id` already
+   holds identical content by construction (steps 2-4). `-r` (a single
+   revision, used in step 1) is not enough here: it leaves existing
+   descendants behind, refilled onto the moved revision's _old_ parent
+   instead of following it — exactly the corruption this step prevents (see
+   Consequences).
+6. Abandon the new commit (`jj abandon new_change_id`) — it is now
+   redundant, and childless or content-identical to its child if not (step 5
+   already moved every descendant off it).
 
 For jobs with no prior bookmark, the new commit is the canonical result; the
 bookmark is simply set on it (same as today).
@@ -187,6 +200,20 @@ zero and this alternative is sufficient.
   guaranteed by construction: phase 1 always uses `ws.new(*parents)`, and
   the absorb rebases the old commit onto those same parents (translated to
   their canonical post-absorb change-ids, which name the same changes).
+- **Abandoning `new_change_id` without step 5 silently reverts a stacked
+  dependent's ancestor.** A dependent job's phase-1 fresh commit is parented
+  on its dependency's `new_change_id` (see "Canonical change-id
+  translation"). `jj abandon` reparents descendants onto the abandoned
+  commit's _original_ parent, not onto `old_change_id` — the same gap-fill
+  behaviour as `-r` (see step 5). If the dependent hasn't been absorbed yet
+  when its dependency is abandoned, its fresh commit is silently
+  transplanted onto the dependency's pre-run parent, dropping the
+  dependency's diff entirely. The absorb then compares that corrupted commit
+  against the correctly-rebased `old_change_id`, finds a difference, and
+  overwrites the correct content with the corrupted one — reverting the
+  ancestor's change out of the stack. Step 5's `-s` rebase closes this by
+  moving the not-yet-absorbed descendant onto `old_change_id` first, before
+  the abandon's own gap-fill can reach it.
 - **Unchanged jobs get a free skip.** When the new commit's diff matches the
   rebased old commit's diff (command produced the same output as the prior
   run on the same parents), steps 3 and 4 of the absorb are skipped. The old

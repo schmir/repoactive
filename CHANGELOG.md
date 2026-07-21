@@ -13,6 +13,14 @@
   and may not use the reserved `RA_`/`REPOACTIVE_` prefixes. Redacting
   secret values from a command's captured output is deferred to a later
   change; see [ADR 0017](docs/adr/0017-secret-env-redaction.md).
+- **Fix:** the absorb phase could silently revert a dependency's change out
+  of a stacked dependent's commit. Abandoning a job's fresh phase-1 commit
+  reparented a not-yet-absorbed dependent still stacked on it using jj's
+  `-r`-style gap-fill (onto the pre-run parent instead of the job's
+  restored, canonical commit), dropping the dependency's diff from the
+  dependent; a later comparison then overwrote the dependent's correct
+  content with the corrupted version. See
+  [ADR 0012](docs/adr/0012-two-phase-commit-run-then-absorb.md).
 
 ## 0.3.0 - 2026-07-17
 

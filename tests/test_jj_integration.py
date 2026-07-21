@@ -322,6 +322,70 @@ class TestRebase:
         assert _description(repo, "@-") == "a"
 
 
+def _setup_stack_and_destination(repo: JJ) -> str:
+    """Build trunk -> a -> b (stacked) and a sibling "dest" off trunk.
+
+    "a" adds fileA.txt, "b" (stacked on "a") additionally adds fileB.txt,
+    "dest" (off trunk, not related to "a"/"b") adds fileD.txt. Returns "a"'s
+    change-id so callers can rebase it onto "dest".
+    """
+    repo.describe("trunk")
+    repo.bookmark_set("trunk")
+
+    repo.new("trunk")
+    (repo.cwd / "fileA.txt").write_text("a")
+    repo.describe("a")
+    repo.bookmark_set("a")
+    a_id = repo.change_id()
+
+    repo.new(a_id)
+    (repo.cwd / "fileB.txt").write_text("b")
+    repo.describe("b")
+    repo.bookmark_set("b")
+
+    repo.new("trunk")
+    (repo.cwd / "fileD.txt").write_text("d")
+    repo.describe("dest")
+    repo.bookmark_set("dest")
+
+    return a_id
+
+
+class TestRebaseRevision:
+    def test_moves_only_the_named_revision_leaving_descendants_behind(self, repo: JJ) -> None:
+        """ "-r" rebases only the named revision; descendants stay put.
+
+        A pre-existing descendant ("b", stacked on "a") is *not* carried along
+        to "a"'s new position -- it is refilled onto "a"'s old parent
+        ("trunk") instead, so it loses "a"'s contribution (fileA.txt). This is
+        jj's own documented "-r" gap-fill behaviour, not a repoactive choice;
+        see ``rebase_source`` for the variant that keeps descendants stacked.
+        """
+        a_id = _setup_stack_and_destination(repo)
+
+        repo.rebase_revision(a_id, "dest")
+
+        assert _file_content(repo, "a", "fileA.txt") == "a"
+        assert _file_content(repo, "a", "fileD.txt") == "d"
+        assert _file_content(repo, "b", "fileB.txt") == "b"
+        with pytest.raises(subprocess.CalledProcessError):
+            _file_content(repo, "b", "fileA.txt")
+
+
+class TestRebaseSource:
+    def test_carries_descendants_onto_the_new_destination(self, repo: JJ) -> None:
+        """ "-s" rebases the named revision *and* its descendants as a unit."""
+        a_id = _setup_stack_and_destination(repo)
+
+        repo.rebase_source(a_id, "dest")
+
+        assert _file_content(repo, "a", "fileA.txt") == "a"
+        assert _file_content(repo, "a", "fileD.txt") == "d"
+        assert _file_content(repo, "b", "fileA.txt") == "a"
+        assert _file_content(repo, "b", "fileB.txt") == "b"
+        assert _file_content(repo, "b", "fileD.txt") == "d"
+
+
 class TestAbandon:
     def test_deletes_bookmark_on_abandoned_commit(self, repo: JJ) -> None:
         repo.new("@")

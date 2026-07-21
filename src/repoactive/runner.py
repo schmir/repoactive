@@ -1065,6 +1065,21 @@ def _absorb_results(ctx: RunContext) -> None:
                 repo.get_description(old_change_id)
             ) != _strip_boxquote_and_trailers(message):
                 repo.describe_revision(old_change_id, message)
+            # old_change_id now holds the canonical content (restored above, or
+            # already matching new_change_id). Rebase new_change_id -- and any
+            # of its descendants -- onto it *before* abandoning: a
+            # not-yet-absorbed dependent job in this same run may still be
+            # parented on new_change_id (a stacked phase-1 fresh commit), and
+            # rebase_source's "-s" brings such a descendant along to
+            # old_change_id's content. This is a content no-op for
+            # new_change_id itself (old_change_id's tree already equals it),
+            # so it only redirects where such a descendant lands. Plain "-r"
+            # (rebase_revision) will NOT do: it leaves descendants behind,
+            # refilled onto new_change_id's old parent (canonical_parents) --
+            # exactly the corruption this call prevents. Without this call,
+            # the abandon below has the same "-r"-like gap-fill behaviour,
+            # silently dropping this job's diff from the descendant.
+            repo.rebase_source(new_change_id, old_change_id)
             repo.abandon_revision(new_change_id)
             # No bookmark_set needed: the bookmark follows old_change_id through
             # the rewrites above (jj moves local bookmarks with the commit).
