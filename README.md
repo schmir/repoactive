@@ -15,6 +15,7 @@ and (with `--mode publish`) the full MR lifecycle.
 - [Quick start](#quick-start)
 - [How it works](#how-it-works)
   - [Keeping the local clone current](#keeping-the-local-clone-current)
+  - [Undoing a run](#undoing-a-run)
 - [Commands](#commands)
   - [`repoactive run`](#repoactive-run)
   - [`repoactive recent-commits`](#repoactive-recent-commits)
@@ -98,7 +99,7 @@ needs a GitHub or GitLab API token in the environment. See
 4. **Run the job locally.** In the default `local` mode nothing is pushed
    and no MR is created - repoactive just records the diff your script
    produced on the branch `repoactive/uv-lock-upgrade` and prints a
-   `jj op restore` command to undo the run:
+   `jj op restore` command to [undo the run](#undoing-a-run):
 
    ```bash
    repoactive run
@@ -178,6 +179,16 @@ you do not, jobs rebase onto a stale base and - most importantly -
 because the commit that would trigger it has not reached the local base
 branch. See
 [ADR 0005](docs/adr/0005-local-repository-is-the-source-of-truth.md).
+
+### Undoing a run
+
+Every `run` captures the jj operation id beforehand and prints a
+`jj op restore <id>` command at the end of the run (last, since a run can
+produce a lot of output). Run it to roll the local repository - commits,
+bookmarks and colocated git refs - back to the state it was in before the
+run. It only undoes local changes: a branch already pushed or an MR already
+created by a `--mode push`/`--mode publish` run is not affected, as the hint
+panel itself points out.
 
 ## Commands
 
@@ -361,18 +372,10 @@ case-insensitive.
 
 `interactive` (default) or `noninteractive`.
 
-Every `run` captures the jj operation id beforehand and prints a
-`jj op restore <id>` command at the end of the run (last, since a run can
-produce a lot of output). Run it to roll the local repository - commits,
-bookmarks and colocated git refs - back to the state it was in before the
-run. It only undoes local changes: a branch already pushed or an MR already
-created by a `--mode push`/`--mode publish` run is not affected, as the hint
-panel itself points out.
-
-`noninteractive` suppresses these "how to undo" hint panels. Set it where
-nobody is at the keyboard, say an unattended CI job. This is an explicit
-switch rather than CI auto-detection, because a CI container someone has
-logged in to _is_ interactive.
+`noninteractive` suppresses the ["how to undo" hint panels](#undoing-a-run)
+printed after each run. Set it where nobody is at the keyboard, say an
+unattended CI job. This is an explicit switch rather than CI auto-detection,
+because a CI container someone has logged in to _is_ interactive.
 
 #### `REPOACTIVE_LOG_LEVEL`
 
