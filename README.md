@@ -1,5 +1,10 @@
 # repoactive - Script-driven code changes with automated merge requests
 
+[![PyPI](https://img.shields.io/pypi/v/repoactive.svg)](https://pypi.org/project/repoactive/)
+[![CI](https://github.com/schmir/repoactive/actions/workflows/ci.yml/badge.svg)](https://github.com/schmir/repoactive/actions/workflows/ci.yml)
+[![Python versions](https://img.shields.io/pypi/pyversions/repoactive.svg)](https://pypi.org/project/repoactive/)
+[![License](https://img.shields.io/pypi/l/repoactive.svg)](LICENSE)
+
 > **Warning:** This project is in an early stage of development. Use at your
 > own risk.
 
@@ -45,6 +50,8 @@ and (with `--mode publish`) the full MR lifecycle.
 - [Requirements](#requirements)
 - [Appendix](#appendix)
   - [jj revset aliases](#jj-revset-aliases)
+- [Changelog](#changelog)
+- [License](#license)
 
 ## Use cases
 
@@ -1236,3 +1243,12 @@ jj log -r 'repoactive_unmerged()'
 jj log -r 'repoactive() & committer_date(after:"2025-01-01")'
 jj log -r 'repoactive() & description(regex:"(?m)^Repoactive-Job: uv-lock-upgrade$")'
 ```
+
+## Changelog
+
+User-facing changes are recorded in [CHANGELOG.md](CHANGELOG.md).
+
+## License
+
+`repoactive` is licensed under the
+[GNU General Public License v3.0 or later](LICENSE).
