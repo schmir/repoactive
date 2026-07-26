@@ -572,14 +572,13 @@ Because a dependent's MR already contains its dependencies' changes, a
 dependency chain normally opens one MR per job that produced a diff. Setting
 `create_mr = "unless-superseded"` on the earlier jobs collapses that: such a
 job skips its MR when a dependent job produced an MR in the same run, so the
-chain yields a single MR on the topmost job that actually changed something
-
-- falling back to the job below it when the jobs above came up empty. The
-  branch is still pushed either way. Only the current run counts: a
-  dependent that is empty, failed, on cooldown, or not selected does not
-  suppress anything. See
-  [ADR 0009](docs/adr/0009-unless-superseded-mr-creation.md) for details and
-  limitations.
+chain yields a single MR on the topmost job that actually changed
+something - falling back to the job below it when the jobs above came up
+empty. The branch is still pushed either way. Only the current run counts: a
+dependent that is empty, failed, on cooldown, or not selected does not
+suppress anything. See
+[ADR 0009](docs/adr/0009-unless-superseded-mr-creation.md) for details and
+limitations.
 
 ### Example
 
@@ -1148,7 +1147,7 @@ title = "build: upgrade pkg-a"
 
 Fragments may only contain `[job.<name>]` tables; anything else (e.g.
 `[job-defaults]`) fails the generator. To set defaults for the emitted jobs,
-set them on the generator itself — they are inherited (see below).
+set them on the generator itself - they are inherited (see below).
 
 Key points:
 
