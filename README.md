@@ -11,7 +11,8 @@
 `repoactive` runs your scripts against a git repository and optionally keeps
 the corresponding merge requests up to date. You write the scripts that
 produce the code changes; `repoactive` handles the rest - branches, commits,
-and (with `--mode publish`) the full MR lifecycle.
+and (with `--mode publish`) the full MR lifecycle. This document says merge
+request (MR) throughout; on GitHub, read that as pull request (PR).
 
 ## Contents
 
@@ -227,6 +228,14 @@ read configuration - `run`, `validate-config`, `info jobs`, and
 `info tags` - also accept the same `--config`/`-c` and `--set`/`-s` options,
 described in the [`repoactive run`](#repoactive-run) table below.
 `recent-commits` works from the repository alone and reads no configuration.
+
+All commands exit with these status codes:
+
+| Code | Meaning                                                                                    |
+| ---- | ------------------------------------------------------------------------------------------ |
+| 0    | Success                                                                                    |
+| 1    | Failure (invalid configuration, a failed job, ...)                                         |
+| 2    | `run` only: another run holds the [per-repository lock](#one-run-at-a-time-per-repository) |
 
 ### `repoactive run`
 
@@ -452,14 +461,13 @@ block.
 
 ### `[job-defaults]`
 
-**MR/PR options:**
+**MR options:**
 
-- **`labels`** (default: `[]`) - Labels applied to every MR/PR. Per-job
+- **`labels`** (default: `[]`) - Labels applied to every MR. Per-job
   `labels` are merged with, not replaced by, this list.
 - **`auto_merge`** (default: `false`) - When `true`, enable auto-merge on
-  every MR/PR so it merges automatically once its pipeline passes. On
-  GitHub, the repository must have "Allow auto-merge" enabled in its
-  settings.
+  every MR so it merges automatically once its pipeline passes. On GitHub,
+  the repository must have "Allow auto-merge" enabled in its settings.
 - **`required_approvals`** (default: none) - Minimum number of approvals
   required before the MR can be merged. **GitLab only** - this sets the
   per-MR approval requirement. GitHub has no per-PR equivalent (required
@@ -474,7 +482,7 @@ block.
   no job is named after your base branch (e.g. a job named `main`) - the two
   branches would otherwise collide.
 - **`mr_title_prefix`** (default: `"[repoactive] "`) - Prefix prepended to
-  every MR/PR title. Set to `""` to disable.
+  every MR title. Set to `""` to disable.
 - **`commit_title_prefix`** (default: `"[repoactive] "`) - Prefix prepended
   to every commit title. Set to `""` to disable.
 - **`base_branch`** (default: repo default) - Target branch for all jobs
@@ -513,35 +521,35 @@ underscores.
 
 - **`command`** - Shell command (or executable path) run in the repository
   working directory. A non-zero exit is a failure.
-- **`title`** - MR/PR title (also the commit subject, after
+- **`title`** - MR title (also the commit subject, after
   `commit_title_prefix`).
 
-**MR/PR options:**
+**MR options:**
 
-- **`description`** - Body text of the MR/PR.
-- **`labels`** (default: `[]`) - Extra labels for this job's MR/PR, merged
-  with `job-defaults.labels`.
-- **`draft`** (default: `false`) - Open the MR/PR as a draft. On GitHub,
-  draft state cannot be changed after creation.
-- **`create_mr`** (default: `true`) - Whether to create an MR/PR: `true`
+- **`description`** - Body text of the MR.
+- **`labels`** (default: `[]`) - Extra labels for this job's MR, merged with
+  `job-defaults.labels`.
+- **`draft`** (default: `false`) - Open the MR as a draft. On GitHub, draft
+  state cannot be changed after creation.
+- **`create_mr`** (default: `true`) - Whether to create an MR: `true`
   (always), `false` (push the branch but skip the MR), or
   `"unless-superseded"` (skip when a dependent's MR from the same run
   already contains this job's changes - see [Stacking MRs](#stacking-mrs)).
 - **`auto_merge`** (default: inherited from `job-defaults`) - When `true`,
-  enable auto-merge on this job's MR/PR.
+  enable auto-merge on this job's MR.
 - **`required_approvals`** (default: inherited from `job-defaults`) -
   Minimum number of approvals required before this job's MR can be merged.
   GitLab only; see `job-defaults.required_approvals`.
 
 **Branch and commit options:**
 
-- **`base_branch`** (default: inherited) - Target branch for this job's
-  MR/PR. May also be a jj revset expression such as `trunk()`, `root()`, or
-  a user-defined revset alias.
+- **`base_branch`** (default: inherited) - Target branch for this job's MR.
+  May also be a jj revset expression such as `trunk()`, `root()`, or a
+  user-defined revset alias.
 - **`branch_prefix`** (default: inherited) - Override the branch-name prefix
   for this job only.
-- **`mr_title_prefix`** (default: inherited) - Override the MR/PR title
-  prefix for this job only.
+- **`mr_title_prefix`** (default: inherited) - Override the MR title prefix
+  for this job only.
 - **`commit_title_prefix`** (default: inherited) - Override the commit title
   prefix for this job only.
 - **`output_in_commit`** (default: `true`) - Append the job's command and
@@ -922,8 +930,8 @@ mistyped one.
 Because assigning a tag removes the implicit `enabled` tag, **tags are
 load-bearing, not free-form labels**: tagging a job takes it out of the bare
 `repoactive run`. If you want a job to stay in the default run _and_ belong
-to a group, list both: `tags = ["enabled", "weekly"]`. (For MR/PR labels,
-use `labels` - a separate concept.)
+to a group, list both: `tags = ["enabled", "weekly"]`. (For MR labels, use
+`labels` - a separate concept.)
 
 Tag selection is _explicit_ selection, so - like naming a job - it ignores
 the `enabled`/`disabled` defaults and force-includes dependencies. The bare
@@ -1227,13 +1235,8 @@ design.
 - [jj (Jujutsu)](https://github.com/jj-vcs/jj) - `repoactive` uses jj to
   manage branches and commits in the target repository
 - A configured jj user name and email - jj records them as the commit
-  author. Set them once with:
-
-  ```bash
-  jj config set --user user.name "My Name"
-  jj config set --user user.email "me@example.com"
-  ```
-
+  author. Set them once with the `jj config set` commands shown in
+  [Quick start](#quick-start) step 1.
 - A GitLab or GitHub API token exposed via the environment variable named in
   `platform.token_env` (default: `GITHUB_TOKEN` for GitHub.com,
   `GITLAB_TOKEN` for GitLab.com)
