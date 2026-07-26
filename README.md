@@ -21,6 +21,7 @@ request (MR) throughout; on GitHub, read that as pull request (PR).
 - [Installation](#installation)
 - [Quick start](#quick-start)
 - [How it works](#how-it-works)
+  - [What a run produces](#what-a-run-produces)
   - [Keeping the local clone current](#keeping-the-local-clone-current)
   - [Undoing a run](#undoing-a-run)
 - [Commands](#commands)
@@ -158,14 +159,6 @@ With `--mode publish` it also:
 Branches and MR descriptions are managed automatically - the only code you
 need to write is the script that produces the change.
 
-```
-[your script] → diff → repoactive → branch
-                                       ↓ (with --mode push or --mode publish)
-                                    git push → merge request
-                                                    ↑ (with --mode publish)
-                                            (create or update)
-```
-
 1. `repoactive` creates a new commit on top of the base branch or on top of
    other repoactive managed branches.
 2. It runs the job's script against the working tree.
@@ -189,6 +182,46 @@ need to write is the script that produces the change.
 > working-tree changes become part of the commit - they all will. Keep
 > `.gitignore` up to date so build artifacts, caches, and other stray files
 > your script produces do not end up in the diff.
+
+### What a run produces
+
+For the quick-start job above, a `--mode publish` run pushes the branch
+`repoactive/uv-lock-upgrade` and opens an MR titled
+`[repoactive] build: upgrade dependencies`. Its description holds the job's
+`description` (when set), the command and its captured output in a code
+block, and - for [stacked jobs](#stacking-mrs) - links to the parent MRs
+([a real example](https://github.com/schmir/repoactive/pull/7)):
+
+```
+$ uv lock --upgrade
+Using CPython 3.14.1
+Resolved 51 packages in 4.19s
+Updated annotated-types v0.7.0 -> v0.8.0
+Updated nox v2026.4.10 -> v2026.7.11
+Updated ruff v0.15.21 -> v0.16.0
+Updated ty v0.0.58 -> v0.0.63
+```
+
+The commit carries the same output (unless `output_in_commit` is disabled)
+plus the `Repoactive-Job` trailer that
+[`recent-commits`](#repoactive-recent-commits), the
+[cooldown check](#throttling-jobs-with-cooldown_period), and the
+[unmerged-branch refresh](#keeping-unmerged-branches-current) all key on:
+
+```
+[repoactive] build: upgrade dependencies
+
+,----[ uv lock --upgrade ]
+| Using CPython 3.14.1
+| Resolved 51 packages in 4.19s
+| Updated annotated-types v0.7.0 -> v0.8.0
+| Updated nox v2026.4.10 -> v2026.7.11
+| Updated ruff v0.15.21 -> v0.16.0
+| Updated ty v0.0.58 -> v0.0.63
+`----
+
+Repoactive-Job: uv-lock-upgrade
+```
 
 ### Keeping the local clone current
 
