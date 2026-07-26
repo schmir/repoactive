@@ -16,6 +16,7 @@ and (with `--mode publish`) the full MR lifecycle.
 ## Contents
 
 - [Use cases](#use-cases)
+  - [How it compares](#how-it-compares)
 - [Installation](#installation)
 - [Quick start](#quick-start)
 - [How it works](#how-it-works)
@@ -61,6 +62,23 @@ and (with `--mode publish`) the full MR lifecycle.
   repositories
 - Automating any periodic code transformation that should go through a
   review process
+
+### How it compares
+
+[Renovate](https://docs.renovatebot.com/) and
+[Dependabot](https://docs.github.com/en/code-security/dependabot) are built
+around dependency updates; repoactive runs whatever script you write, so the
+change can be anything the repository generates - a lock-file upgrade is
+just the simplest case.
+[multi-gitter](https://github.com/lindell/multi-gitter) also runs your
+script and opens the MR, but as a one-shot bulk operation across
+repositories; repoactive is built for re-running against one repository: an
+unchanged diff leaves the MR untouched, a changed one updates it, branches
+are rebased onto the moving base branch, cooldowns keep a landed change from
+immediately reopening, and jobs can stack their MRs on one another. And it
+is a plain CLI working against your local clone - no hosted service and
+nothing to install into the repository - that talks to GitHub and GitLab,
+including self-hosted instances.
 
 ## Installation
 
