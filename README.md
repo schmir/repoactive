@@ -15,12 +15,13 @@ and (with `--mode publish`) the full MR lifecycle.
 - [Quick start](#quick-start)
 - [How it works](#how-it-works)
   - [Keeping the local clone current](#keeping-the-local-clone-current)
-- [Usage](#usage)
+- [Commands](#commands)
+  - [`repoactive run`](#repoactive-run)
+  - [`repoactive recent-commits`](#repoactive-recent-commits)
+  - [`repoactive validate-config`](#repoactive-validate-config)
+  - [`repoactive info jobs`](#repoactive-info-jobs)
+  - [`repoactive info tags`](#repoactive-info-tags)
   - [Environment variables](#environment-variables)
-- [Inspecting repoactive commits](#inspecting-repoactive-commits)
-- [Validating configuration](#validating-configuration)
-- [Listing jobs](#listing-jobs)
-- [Listing tags](#listing-tags)
 - [Configuration](#configuration)
   - [`[job-defaults]`](#job-defaults)
   - [`[job.<name>]`](#jobname)
@@ -31,16 +32,15 @@ and (with `--mode publish`) the full MR lifecycle.
   - [Variables passed to job commands](#variables-passed-to-job-commands)
   - [Passing secrets to commands with `secret_env`](#passing-secrets-to-commands-with-secret_env)
   - [Overriding values on the command line](#overriding-values-on-the-command-line)
-- [Selecting jobs with tags](#selecting-jobs-with-tags)
-  - [Keeping unmerged branches current](#keeping-unmerged-branches-current)
-- [Disabling jobs](#disabling-jobs)
-- [Running a job on a schedule](#running-a-job-on-a-schedule)
-  - [One run at a time per repository](#one-run-at-a-time-per-repository)
-- [Gating jobs with `run_only_if_changed`](#gating-jobs-with-run_only_if_changed)
-- [Throttling jobs with `cooldown_period`](#throttling-jobs-with-cooldown_period)
-- [Throttling a job when a superset lands with `cooldown_on`](#throttling-a-job-when-a-superset-lands-with-cooldown_on)
-- [Limiting job runtime with `timeout`](#limiting-job-runtime-with-timeout)
-- [Generating jobs dynamically](#generating-jobs-dynamically)
+- [Run control](#run-control)
+  - [Selecting jobs with tags](#selecting-jobs-with-tags)
+  - [Disabling jobs](#disabling-jobs)
+  - [Running a job on a schedule](#running-a-job-on-a-schedule)
+  - [Gating jobs with `run_only_if_changed`](#gating-jobs-with-run_only_if_changed)
+  - [Throttling jobs with `cooldown_period`](#throttling-jobs-with-cooldown_period)
+  - [Throttling a job when a superset lands with `cooldown_on`](#throttling-a-job-when-a-superset-lands-with-cooldown_on)
+  - [Limiting job runtime with `timeout`](#limiting-job-runtime-with-timeout)
+  - [Generating jobs dynamically](#generating-jobs-dynamically)
 - [Requirements](#requirements)
 - [Appendix](#appendix)
   - [jj revset aliases](#jj-revset-aliases)
@@ -179,12 +179,20 @@ because the commit that would trigger it has not reached the local base
 branch. See
 [ADR 0005](docs/adr/0005-local-repository-is-the-source-of-truth.md).
 
-## Usage
+## Commands
 
 ```bash
 # Print the installed version and exit
 repoactive --version
 ```
+
+Every command accepts `--repo`/`-r` and `--debug`/`-d`. The commands that
+read configuration - `run`, `validate-config`, `info jobs`, and
+`info tags` - also accept the same `--config`/`-c` and `--set`/`-s` options,
+described in the [`repoactive run`](#repoactive-run) table below.
+`recent-commits` works from the repository alone and reads no configuration.
+
+### `repoactive run`
 
 ```
 repoactive run [OPTIONS] [JOBS]...
@@ -221,6 +229,122 @@ repoactive run --debug
 | `--mode [local\|push\|publish]` | `-m`  | How far to publish: `local` (default) applies only locally, `push` also pushes branches, `publish` also creates/updates MRs  |
 | `--tag TAG`                     | `-t`  | Run jobs carrying any of these tags (repeatable). With no tags/jobs the default run targets the `enabled` tag                |
 | `--debug`                       | `-d`  | Enable debug logging                                                                                                         |
+
+### `repoactive recent-commits`
+
+```
+repoactive recent-commits [OPTIONS] [JOBS]...
+```
+
+List commits produced by repoactive, filtered by a time window and
+optionally by job name or merge status:
+
+```bash
+# Show all repoactive commits from the last 2 weeks (default window)
+repoactive recent-commits --repo /path/to/repo
+
+# Narrow to a specific window
+repoactive recent-commits --within 30d --repo /path/to/repo
+
+# Filter by one or more job names
+repoactive recent-commits --within 7d uv-lock-upgrade prek-autoupdate
+
+# Only commits that have landed in trunk
+repoactive recent-commits --status merged
+
+# Only commits still on open branches
+repoactive recent-commits --status unmerged
+```
+
+| Option                             | Short | Description                                            |
+| ---------------------------------- | ----- | ------------------------------------------------------ |
+| `--within`                         |       | How far back to look (default: `2w`; e.g. `7d`, `24h`) |
+| `--repo PATH`                      | `-r`  | jj repository path (default: `.`)                      |
+| `--status [all\|merged\|unmerged]` | `-s`  | Filter by merge status into trunk (default: `all`)     |
+| `--debug`                          | `-d`  | Enable debug logging                                   |
+
+### `repoactive validate-config`
+
+```
+repoactive validate-config [OPTIONS]
+```
+
+Check that a config file is syntactically and semantically valid without
+running any jobs:
+
+```bash
+# Validate the discovered defaults (.repoactive.d/ and .repoactive.toml)
+repoactive validate-config
+
+# Validate a specific config file or directory
+repoactive validate-config --config myconfig.toml
+
+# Validate a merged config (same merging rules as `run`)
+repoactive validate-config --config base.toml --config override.toml
+```
+
+On success the command prints `Config OK: N job(s) defined.` and exits with
+code 0. On failure it prints the validation error to stderr and exits with
+code 1.
+
+Validation checks include unknown keys, missing required fields, invalid
+`depends_on` references, and circular job dependencies.
+
+### `repoactive info jobs`
+
+```
+repoactive info jobs [OPTIONS]
+```
+
+Show all configured jobs (including disabled ones) as a dependency tree, in
+topological order: each job is nested under its `depends_on` targets (once
+per parent, so a job with several dependencies appears several times), and
+jobs without dependencies are roots. Each line also shows the job's title
+and effective tags in aligned columns:
+
+```bash
+repoactive info jobs
+```
+
+```
+build           Build the project   enabled
+├── test        Run the test suite  nightly
+│   └── deploy  Deploy to staging   nightly, risky
+└── docs        Build the docs      enabled
+    └── deploy  Deploy to staging   nightly, risky
+```
+
+### `repoactive info tags`
+
+```
+repoactive info tags [OPTIONS]
+```
+
+Group the configured jobs by tag and print each tag with the jobs carrying
+it. Jobs are grouped by their effective tags - the tags driving job
+selection: a job's explicit `tags`, or the implicit `enabled`/`disabled` tag
+when it has none. Within each tag, jobs are shown as a dependency tree in
+topological order: a job is nested under its `depends_on` targets carrying
+the same tag (once per parent, so a job with several dependencies appears
+several times), while a job whose dependencies all carry other tags stays at
+the root. Each line also shows the job's title and effective tags in aligned
+columns:
+
+```bash
+# List tags from the discovered defaults (.repoactive.d/ and .repoactive.toml)
+repoactive info tags
+
+# List tags from a specific config file or directory
+repoactive info tags --config myconfig.toml
+```
+
+```
+enabled:
+  uv-lock-upgrade      Upgrade uv.lock         enabled
+  └── prek-autoupdate  Autoupdate prek hooks   enabled
+nightly:
+  benchmark            Run nightly benchmarks  nightly
+```
 
 ### Environment variables
 
@@ -278,131 +402,6 @@ it. `REPOACTIVE_PROGRESS_LINES` sets how many lines that live tail shows;
 `0` or less disables the live block entirely. When output is not a terminal
 (piped or in CI) the block is disabled and the command's output is left
 untouched.
-
-## Inspecting repoactive commits
-
-```
-repoactive recent-commits [OPTIONS] [JOBS]...
-```
-
-List commits produced by repoactive, filtered by a time window and
-optionally by job name or merge status:
-
-```bash
-# Show all repoactive commits from the last 2 weeks (default window)
-repoactive recent-commits --repo /path/to/repo
-
-# Narrow to a specific window
-repoactive recent-commits --within 30d --repo /path/to/repo
-
-# Filter by one or more job names
-repoactive recent-commits --within 7d uv-lock-upgrade prek-autoupdate
-
-# Only commits that have landed in trunk
-repoactive recent-commits --status merged
-
-# Only commits still on open branches
-repoactive recent-commits --status unmerged
-```
-
-| Option                             | Short | Description                                            |
-| ---------------------------------- | ----- | ------------------------------------------------------ |
-| `--within`                         |       | How far back to look (default: `2w`; e.g. `7d`, `24h`) |
-| `--repo PATH`                      | `-r`  | jj repository path (default: `.`)                      |
-| `--status [all\|merged\|unmerged]` | `-s`  | Filter by merge status into trunk (default: `all`)     |
-| `--debug`                          | `-d`  | Enable debug logging                                   |
-
-## Validating configuration
-
-```
-repoactive validate-config [OPTIONS]
-```
-
-Check that a config file is syntactically and semantically valid without
-running any jobs:
-
-```bash
-# Validate the discovered defaults (.repoactive.d/ and .repoactive.toml)
-repoactive validate-config
-
-# Validate a specific config file or directory
-repoactive validate-config --config myconfig.toml
-
-# Validate a merged config (same merging rules as `run`)
-repoactive validate-config --config base.toml --config override.toml
-```
-
-On success the command prints `Config OK: N job(s) defined.` and exits with
-code 0. On failure it prints the validation error to stderr and exits with
-code 1.
-
-Validation checks include unknown keys, missing required fields, invalid
-`depends_on` references, and circular job dependencies.
-
-The command accepts the same `--config`, `--set`, `--repo`, and `--debug`
-options as [`repoactive run`](#usage).
-
-## Listing jobs
-
-```
-repoactive info jobs [OPTIONS]
-```
-
-Show all configured jobs (including disabled ones) as a dependency tree, in
-topological order: each job is nested under its `depends_on` targets (once
-per parent, so a job with several dependencies appears several times), and
-jobs without dependencies are roots. Each line also shows the job's title
-and effective tags in aligned columns:
-
-```bash
-repoactive info jobs
-```
-
-```
-build           Build the project   enabled
-├── test        Run the test suite  nightly
-│   └── deploy  Deploy to staging   nightly, risky
-└── docs        Build the docs      enabled
-    └── deploy  Deploy to staging   nightly, risky
-```
-
-The command accepts the same `--config`, `--set`, `--repo`, and `--debug`
-options as [`repoactive run`](#usage).
-
-## Listing tags
-
-```
-repoactive info tags [OPTIONS]
-```
-
-Group the configured jobs by tag and print each tag with the jobs carrying
-it. Jobs are grouped by their effective tags - the tags driving job
-selection: a job's explicit `tags`, or the implicit `enabled`/`disabled` tag
-when it has none. Within each tag, jobs are shown as a dependency tree in
-topological order: a job is nested under its `depends_on` targets carrying
-the same tag (once per parent, so a job with several dependencies appears
-several times), while a job whose dependencies all carry other tags stays at
-the root. Each line also shows the job's title and effective tags in aligned
-columns:
-
-```bash
-# List tags from the discovered defaults (.repoactive.d/ and .repoactive.toml)
-repoactive info tags
-
-# List tags from a specific config file or directory
-repoactive info tags --config myconfig.toml
-```
-
-```
-enabled:
-  uv-lock-upgrade      Upgrade uv.lock         enabled
-  └── prek-autoupdate  Autoupdate prek hooks   enabled
-nightly:
-  benchmark            Run nightly benchmarks  nightly
-```
-
-The command accepts the same `--config`, `--set`, `--repo`, and `--debug`
-options as [`repoactive run`](#usage).
 
 ## Configuration
 
@@ -854,7 +853,13 @@ job across several flags - put a new job's required fields in one expression
 unknown key or malformed value is reported with the offending `--set`
 argument named.
 
-## Selecting jobs with tags
+## Run control
+
+The sections below cover the run-control options from the
+[configuration reference](#jobname) in detail: which jobs a run selects, how
+to schedule and throttle them, and how to generate jobs dynamically.
+
+### Selecting jobs with tags
 
 Which jobs a `repoactive run` touches is decided by **tags**. Every job has
 a set of tags, with a smart default:
@@ -898,7 +903,7 @@ the `enabled`/`disabled` defaults and force-includes dependencies. The bare
 itself selected is dropped
 (`==> [name] skipped (dependency not in default run)`).
 
-### Keeping unmerged branches current
+#### Keeping unmerged branches current
 
 The bare `repoactive run` additionally refreshes **any job that currently
 has an unmerged branch**, regardless of its tags. A branch is "unmerged"
@@ -917,7 +922,7 @@ don't have to wait for the next weekly run to resolve a conflict with
 disabled job's unmerged branch is refreshed too: it was most likely created
 by an explicit run, and letting it drift out of date helps no one.)
 
-## Disabling jobs
+### Disabling jobs
 
 Set `disabled = true` on a `[job.<name>]` to keep it in the config but leave
 it out of normal runs; it is exactly sugar for `tags = ["disabled"]` (so the
@@ -938,7 +943,7 @@ disabled = true
   `repoactive run --tag disabled`, which runs everything currently turned
   off.
 
-## Running a job on a schedule
+### Running a job on a schedule
 
 `repoactive` is not a daemon and has no built-in scheduler - the cadence of
 a job is whatever cadence you invoke it with. To run a job on a fixed
@@ -966,7 +971,7 @@ inferring a schedule from `repoactive`'s own history: real cron is stateful
 and excludes the other days, whereas `repoactive` only ever sees what has
 _landed_ (see `cooldown_period` below).
 
-### One run at a time per repository
+#### One run at a time per repository
 
 A `repoactive run` takes an exclusive per-repository lock for its duration,
 so two runs against the same repository never interleave (and corrupt each
@@ -984,7 +989,7 @@ The lock is an advisory `flock` on `.jj/repoactive.lock`; the OS releases it
 automatically if a run is killed, so a crashed run never leaves the
 repository locked.
 
-## Gating jobs with `run_only_if_changed`
+### Gating jobs with `run_only_if_changed`
 
 `run_only_if_changed` lets a job declare that it should only run when
 specific upstream jobs actually produced a diff. If none of the named jobs
@@ -1023,7 +1028,7 @@ Key behaviour:
   order can be listed; in practice most usages name a direct dependency, as
   in the example above.
 
-## Throttling jobs with `cooldown_period`
+### Throttling jobs with `cooldown_period`
 
 Every commit `repoactive` creates carries a `Repoactive-Job: <name>` trailer
 identifying the job that produced it. When a job sets `cooldown_period`,
@@ -1046,7 +1051,7 @@ runs: `repoactive` does not fetch, so a clone that has not pulled the merge
 will not see the cooldown and will re-run the job. See
 [Keeping the local clone current](#keeping-the-local-clone-current).
 
-## Throttling a job when a superset lands with `cooldown_on`
+### Throttling a job when a superset lands with `cooldown_on`
 
 Some jobs are strict supersets of others. `uv lock --upgrade` refreshes
 every dependency group, so its diff already contains everything
@@ -1086,7 +1091,7 @@ has an open, unmerged branch is always refreshed regardless of cooldown (see
 its branch is rebased and, if the change is now redundant, self-closes on
 the next run.
 
-## Limiting job runtime with `timeout`
+### Limiting job runtime with `timeout`
 
 A job's `command` can hang or run away. Setting `timeout` caps how long the
 command may run; when the limit is reached `repoactive` kills the command's
@@ -1116,7 +1121,7 @@ title = "chore: fix lint"
 timeout = "0s"        # opt out of the timeout entirely
 ```
 
-## Generating jobs dynamically
+### Generating jobs dynamically
 
 Sometimes the useful set of jobs depends on the repository's contents - one
 job per package in a monorepo, one per entry in a manifest - and you don't
