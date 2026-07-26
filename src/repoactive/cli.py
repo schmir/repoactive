@@ -202,7 +202,7 @@ def callback(
 
 
 @app.command()
-def run(  # noqa: PLR0913
+def run(  # noqa: PLR0913, PLR0917
     config_paths: _ConfigOption = None,
     repo: _RepoOption = _DEFAULT_REPO,
     mode: Annotated[
