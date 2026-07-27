@@ -1,18 +1,11 @@
 # Changelog
 
-## 0.3.1 - unreleased
+## 0.3.1 - 2026-07-27
 
-- Jobs can now declare the secrets their command may read with a new
-  `secret_env` field (also settable in `[job-defaults]`). A variable named
-  in any `secret_env` is marked a secret and stripped from every job
-  command's environment; a job reads it back only by listing it in its own
-  `secret_env`, so a secret is never present in a job that did not ask for
-  it. `[job-defaults].secret_env` marks names config-wide but grants them to
-  no job. A job that grants a secret unset in repoactive's environment fails
-  fast with a clear error. Names must be valid environment-variable names
-  and may not use the reserved `RA_`/`REPOACTIVE_` prefixes. Redacting
-  secret values from a command's captured output is deferred to a later
-  change; see [ADR 0017](docs/adr/0017-secret-env-redaction.md).
+- A new `secret_env` field lets a job declare the secrets its command may
+  read. Named variables are stripped from every job's environment and handed
+  back only to the jobs that list them. See
+  [ADR 0017](docs/adr/0017-secret-env-redaction.md).
 - **Fix:** the absorb phase could silently revert a dependency's change out
   of a stacked dependent's commit. Abandoning a job's fresh phase-1 commit
   reparented a not-yet-absorbed dependent still stacked on it using jj's
