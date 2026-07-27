@@ -7,7 +7,7 @@ import shutil
 import subprocess
 import tempfile
 import time
-from collections.abc import Collection, Generator
+from collections.abc import Callable, Collection, Generator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -46,6 +46,19 @@ def _jj_timestamp(dt: datetime) -> str:
 def workspace_name(job_name: str) -> str:
     """Workspace name repoactive uses for a job's temporary workspace."""
     return f"{WORKSPACE_PREFIX}{job_name}"
+
+
+def revset_heads(revs: list[str]) -> str:
+    """Build a revset selecting the heads of ``revs``.
+
+    Wraps the (non-empty) union of ``revs`` in jj's ``heads()``, dropping any
+    commit that is an ancestor of another in the set. Used to merge prerequisite
+    heads with the run's parents: an unmoved trunk collapses to a single parent
+    (no needless merge commit), a diverged one survives as a real second parent
+    (ADR 0019, "Prerequisites: merged with trunk"). Elements are OR'd in
+    verbatim, so each may be any revset expression, not just a bare revision.
+    """
+    return f"heads({' | '.join(revs)})"
 
 
 class JJError(Exception):
@@ -148,6 +161,43 @@ class JobCommit:
     relative_age: str
 
 
+# \x1f (ASCII Unit Separator) can't appear in commit subjects, job names, or
+# timestamps, so it's safe as a field delimiter. jj templates use the escape
+# form; Python splits on the actual byte.
+_FIELD_SEP = "\x1f"
+
+# Template body shared by the trailer-scanning log queries: the JobCommit fields
+# joined by _FIELD_SEP. Interpolate the caller's predicate around it.
+_JOB_COMMIT_FIELDS = (
+    'join("\\x1f", '
+    "commit_id.short(), "
+    "change_id.short(), "
+    f'trailers.filter(|t| t.key() == "{JOB_TRAILER_KEY}").map(|t| t.value()).join(","), '
+    "committer.timestamp().local().ago(), "
+    "description.first_line()"
+    ') ++ "\\n"'
+)
+
+
+def _parse_job_commits(output: str) -> list[JobCommit]:
+    """Parse _FIELD_SEP-delimited JobCommit lines produced by _JOB_COMMIT_FIELDS."""
+    result = []
+    for line in output.splitlines():
+        parts = line.split(_FIELD_SEP, 4)
+        if len(parts) == 5:  # noqa: PLR2004
+            result.append(
+                JobCommit(
+                    commit_id=parts[0],
+                    change_id=parts[1],
+                    # Undo the template's comma-join; job names never contain a comma.
+                    job_names=set(parts[2].split(",")),
+                    relative_age=parts[3],
+                    subject=parts[4],
+                )
+            )
+    return result
+
+
 class JJ:
     """Wrapper around the jj CLI, bound to a repository or workspace directory."""
 
@@ -208,6 +258,44 @@ class JJ:
         """
         return self._run("op", "log", "--no-graph", "--limit", "1", "-T", "id.short()").strip()
 
+    def op_restore(self, op_id: str) -> None:
+        """Roll the whole repository back to operation ``op_id``.
+
+        Used to undo a job's in-place rewrite when its command fails (ADR 0020):
+        the rebase/edit/restore that regenerates the command commit are all
+        recorded as operations after ``op_id``, so restoring to it leaves the
+        branch byte-for-byte as it was. Safe because runs are serialised by the
+        run lock and jobs execute sequentially, so no concurrent operation races
+        this restore.
+        """
+        self._run("op", "restore", op_id)
+
+    @contextlib.contextmanager
+    def op_checkpoint(self) -> Generator[Callable[[], None]]:
+        """Capture the current operation and restore it if the block raises.
+
+        On entry the current ``op_id`` is recorded. If the ``with`` block raises,
+        the whole repository is rolled back to that operation via
+        :meth:`op_restore` before the exception propagates, undoing any in-place
+        rewrites the block performed. The yielded callable triggers the same
+        restore explicitly, for cases that need to roll back without raising::
+
+            with repo.op_checkpoint() as restore:
+                ...  # rewrites; any exception here rolls back automatically
+                if no_changes:
+                    restore()  # roll back on a non-error path
+        """
+        op_id = self.op_id()
+
+        def restore() -> None:
+            self.op_restore(op_id)
+
+        try:
+            yield restore
+        except BaseException:
+            restore()
+            raise
+
     def git_init_colocate(self) -> None:
         """Initialise a jj repository colocated with the git repository at ``cwd``.
 
@@ -219,8 +307,27 @@ class JJ:
     def new(self, *parents: str) -> None:
         self._run("new", *parents)
 
+    def edit(self, revision: str) -> None:
+        """Make ``revision`` the working-copy commit (``@``) of this workspace.
+
+        Used to rewrite a commit in place: point ``@`` at the command commit so a
+        subsequent restore + command run regenerate its content directly, keeping
+        its change-id (ADR 0020). Only this workspace's ``@`` moves.
+        """
+        self._run("edit", revision)
+
     def restore(self, *, source_rev: str, destination_rev: str) -> None:
         self._run("restore", "--from", source_rev, "--into", destination_rev)
+
+    def restore_working_copy(self) -> None:
+        """Reset ``@`` to its parent's contents, discarding its own diff.
+
+        ``jj restore`` with no paths restores every path from the parent, leaving
+        ``@`` empty. Used after ``edit`` to give a command a clean tree to
+        regenerate its output into, in place of the old command commit's diff
+        (ADR 0020).
+        """
+        self._run("restore")
 
     def rebase(self, *onto: str) -> None:
         onto_args = [arg for parent in onto for arg in ("--onto", parent)]
@@ -233,13 +340,18 @@ class JJ:
         self._run("bookmark", "delete", name)
 
     def bookmark_exists(self, name: str) -> bool:
-        return any(b.name == name for b in self.bookmark_list())
+        return self.bookmark_change_id(name) is not None
 
     def remote_bookmark_exists(self, name: str) -> bool:
         """Return True if a remote-tracking bookmark for ``name`` exists."""
-        template = f'if(self.remote() && self.name() == "{name}", "1\\n", "")'
-        output = self._run("bookmark", "list", "-T", template)
-        return bool(output.strip())
+        return self.remote_bookmark_commit_id(name) is not None
+
+    def remote_bookmark_commit_id(self, name: str) -> str | None:
+        """Return the git commit id the remote-tracking bookmark ``name`` points at, or None."""
+        revset = f'remote_bookmarks(exact:"{name}")'
+        output = self._run("log", "--no-graph", "-r", revset, "-T", 'commit_id ++ "\\n"')
+        lines = [line for line in output.splitlines() if line]
+        return lines[0] if lines else None
 
     def bookmark_track(self, *bookmarks: str) -> None:
         """Track the given remote bookmarks so local bookmarks follow them."""
@@ -283,7 +395,10 @@ class JJ:
 
     def bookmark_change_id(self, name: str) -> str | None:
         """Return the change-id of the local bookmark ``name``, or None if absent."""
-        return next((b.change_id for b in self.bookmark_list() if b.name == name), None)
+        revset = f'bookmarks(exact:"{name}")'
+        output = self._run("log", "--no-graph", "-r", revset, "-T", 'change_id ++ "\\n"')
+        lines = [line for line in output.splitlines() if line]
+        return lines[0] if lines else None
 
     def rebase_revision(self, revision: str, *onto: str) -> None:
         """Rebase a specific revision onto ``onto`` without touching ``@``.
@@ -327,40 +442,77 @@ class JJ:
         ``revset="~(::trunk())"`` for unmerged only.
         """
         revset = f'{revset} & committer_date(after:"{_jj_timestamp(since)}")'
-        # \x1f (ASCII Unit Separator) can't appear in commit subjects, job names, or timestamps,
-        # so it's safe as a field delimiter. jj templates use the escape form; Python splits on the
-        # actual byte.
-        sep = "\\x1f"
-        # Field order: commit_id, change_id, job names (comma-joined), relative_age, subject
         template = f"""
         if(trailers.contains_key("{JOB_TRAILER_KEY}"),
-           join("{sep}",
-             commit_id.short(),
-             change_id.short(),
-             trailers.filter(|t| t.key() == "{JOB_TRAILER_KEY}").map(|t| t.value()).join(","),
-             committer.timestamp().local().ago(),
-             description.first_line()
-           ) ++ "\\n",
+           {_JOB_COMMIT_FIELDS},
            ""
         )
         """
         output = self._run("log", "--no-graph", "-r", revset, "-T", template)
-        result = []
-        for line in output.splitlines():
-            parts = line.split("\x1f", 4)
-            if len(parts) == 5:  # noqa: PLR2004
-                result.append(
-                    JobCommit(
-                        commit_id=parts[0],
-                        change_id=parts[1],
-                        # Undo the template's comma-join; job names never
-                        # contain a comma.
-                        job_names=set(parts[2].split(",")),
-                        relative_age=parts[3],
-                        subject=parts[4],
-                    )
-                )
-        return result
+        return _parse_job_commits(output)
+
+    def job_commits_in_revset(self, revset: str, job_name: str) -> list[JobCommit]:
+        """Return commits in ``revset`` carrying a ``Repoactive-Job`` trailer for ``job_name``.
+
+        Ordered newest-first (jj's default log order). Branch-layer detection
+        (ADR 0019) uses this to locate this job's command commit within a
+        branch slice ``P..R`` - exactly one match on a normal branch, zero when
+        the branch is all human commits, more than one only on a corrupted
+        branch.
+        """
+        # Job names are regex-restricted (config._JOB_NAME_RE), so interpolating
+        # into the template is safe.
+        template = f"""
+        if(trailers.any(|t| t.key() == "{JOB_TRAILER_KEY}" && t.value() == "{job_name}"),
+           {_JOB_COMMIT_FIELDS},
+           ""
+        )
+        """
+        output = self._run("log", "--no-graph", "-r", revset, "-T", template)
+        return _parse_job_commits(output)
+
+    def revset_is_empty(self, revset: str) -> bool:
+        """Return True if the revset contains no commits."""
+        output = self._run("log", "--no-graph", "-r", revset, "-T", '"x\\n"')
+        return not output.strip()
+
+    def heads(self, revset: str) -> list[str]:
+        """Return the change-id heads of ``revset``, or [] if empty.
+
+        Used to find the prerequisite tip ``heads((P..C) & ~C)``. A linear
+        prerequisite chain has one head; [] means there are no prerequisites.
+        """
+        output = self._run(
+            "log", "--no-graph", "-r", f"heads({revset})", "-T", 'change_id.short() ++ "\\n"'
+        )
+        return [line for line in output.splitlines() if line]
+
+    def roots(self, revset: str) -> list[str]:
+        """Return the change-id roots of ``revset``, or [] if empty.
+
+        Used to find the bottom fixups ``roots(C..R)`` - the commits directly
+        above the command commit - so the fixup chain can be reapplied on the
+        regenerated output. A linear fixup chain has one root; [] means there
+        are no fixups.
+        """
+        output = self._run(
+            "log", "--no-graph", "-r", f"roots({revset})", "-T", 'change_id.short() ++ "\\n"'
+        )
+        return [line for line in output.splitlines() if line]
+
+    def commit_ids(self, revset: str) -> list[str]:
+        """Return the git commit ids of the commits in ``revset``, or [] if empty."""
+        output = self._run("log", "--no-graph", "-r", revset, "-T", 'commit_id ++ "\\n"')
+        return [line for line in output.splitlines() if line]
+
+    def has_conflict(self, revset: str) -> bool:
+        """Return True if any commit in ``revset`` contains a materialized conflict.
+
+        jj refuses to push a conflicted commit, so ADR 0019 checks this before
+        pushing a rebuilt branch and freezes (pushes nothing) when it holds.
+        """
+        output = self._run("log", "--no-graph", "-r", f"({revset}) & conflicts()", "-T", '"x\\n"')
+        return bool(output.strip())
 
     def job_names_in_revset(self, revset: str) -> set[str]:
         """Job names that appear in revset."""
@@ -477,6 +629,18 @@ class JJ:
         """Names of the workspaces jj currently tracks for this repo."""
         return set(self._run("workspace", "list", "-T", 'name ++ "\\n"').splitlines())
 
+    def update_stale_working_copy(self) -> None:
+        """Reconcile this workspace's working copy if another workspace's rewrite staled it.
+
+        Rewriting a commit that another workspace has checked out (e.g. the
+        default workspace, when a human's ``@`` sits on the repoactive branch a
+        job is rewriting in place; ADR 0020) marks that workspace stale, and jj
+        then refuses further working-copy commands there, including
+        ``workspace add`` for the next job. ``update-stale`` fast-forwards the
+        working copy to the rewritten commit. A no-op when it is not stale.
+        """
+        self._run("workspace", "update-stale")
+
     def forget_stale_workspaces(self) -> None:
         """Forget any leftover repoactive workspaces and prune their dead worktrees.
 
@@ -540,6 +704,10 @@ class JJ:
         tmp_root = Path(tempfile.mkdtemp(prefix="repoactive-workspace-"))
         workspace_path = tmp_root / "workspace"
         logger.debug("adding workspace %s at %s", name, workspace_path)
+        # A previous job's in-place rewrite (ADR 0020) may have left this (the
+        # default) workspace stale; jj refuses `workspace add` while it is, so
+        # reconcile it first. No-op when nothing staled it.
+        self.update_stale_working_copy()
         self._workspace_add(name, workspace_path, colocation)
         try:
             yield JJ(workspace_path)

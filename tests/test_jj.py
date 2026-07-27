@@ -107,12 +107,12 @@ class TestBookmarkDelete:
 class TestBookmarkExists:
     @patch("repoactive.jj.subprocess.run")
     def test_returns_true_when_found(self, mock_run: MagicMock) -> None:
-        mock_run.return_value.stdout = _BOOKMARKS_OUTPUT
+        mock_run.return_value.stdout = "klmkpoomqllrzxynwkoozmypqowtpyys\n"
         assert _jj().bookmark_exists("rschmitt/alpine") is True
 
     @patch("repoactive.jj.subprocess.run")
     def test_returns_false_when_not_found(self, mock_run: MagicMock) -> None:
-        mock_run.return_value.stdout = _BOOKMARKS_OUTPUT
+        mock_run.return_value.stdout = ""
         assert _jj().bookmark_exists("repoactive/missing") is False
 
     @patch("repoactive.jj.subprocess.run")
@@ -121,9 +121,11 @@ class TestBookmarkExists:
         assert _jj().bookmark_exists("repoactive/foo") is False
 
     @patch("repoactive.jj.subprocess.run")
-    def test_no_partial_name_match(self, mock_run: MagicMock) -> None:
-        mock_run.return_value.stdout = "abcdefghijklmnopqrstuvwxyzabcdef rschmitt/foobar\n"
-        assert _jj().bookmark_exists("rschmitt/foo") is False
+    def test_uses_exact_match_revset(self, mock_run: MagicMock) -> None:
+        mock_run.return_value.stdout = ""
+        _jj().bookmark_exists("rschmitt/foo")
+        revset = mock_run.call_args[0][0][-3]
+        assert revset == 'bookmarks(exact:"rschmitt/foo")'
 
 
 class TestRemoteBookmarkExists:
@@ -138,11 +140,11 @@ class TestRemoteBookmarkExists:
         assert _jj().remote_bookmark_exists("repoactive/foo") is False
 
     @patch("repoactive.jj.subprocess.run")
-    def test_passes_name_in_template(self, mock_run: MagicMock) -> None:
+    def test_passes_name_in_revset(self, mock_run: MagicMock) -> None:
         mock_run.return_value.stdout = ""
         _jj().remote_bookmark_exists("repoactive/my-job")
-        template = mock_run.call_args[0][0][-1]
-        assert '"repoactive/my-job"' in template
+        revset = mock_run.call_args[0][0][-3]
+        assert '"repoactive/my-job"' in revset
 
 
 _TEMPLATE = """
@@ -262,6 +264,36 @@ class TestRestore:
         mock_run.return_value.stdout = ""
         _jj().restore(source_rev="repoactive/foo", destination_rev="@")
         assert mock_run.call_args == _call("restore", "--from", "repoactive/foo", "--into", "@")
+
+    @patch("repoactive.jj.subprocess.run")
+    def test_restore_working_copy_takes_no_paths(self, mock_run: MagicMock) -> None:
+        mock_run.return_value.stdout = ""
+        _jj().restore_working_copy()
+        assert mock_run.call_args == _call("restore")
+
+
+class TestEdit:
+    @patch("repoactive.jj.subprocess.run")
+    def test_edits_revision(self, mock_run: MagicMock) -> None:
+        mock_run.return_value.stdout = ""
+        _jj().edit("repoactive/foo")
+        assert mock_run.call_args == _call("edit", "repoactive/foo")
+
+
+class TestOpRestore:
+    @patch("repoactive.jj.subprocess.run")
+    def test_restores_to_operation(self, mock_run: MagicMock) -> None:
+        mock_run.return_value.stdout = ""
+        _jj().op_restore("abc123")
+        assert mock_run.call_args == _call("op", "restore", "abc123")
+
+
+class TestUpdateStaleWorkingCopy:
+    @patch("repoactive.jj.subprocess.run")
+    def test_updates_stale_working_copy(self, mock_run: MagicMock) -> None:
+        mock_run.return_value.stdout = ""
+        _jj().update_stale_working_copy()
+        assert mock_run.call_args == _call("workspace", "update-stale")
 
 
 class TestRebase:
@@ -457,18 +489,25 @@ class TestSameContent:
 class TestBookmarkChangeId:
     @patch("repoactive.jj.subprocess.run")
     def test_returns_change_id_for_existing_bookmark(self, mock_run: MagicMock) -> None:
-        mock_run.return_value.stdout = "zzzzabc repoactive/foo\n"
+        mock_run.return_value.stdout = "zzzzabc\n"
         assert _jj().bookmark_change_id("repoactive/foo") == "zzzzabc"
 
     @patch("repoactive.jj.subprocess.run")
     def test_returns_none_for_missing_bookmark(self, mock_run: MagicMock) -> None:
-        mock_run.return_value.stdout = "zzzzabc repoactive/other\n"
+        mock_run.return_value.stdout = ""
         assert _jj().bookmark_change_id("repoactive/foo") is None
 
     @patch("repoactive.jj.subprocess.run")
     def test_returns_none_when_no_bookmarks(self, mock_run: MagicMock) -> None:
         mock_run.return_value.stdout = ""
         assert _jj().bookmark_change_id("repoactive/foo") is None
+
+    @patch("repoactive.jj.subprocess.run")
+    def test_uses_exact_match_revset(self, mock_run: MagicMock) -> None:
+        mock_run.return_value.stdout = ""
+        _jj().bookmark_change_id("repoactive/foo")
+        revset = mock_run.call_args[0][0][-3]
+        assert revset == 'bookmarks(exact:"repoactive/foo")'
 
 
 class TestRebaseRevision:

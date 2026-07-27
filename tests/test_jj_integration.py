@@ -264,6 +264,31 @@ class TestOpId:
         assert repo.op_id() != before
 
 
+class TestOpCheckpoint:
+    def test_keeps_changes_when_block_succeeds(self, repo: JJ) -> None:
+        with repo.op_checkpoint():
+            (repo.cwd / "file.txt").write_text("hello")
+            repo.describe("kept")
+        assert _description(repo) == "kept"
+        assert _file_content(repo, "@", "file.txt") == "hello"
+
+    def test_restores_when_block_raises(self, repo: JJ) -> None:
+        with pytest.raises(RuntimeError, match="boom"), repo.op_checkpoint():
+            (repo.cwd / "file.txt").write_text("undone")
+            repo.describe("undone")
+            raise RuntimeError("boom")
+        assert _description(repo) == ""
+        assert not (repo.cwd / "file.txt").exists()
+
+    def test_yielded_callable_restores_on_a_non_error_path(self, repo: JJ) -> None:
+        with repo.op_checkpoint() as restore:
+            (repo.cwd / "file.txt").write_text("undone")
+            repo.describe("undone")
+            restore()
+        assert _description(repo) == ""
+        assert not (repo.cwd / "file.txt").exists()
+
+
 class TestRestore:
     def test_discards_current_commits_own_changes(self, repo: JJ) -> None:
         (repo.cwd / "file.txt").write_text("hello")
@@ -356,7 +381,7 @@ class TestRebaseRevision:
         """ "-r" rebases only the named revision; descendants stay put.
 
         A pre-existing descendant ("b", stacked on "a") is *not* carried along
-        to "a"'s new position -- it is refilled onto "a"'s old parent
+        to "a"'s new position; it is refilled onto "a"'s old parent
         ("trunk") instead, so it loses "a"'s contribution (fileA.txt). This is
         jj's own documented "-r" gap-fill behaviour, not a repoactive choice;
         see ``rebase_source`` for the variant that keeps descendants stacked.
@@ -507,6 +532,25 @@ class TestBookmarkExists:
         assert repo.bookmark_exists("mybranch") is False
 
 
+class TestBookmarkChangeId:
+    def test_returns_change_id_of_existing_bookmark(self, repo: JJ) -> None:
+        repo.bookmark_set("mybranch")
+        assert repo.bookmark_change_id("mybranch") == _change_id(repo)
+
+    def test_none_when_bookmark_missing(self, repo: JJ) -> None:
+        assert repo.bookmark_change_id("nonexistent") is None
+
+    def test_no_partial_name_match(self, repo: JJ) -> None:
+        repo.bookmark_set("mybranch-long")
+        assert repo.bookmark_change_id("mybranch") is None
+
+    def test_reflects_bookmark_after_move(self, repo: JJ) -> None:
+        repo.bookmark_set("mybranch")
+        repo.new("@")
+        repo.bookmark_set("mybranch")
+        assert repo.bookmark_change_id("mybranch") == _change_id(repo)
+
+
 class TestBookmarkTrack:
     def test_tracks_fetched_remote_bookmark(
         self, repo_with_remote: tuple[JJ, Path], tmp_path: Path
@@ -562,6 +606,49 @@ class TestBookmarkTrack:
 
     def test_no_bookmarks_is_noop(self, repo: JJ) -> None:
         repo.bookmark_track()  # must not raise
+
+
+class TestRemoteBookmarkCommitId:
+    def test_returns_commit_id_of_pushed_bookmark(self, repo_with_remote: tuple[JJ, Path]) -> None:
+        local, _ = repo_with_remote
+        local.describe("initial commit")
+        local.bookmark_set("feature")
+        local.git_push_bookmarks("feature")
+        assert local.remote_bookmark_commit_id("feature") == _commit_id(local, "feature")
+
+    def test_none_when_bookmark_not_pushed(self, repo_with_remote: tuple[JJ, Path]) -> None:
+        local, _ = repo_with_remote
+        local.describe("initial commit")
+        local.bookmark_set("feature")
+        assert local.remote_bookmark_commit_id("feature") is None
+
+    def test_none_for_unknown_bookmark(self, repo: JJ) -> None:
+        assert repo.remote_bookmark_commit_id("nonexistent") is None
+
+    def test_no_partial_name_match(self, repo_with_remote: tuple[JJ, Path]) -> None:
+        local, _ = repo_with_remote
+        local.describe("initial commit")
+        local.bookmark_set("feature-long")
+        local.git_push_bookmarks("feature-long")
+        assert local.remote_bookmark_commit_id("feature") is None
+
+    def test_reflects_last_push_not_later_local_moves(
+        self, repo_with_remote: tuple[JJ, Path]
+    ) -> None:
+        # The idempotency skip relies on this: after jj auto-rebases a branch, its
+        # local commit id moves but the remote-tracking id stays at what was pushed.
+        local, _ = repo_with_remote
+        local.describe("initial commit")
+        local.bookmark_set("feature")
+        local.git_push_bookmarks("feature")
+        pushed = _commit_id(local, "feature")
+
+        local.new("feature")
+        local.describe("more work")
+        local.bookmark_set("feature")
+
+        assert _commit_id(local, "feature") != pushed
+        assert local.remote_bookmark_commit_id("feature") == pushed
 
 
 class TestGetRemoteUrl:
@@ -728,6 +815,215 @@ class TestRecentJobCommits:
 
     def test_empty_when_no_job_commits(self, repo: JJ) -> None:
         assert repo.recent_job_commits(self._day_ago()) == []
+
+
+class TestJobCommitsInRevset:
+    def test_finds_matching_commit(self, repo: JJ) -> None:
+        repo.describe("upgrade deps\n\nRepoactive-Job: my-job")
+        commits = repo.job_commits_in_revset("::@", "my-job")
+        assert len(commits) == 1
+        commit = commits[0]
+        assert commit.job_names == {"my-job"}
+        assert commit.subject == "upgrade deps"
+        assert commit.commit_id == _commit_id(repo)[: len(commit.commit_id)]
+        assert commit.change_id == _change_id(repo)[: len(commit.change_id)]
+
+    def test_excludes_commit_with_different_job_name(self, repo: JJ) -> None:
+        repo.describe("upgrade deps\n\nRepoactive-Job: other-job")
+        assert repo.job_commits_in_revset("::@", "my-job") == []
+
+    def test_excludes_commit_without_trailer(self, repo: JJ) -> None:
+        repo.describe("upgrade deps")
+        assert repo.job_commits_in_revset("::@", "my-job") == []
+
+    def test_matches_within_dag_range(self, repo: JJ) -> None:
+        # Mirrors ADR 0019's P..R usage: the command commit sits between the
+        # run's parents and the branch tip, below a human fixup.
+        repo.describe("root")
+        repo.bookmark_set("base")
+        repo.new("@")
+        repo.describe("upgrade deps\n\nRepoactive-Job: my-job")
+        repo.new("@")
+        repo.describe("fixup")
+        commits = repo.job_commits_in_revset("base..@", "my-job")
+        assert len(commits) == 1
+        assert commits[0].subject == "upgrade deps"
+
+    def test_revset_restricts_to_reachable_commits(self, repo: JJ) -> None:
+        repo.describe("on main\n\nRepoactive-Job: my-job")
+        repo.bookmark_set("main")
+        # a sibling branch off the root, not descending from the job commit
+        repo.new("root()")
+        repo.describe("unrelated\n\nRepoactive-Job: my-job")
+        repo.bookmark_set("other")
+        assert len(repo.job_commits_in_revset("::main", "my-job")) == 1
+        assert len(repo.job_commits_in_revset("::other", "my-job")) == 1
+        assert len(repo.job_commits_in_revset("::(main | other)", "my-job")) == 2  # noqa: PLR2004
+
+    def test_returns_multiple_matches_for_duplicated_trailer(self, repo: JJ) -> None:
+        # A corrupted branch: two commits both carry this job's trailer.
+        repo.describe("first\n\nRepoactive-Job: my-job")
+        repo.new("@")
+        repo.describe("second\n\nRepoactive-Job: my-job")
+        assert len(repo.job_commits_in_revset("::@", "my-job")) == 2  # noqa: PLR2004
+
+
+class TestRevsetIsEmpty:
+    def test_true_when_bounds_are_equal(self, repo: JJ) -> None:
+        repo.describe("base")
+        repo.bookmark_set("base")
+        assert repo.revset_is_empty("base..base") is True
+
+    def test_true_when_high_is_ancestor_of_low(self, repo: JJ) -> None:
+        repo.describe("base")
+        repo.bookmark_set("base")
+        repo.new("@")
+        repo.describe("child")
+        repo.bookmark_set("child")
+        assert repo.revset_is_empty("child..base") is True
+
+    def test_false_when_high_adds_commits_over_low(self, repo: JJ) -> None:
+        repo.describe("base")
+        repo.bookmark_set("base")
+        repo.new("@")
+        repo.describe("child")
+        repo.bookmark_set("child")
+        assert repo.revset_is_empty("base..child") is False
+
+
+class TestHeads:
+    def test_single_head_of_linear_chain(self, repo: JJ) -> None:
+        repo.describe("root")
+        repo.bookmark_set("root")
+        repo.new("@")
+        repo.describe("child")
+        heads = repo.heads("root..@")
+        assert len(heads) == 1
+        assert heads[0] == _change_id(repo)[: len(heads[0])]
+
+    def test_empty_for_empty_revset(self, repo: JJ) -> None:
+        assert repo.heads("none()") == []
+
+    def test_two_heads_for_diverging_branches(self, repo: JJ) -> None:
+        repo.describe("root")
+        repo.bookmark_set("root")
+        repo.new("root")
+        repo.describe("a")
+        repo.bookmark_set("a")
+        repo.new("root")
+        repo.describe("b")
+        repo.bookmark_set("b")
+        assert len(repo.heads("root..(a | b)")) == 2  # noqa: PLR2004
+
+
+class TestRoots:
+    def test_single_root_of_linear_chain(self, repo: JJ) -> None:
+        repo.describe("root")
+        repo.bookmark_set("root")
+        repo.new("@")
+        repo.describe("child")
+        repo.bookmark_set("child")
+        repo.new("@")
+        repo.describe("grandchild")
+        roots = repo.roots("root..@")
+        assert len(roots) == 1
+        assert roots[0] == _change_id(repo, "child")[: len(roots[0])]
+
+    def test_empty_for_empty_revset(self, repo: JJ) -> None:
+        assert repo.roots("none()") == []
+
+    def test_two_roots_for_diverging_branches(self, repo: JJ) -> None:
+        repo.describe("root")
+        repo.bookmark_set("root")
+        repo.new("root")
+        repo.describe("a")
+        repo.bookmark_set("a")
+        repo.new("root")
+        repo.describe("b")
+        repo.bookmark_set("b")
+        assert len(repo.roots("root..(a | b)")) == 2  # noqa: PLR2004
+
+
+class TestCommitIds:
+    def test_single_commit_returns_its_full_commit_id(self, repo: JJ) -> None:
+        repo.describe("root")
+        assert repo.commit_ids("@") == [_commit_id(repo)]
+
+    def test_empty_for_empty_revset(self, repo: JJ) -> None:
+        assert repo.commit_ids("none()") == []
+
+    def test_multiple_commits_returned_for_diverging_branches(self, repo: JJ) -> None:
+        repo.describe("root")
+        repo.bookmark_set("root")
+        repo.new("root")
+        repo.describe("a")
+        repo.bookmark_set("a")
+        repo.new("root")
+        repo.describe("b")
+        repo.bookmark_set("b")
+        assert set(repo.commit_ids("a | b")) == {_commit_id(repo, "a"), _commit_id(repo, "b")}
+
+    def test_resolves_the_parents_of_a_commit(self, repo: JJ) -> None:
+        repo.describe("root")
+        repo.bookmark_set("root")
+        repo.new("@")
+        repo.describe("child")
+        assert repo.commit_ids("@-") == [_commit_id(repo, "root")]
+
+    def test_resolves_both_parents_of_a_merge_commit(self, repo: JJ) -> None:
+        repo.describe("root")
+        repo.bookmark_set("root")
+        repo.new("root")
+        repo.describe("a")
+        repo.bookmark_set("a")
+        repo.new("root")
+        repo.describe("b")
+        repo.bookmark_set("b")
+        repo.new("a", "b")
+        assert set(repo.commit_ids("@-")) == {_commit_id(repo, "a"), _commit_id(repo, "b")}
+
+
+class TestHasConflict:
+    def test_false_for_plain_commit(self, repo: JJ) -> None:
+        repo.describe("plain commit")
+        assert repo.has_conflict("@") is False
+
+    def test_true_when_revset_contains_conflicted_commit(self, repo: JJ) -> None:
+        (repo.cwd / "file.txt").write_text("base")
+        repo.describe("base")
+        repo.bookmark_set("base")
+
+        repo.new("base")
+        (repo.cwd / "file.txt").write_text("new content")
+        repo.describe("new")
+        repo.bookmark_set("new")
+
+        repo.new("base")
+        (repo.cwd / "file.txt").write_text("conflicting")
+        repo.describe("old")
+        repo.bookmark_set("old")
+
+        repo.rebase("new")
+        assert _has_conflict(repo, "old")
+        assert repo.has_conflict("old") is True
+
+    def test_false_when_conflict_is_outside_revset(self, repo: JJ) -> None:
+        (repo.cwd / "file.txt").write_text("base")
+        repo.describe("base")
+        repo.bookmark_set("base")
+
+        repo.new("base")
+        (repo.cwd / "file.txt").write_text("new content")
+        repo.describe("new")
+        repo.bookmark_set("new")
+
+        repo.new("base")
+        (repo.cwd / "file.txt").write_text("conflicting")
+        repo.describe("old")
+        repo.bookmark_set("old")
+
+        repo.rebase("new")
+        assert repo.has_conflict("new") is False
 
 
 class TestRequireColocatedRepo:
