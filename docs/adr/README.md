@@ -64,11 +64,12 @@ it.
   jobs and platforms share one merge helper. A breaking change; the old
   array form is rejected with a migration hint.
 - [0012 — Run jobs on fresh commits, then absorb results into existing commits](0012-two-phase-commit-run-then-absorb.md)
-  — Accepted. Jobs always run on a fresh commit so a failed command never
-  touches an existing branch. Successful results are absorbed back into the
-  old commits (in-place mutation, same change-id) so jj auto-rebases
-  dependent branches not in this run. The rejected alternative — skip absorb
-  and push new commits directly — would lose change-id continuity.
+  — Superseded by [0020](0020-rewrite-command-commit-in-place.md). Jobs ran
+  on a fresh commit so a failed command never touched an existing branch,
+  and successful results were absorbed back into the old commits (in-place
+  mutation, same change-id). The change-id continuity requirement it
+  established still holds; 0020 keeps it while dropping the fresh commit and
+  the absorb phase.
 - [0013 — `run_only_if_changed` gates a job on upstream diffs](0013-run-only-if-changed.md)
   — Accepted. A job listing upstream job names in `run_only_if_changed` is
   skipped (with a no-op result, not a block) when none of those jobs
@@ -101,3 +102,23 @@ it.
   environment repoactive is launched with covers shared values across all
   jobs. Unlike secrets, a non-secret literal has nothing to scope, so it
   earns no dedicated config surface.
+- [0019 — Preserve human commits on a repoactive branch](0019-preserve-human-commits.md)
+  — Accepted. repoactive preserves a human commit by its position relative
+  to the `Repoactive-Job` command commit: below it (a prerequisite, reached
+  via `jj rebase`) becomes a merge parent alongside `trunk()` and is never
+  rebased; above it (a fixup, committed on top) is reapplied on the
+  regenerated output. No trailer or keyword for the human. A conflict jj
+  cannot push freezes the branch at its last clean state and labels the MR.
+  The refresh guarantee (0003) survives via the merge; repoactive stops
+  being the branch's sole writer, a departure from 0005. The absorb-based
+  "Run ordering" mechanism is superseded by
+  [0020](0020-rewrite-command-commit-in-place.md).
+- [0020 — Rewrite the command commit in place; no absorb phase](0020-rewrite-command-commit-in-place.md)
+  — Accepted (supersedes 0012, replaces 0019's absorb mechanics). `run_job`
+  rewrites the command commit in place — rebase it and its fixups onto the
+  run's parents, empty it, regenerate the command's output into it — so the
+  change-id is preserved and there is nothing to absorb. Failure and
+  empty-diff roll back with an op-log restore captured before any mutation
+  (safe: the run lock serialises runs and jobs run sequentially). The
+  default workspace is reconciled with `jj workspace update-stale`. The
+  content-unchanged push-skip is a deferred follow-up.

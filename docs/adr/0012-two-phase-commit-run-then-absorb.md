@@ -1,7 +1,10 @@
 # 12. Run jobs on fresh commits, then absorb results into existing commits
 
-Status: Accepted (the absorb variant was implemented; see the alternative
-below for the rejected simpler form)
+Status: Superseded by [ADR 0020](0020-rewrite-command-commit-in-place.md),
+which rewrites the command commit in place (no fresh commit, no absorb
+phase) and recovers failure safety with an op-log restore. The context and
+the change-id continuity requirement below still hold; only the mechanism
+changed.
 
 ## Context
 
