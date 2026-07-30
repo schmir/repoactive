@@ -1,11 +1,12 @@
 """Tests for job orchestration and runner logic."""
 
+import contextlib
 import io
 import os
 import shutil
 import signal
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -13,8 +14,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 from pydantic import ValidationError
 
+from repoactive import human_commits
 from repoactive.config import Config, CreateMR, Job, JobDefaults
-from repoactive.jj import JJ
+from repoactive.jj import JJ, JobCommit
 from repoactive.runner import (
     RA_CONFIG_SOURCE_DIR_ENV,
     RA_JOB_BASE_BRANCH_ENV,
@@ -37,6 +39,7 @@ from repoactive.runner import (
     _format_duration,
     _job_extra_env,
     _load_job_specs,
+    _old_change_id,
     _prepare_repo,
     _resolve_granted_secrets,
     _run_command,
@@ -68,26 +71,24 @@ def _selection(
     return JobSelection(jobs=list(jobs), refreshed=refreshed, successors=successors)
 
 
-def _ctx(  # noqa: PLR0913
+def _ctx(
     *,
     config: Config | None = None,
     summary: RunSummary | None = None,
-    blocked: set[str] | None = None,
     selection: JobSelection | None = None,
     repo: JJ | None = None,
     repo_path: Path = REPO,
 ) -> RunContext:
     """Build a RunContext for a runner call.
 
-    ``summary`` and ``blocked`` are stored by reference, so a caller that passes
-    its own instances can assert on them after the call.
+    ``summary`` is stored by reference, so a caller that passes its own
+    instance can assert on it after the call.
     """
     return RunContext(
         config=config if config is not None else _config(),
         repo_path=repo_path,
         repo=repo if repo is not None else JJ(repo_path),
         summary=summary if summary is not None else RunSummary(),
-        blocked=blocked if blocked is not None else set(),
         selection=selection or JobSelection(jobs=[], refreshed=frozenset()),
     )
 
@@ -143,28 +144,44 @@ def _mock_jj(mock_jj_cls: MagicMock) -> MagicMock:
     """
     mock_jj = mock_jj_cls.return_value
     mock_jj.temp_workspace.return_value.__enter__.return_value = mock_jj
+
+    @contextlib.contextmanager
+    def op_checkpoint() -> Generator[Callable[[], None]]:
+        # Mirrors JJ.op_checkpoint's real behavior (capture op_id, restore to it
+        # on an explicit call or on an exception), routed through the mock's
+        # op_id/op_restore so assertions on those calls still work.
+        op_id = mock_jj.op_id()
+
+        def restore() -> None:
+            mock_jj.op_restore(op_id)
+
+        try:
+            yield restore
+        except BaseException:
+            restore()
+            raise
+
+    mock_jj.op_checkpoint.side_effect = op_checkpoint
     return mock_jj
 
 
 class TestRunOneJob:
     def test_blocked_dependency_skips(self) -> None:
-        # b depends on a, which already failed; b is skipped and itself blocks.
+        # b depends on a, which was itself skipped; b is skipped and itself blocks.
         config = _config(_job("a"), _job("b", depends_on=["a"]))
         job_b = config.jobs[1]
         summary = RunSummary()
-        blocked = {"a"}
+        summary.dependency_failed.add("a")
         with patch("repoactive.runner.run_job") as mock_run_job:
             _dispatch_job(
                 _ctx(
                     config=config,
                     summary=summary,
-                    blocked=blocked,
                     selection=_selection(*config.jobs),
                 ),
                 job=job_b,
             )
-        assert summary.skipped == {"b"}
-        assert "b" in blocked
+        assert summary.dependency_failed == {"a", "b"}
         assert summary.results == {}
         mock_run_job.assert_not_called()
 
@@ -295,8 +312,8 @@ class TestRunOneJob:
         mock_cooldown.assert_not_called()
 
     def test_successor_runs_when_dependency_ran_without_diff(self) -> None:
-        # a ran and found nothing — its bookmark will be deleted in the absorb
-        # phase, so b must still rebuild (on trunk) rather than stay stacked on
+        # a ran and found nothing — its bookmark will be deleted when its plan
+        # is recorded, so b must still rebuild (on trunk) rather than stay stacked on
         # a's old, soon-to-be-orphaned commit.
         job_a = _job("a")
         job_b = _job("b", depends_on=["a"])
@@ -356,11 +373,12 @@ class TestRunOneJob:
         assert kwargs["parents"] == ["trunk()"]
 
     def test_command_failure_records_and_blocks(self) -> None:
+        # A second _dispatch_job call for a dependent would read summary.failed
+        # (see test_blocked_dependency_skips) to see "a" as blocking.
         config = _config(_job("a"))
         job_a = config.jobs[0]
         err = CommandError("boom", elapsed=1.5)
         summary = RunSummary()
-        blocked: set[str] = set()
         with (
             patch("repoactive.runner._on_cooldown", return_value=False),
             patch("repoactive.runner.run_job", side_effect=err),
@@ -369,13 +387,11 @@ class TestRunOneJob:
                 _ctx(
                     config=config,
                     summary=summary,
-                    blocked=blocked,
                     selection=_selection(*config.jobs),
                 ),
                 job=job_a,
             )
         assert summary.failed == {"a": err}
-        assert blocked == {"a"}
         assert summary.results == {}
 
     def test_generic_failure_records_and_blocks(self) -> None:
@@ -383,7 +399,6 @@ class TestRunOneJob:
         job_a = config.jobs[0]
         err = RuntimeError("kaboom")
         summary = RunSummary()
-        blocked: set[str] = set()
         with (
             patch("repoactive.runner._on_cooldown", return_value=False),
             patch("repoactive.runner.run_job", side_effect=err),
@@ -392,13 +407,11 @@ class TestRunOneJob:
                 _ctx(
                     config=config,
                     summary=summary,
-                    blocked=blocked,
                     selection=_selection(*config.jobs),
                 ),
                 job=job_a,
             )
         assert summary.failed == {"a": err}
-        assert blocked == {"a"}
 
     def test_run_only_if_changed_skips_when_none_changed(self) -> None:
         # b gates on a, but a produced no diff — b is skipped with a no-op result.
@@ -416,7 +429,7 @@ class TestRunOneJob:
             )
         assert "b" in summary.results
         assert summary.results["b"].produced_diff is False
-        assert "b" not in summary.skipped
+        assert "b" not in summary.dependency_failed
         assert mock_run_job.call_count == 0
 
     def test_run_only_if_changed_runs_when_dep_changed(self) -> None:
@@ -455,8 +468,8 @@ class TestRunOneJob:
         assert mock_run_job.call_count == 0
 
     def test_run_only_if_changed_skip_recorded_in_dedicated_set(self) -> None:
-        # A gated skip must land in run_only_if_changed_skipped so the absorb
-        # phase knows not to delete the bookmark.
+        # A gated skip must land in run_only_if_changed_skipped so
+        # _record_job_plan knows not to delete the bookmark.
         job_a = _job("a")
         job_b = _job("b", depends_on=["a"], run_only_if_changed=["a"])
         config = _config(job_a, job_b)
@@ -469,7 +482,7 @@ class TestRunOneJob:
             job=config.jobs[1],
         )
         assert "b" in summary.run_only_if_changed_skipped
-        assert "b" not in summary.skipped
+        assert "b" not in summary.dependency_failed
         assert "b" not in summary.on_cooldown
 
     def test_refreshed_job_bypasses_run_only_if_changed_gate(self) -> None:
@@ -497,6 +510,43 @@ class TestRunOneJob:
             )
         mock_run_job.assert_called_once()
         assert "b" not in summary.run_only_if_changed_skipped
+
+
+class TestOldChangeId:
+    """_old_change_id returns the bookmark tip used for cleanup.
+
+    AlreadyMerged carries a real bookmark_change_id (the branch was manually
+    merged and left un-deleted): the stale bookmark still exists and must be
+    deleted, even though per ADR 0019 it has nothing worth restoring/rebasing.
+    """
+
+    def test_old_change_id_none_for_no_branch(self) -> None:
+        assert _old_change_id(human_commits.NoBranch()) is None
+
+    def test_old_change_id_none_for_none(self) -> None:
+        assert _old_change_id(None) is None
+
+    def test_old_change_id_returns_tip_for_already_merged(self) -> None:
+        # The stale bookmark still exists and must be deleted when its plan is recorded.
+        assert (
+            _old_change_id(human_commits.AlreadyMerged(bookmark_change_id="merged-id"))
+            == "merged-id"
+        )
+
+    def test_old_change_id_returns_tip_for_normal_layers(self) -> None:
+        shape = human_commits.NormalLayers(
+            bookmark_change_id="tip-id",
+            command_commit=JobCommit(
+                commit_id="cmd-commit",
+                change_id="cmd-id",
+                job_names={"job"},
+                subject="subject",
+                relative_age="1 hour ago",
+            ),
+            prereq_heads=[],
+            fixup_roots=[],
+        )
+        assert _old_change_id(shape) == "tip-id"
 
 
 class TestBuildCommitMessage:
@@ -1090,8 +1140,8 @@ class TestRunJob:
 
         result = run_job(_ctx(), job=job, parents=["trunk()"])
 
-        # Phase 1 always uses new(); bookmark_set is done in the absorb phase.
-        mock_jj.new.assert_called_once_with("trunk()")
+        # run_job uses new() for a fresh commit; bookmark_set is done in _record_job_plan.
+        mock_jj.new.assert_called_once_with("heads(trunk())")
         mock_jj.bookmark_set.assert_not_called()
         mock_jj.describe.assert_called_once_with("Change foo\n\nRepoactive-Job: foo")
         mock_jj.git_push_bookmarks.assert_not_called()
@@ -1211,11 +1261,16 @@ class TestRunJob:
     ) -> None:
         mock_jj = _mock_jj(mock_jj_cls)
         _mock_popen(mock_sub)
+        mock_jj.bookmark_change_id.return_value = None
         mock_jj.is_empty.return_value = True
 
         result = run_job(_ctx(), job=_job("foo"), parents=["trunk()"])
 
+        # An empty result abandons the fresh command commit (ADR 0020); there is
+        # no existing branch, so nothing else changes and the op log is left as
+        # is (no restore).
         mock_jj.abandon.assert_called_once_with()
+        mock_jj.op_restore.assert_not_called()
         mock_jj.bookmark_set.assert_not_called()
         mock_jj.bookmark_delete.assert_not_called()
         mock_jj.git_push_bookmarks.assert_not_called()
@@ -1227,9 +1282,9 @@ class TestRunJob:
     def test_no_output_existing_bookmark_not_deleted_during_run(
         self, mock_sub: MagicMock, mock_jj_cls: MagicMock
     ) -> None:
-        # When an existing bookmark's job produces no diff, the bookmark is NOT
-        # deleted during phase 1 — deletion happens in the absorb phase. The
-        # old_change_id is recorded so the absorb phase knows to delete.
+        # When an existing bookmark's job produces no diff, run_job does NOT
+        # delete the bookmark — _record_job_plan does. The detected branch shape
+        # is recorded so it knows a bookmark exists to delete.
         mock_jj = _mock_jj(mock_jj_cls)
         _mock_popen(mock_sub)
         mock_jj.bookmark_change_id.return_value = "old-change-id"
@@ -1237,13 +1292,15 @@ class TestRunJob:
 
         result = run_job(_ctx(), job=_job("foo"), parents=["trunk()"])
 
+        # The empty command commit is abandoned, but the bookmark itself is left
+        # for _record_job_plan to delete.
         mock_jj.abandon.assert_called_once_with()
         mock_jj.bookmark_delete.assert_not_called()
         mock_jj.bookmark_set.assert_not_called()
         mock_jj.git_push_bookmarks.assert_not_called()
         assert result.produced_diff is False
         assert result.effective_revsets == ["trunk()"]
-        assert result.old_change_id == "old-change-id"
+        assert _old_change_id(result.shape) == "old-change-id"
 
     @patch("repoactive.runner.JJ")
     @patch("repoactive.runner.subprocess.Popen")
@@ -1264,7 +1321,7 @@ class TestRunJob:
 
     @patch("repoactive.runner.JJ")
     @patch("repoactive.runner.subprocess.Popen")
-    def test_command_failure_abandons_and_raises(
+    def test_command_failure_restores_and_raises(
         self, mock_sub: MagicMock, mock_jj_cls: MagicMock
     ) -> None:
         mock_jj = _mock_jj(mock_jj_cls)
@@ -1276,7 +1333,9 @@ class TestRunJob:
                 parents=["trunk()"],
             )
 
-        mock_jj.abandon.assert_called_once_with()
+        # A failed command rolls the run back to the pre-mutation op (ADR 0020),
+        # leaving the branch byte-for-byte as it was.
+        mock_jj.op_restore.assert_called_once_with(mock_jj.op_id.return_value)
         mock_jj.bookmark_set.assert_not_called()
 
     @patch("repoactive.runner.threading.Timer")
@@ -1308,7 +1367,7 @@ class TestRunJob:
     @patch("repoactive.runner.os.killpg")
     @patch("repoactive.runner.JJ")
     @patch("repoactive.runner.subprocess.Popen")
-    def test_command_timeout_kills_group_abandons_and_raises(
+    def test_command_timeout_kills_group_restores_and_raises(
         self,
         mock_sub: MagicMock,
         mock_jj_cls: MagicMock,
@@ -1336,7 +1395,7 @@ class TestRunJob:
             run_job(_ctx(), job=job, parents=["trunk()"])
 
         mock_killpg.assert_called_once_with(4242, signal.SIGKILL)
-        mock_jj.abandon.assert_called_once_with()
+        mock_jj.op_restore.assert_called_once_with(mock_jj.op_id.return_value)
         mock_jj.bookmark_set.assert_not_called()
 
     @patch("repoactive.runner.threading.Timer", _ImmediateTimer)
@@ -1413,7 +1472,7 @@ class TestRunJob:
 
     @patch("repoactive.runner.JJ")
     @patch("repoactive.runner.subprocess.Popen")
-    def test_command_output_recorded_for_absorb_phase(
+    def test_command_output_recorded_for_plan_recording(
         self, mock_sub: MagicMock, mock_jj_cls: MagicMock
     ) -> None:
         mock_jj = _mock_jj(mock_jj_cls)
@@ -1422,7 +1481,7 @@ class TestRunJob:
 
         result = run_job(_ctx(), job=_job("foo"), parents=["trunk()"])
 
-        # Command output is stored on the result for the absorb/apply phase to use.
+        # Command output is stored on the result for the plan-recording/apply steps to use.
         assert result.command_output == "Copied file foo -> bar"
 
     @patch("repoactive.runner.JJ")
@@ -1476,10 +1535,10 @@ class TestRunJob:
 
         result = run_job(_ctx(), job=_job("foo"), parents=["trunk()"])
 
-        mock_jj.new.assert_called_once_with("trunk()")
+        mock_jj.new.assert_called_once_with("heads(trunk())")
         mock_jj.rebase.assert_not_called()
         mock_jj.bookmark_set.assert_not_called()
-        assert result.old_change_id == "old-change-id"
+        assert _old_change_id(result.shape) == "old-change-id"
 
     @patch("repoactive.runner.JJ")
     @patch("repoactive.runner.subprocess.Popen")
@@ -1496,7 +1555,7 @@ class TestRunJob:
             parents=["repoactive/a", "repoactive/b"],
         )
 
-        mock_jj.new.assert_called_once_with("repoactive/a", "repoactive/b")
+        mock_jj.new.assert_called_once_with("heads(repoactive/a | repoactive/b)")
         mock_jj.rebase.assert_not_called()
 
 
@@ -1716,7 +1775,7 @@ class TestRunGeneratorJob:
     ) -> None:
         mock_jj = _mock_jj(mock_jj_cls)
 
-        result, emitted = _run_generator_job(
+        result = _run_generator_job(
             _ctx(selection=_selection(_gen())),
             job=_gen(),
             parents=["trunk()"],
@@ -1728,7 +1787,7 @@ class TestRunGeneratorJob:
         extra_env = mock_run_command.call_args.kwargs["extra_env"]
         assert RA_JOBS_DIR_ENV in extra_env
         assert RA_JOB_BRANCH_ENV in extra_env
-        assert [j.name for j in emitted] == ["child"]
+        assert [j.name for j in result.emitted] == ["child"]
         assert result.produced_diff is False
 
     @patch(
@@ -2099,7 +2158,7 @@ class TestRunAll:
             cls.return_value.last_job_commit_date.return_value = None
             cls.return_value.remote_bookmark_exists.return_value = False
             cls.return_value.op_id.return_value = "OP-START"
-            # temp_workspace returns a no-op context manager for the absorb phase.
+            # temp_workspace returns a no-op context manager for the in-place rewrite.
             cls.return_value.temp_workspace.return_value.__enter__.return_value = cls.return_value
             yield cls
 
@@ -2113,7 +2172,7 @@ class TestRunAll:
         called_names = {c.kwargs["job"].name for c in mock_run_job.call_args_list}
         assert called_names == {"a", "b"}
         assert not summary.failed
-        assert not summary.skipped
+        assert not summary.dependency_failed
 
     @patch("repoactive.runner.run_job")
     def test_prints_selected_jobs_as_dependency_tree(
@@ -2142,7 +2201,7 @@ class TestRunAll:
             config=_config(a), repo_path=REPO, platform=platform, mode=RunMode.publish
         )
 
-        # The absorb phase sets the bookmark and builds the plan; apply pushes it.
+        # _record_job_plan sets the bookmark and builds the plan; apply pushes it.
         mock_jj.return_value.git_push_bookmarks.assert_called_once_with("repoactive/a")
         platform.ensure_mr.assert_called_once()
         # The MR URL is written back into the summary by the apply phase.
@@ -2207,7 +2266,7 @@ class TestRunAll:
         called_names = {c.kwargs["job"].name for c in mock_run_job.call_args_list}
         assert called_names == {"a", "c"}
         assert "a" in summary.failed
-        assert "b" in summary.skipped
+        assert "b" in summary.dependency_failed
         assert "c" in summary.results
 
     @patch("repoactive.runner.run_job")
@@ -2220,8 +2279,8 @@ class TestRunAll:
         summary = run_all(config=_config(a, b, c), repo_path=REPO)
 
         assert "a" in summary.failed
-        assert "b" in summary.skipped
-        assert "c" in summary.skipped
+        assert "b" in summary.dependency_failed
+        assert "c" in summary.dependency_failed
 
     @patch("repoactive.runner.run_job")
     def test_ok_false_when_failures(self, mock_run_job: MagicMock) -> None:
@@ -2398,8 +2457,8 @@ class TestRunAll:
     ) -> None:
         # The narrow job's cooldown check counts a superset's landing too, so it
         # queries for its own trailer and every cooldown_on target (ADR 0015).
-        # Both jobs carry a cooldown_period so neither runs (avoids the absorb
-        # phase); assert dev-lock's query widened to include full-lock.
+        # Both jobs carry a cooldown_period so neither runs (nothing to rewrite
+        # or record); assert dev-lock's query widened to include full-lock.
         mock_jj.return_value.last_job_commit_date.return_value = datetime(2026, 1, 1, tzinfo=UTC)
         config = Config.model_validate(
             {
@@ -2482,7 +2541,7 @@ class TestRunAll:
     def test_run_only_if_changed_skip_leaves_bookmark_alone(
         self, mock_run_job: MagicMock, mock_jj: MagicMock
     ) -> None:
-        # b gates on a; a produces no diff → b is gated. The absorb phase must
+        # b gates on a; a produces no diff → b is gated. _record_job_plan must
         # not schedule a remote deletion for b's bookmark (which a real push
         # would delete).
         a = _djob("a")
@@ -2602,7 +2661,7 @@ class TestRunAll:
     ) -> None:
         # Explicitly selecting a pulls in b (stacked above a's bookmark), but a
         # is on cooldown: nothing below b changed, so b is skipped too and its
-        # bookmark is left alone in the absorb phase.
+        # bookmark is left alone when its plan is recorded.
         mock_jj.return_value.last_job_commit_date.return_value = datetime(2026, 1, 1, tzinfo=UTC)
         self._stub_successors(mock_jj, {"b"})
 

@@ -9,7 +9,7 @@ import tempfile
 import threading
 import time
 import tomllib
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -17,6 +17,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
+from repoactive import human_commits
 from repoactive.boxquote import boxquote, strip_boxquotes
 from repoactive.config import (
     Config,
@@ -27,7 +28,7 @@ from repoactive.config import (
     merge_jobs,
 )
 from repoactive.graph import CircularDependencyError, detect_dependency_cycle, topological_sort
-from repoactive.jj import JJ, workspace_name
+from repoactive.jj import JJ, revset_heads, workspace_name
 from repoactive.jobtree import format_job_forest, print_job_table
 from repoactive.lock import run_lock
 from repoactive.platforms.base import MRParams, Platform
@@ -155,37 +156,42 @@ class GeneratedJobError(ValueError):
 @dataclass
 class JobResult:
     job: Job
-    # Revsets dependents should use as parents. During phase 1 this is the
-    # new commit's change-id (produced_diff=True) or the job's parent revsets
-    # (produced_diff=False). After absorb the bookmark name is canonical, but
-    # dependents only need this during the run, before absorb.
+    # Revsets a dependent should use as parents. Set directly to the branch
+    # tip when the job runs: the fresh commit's change-id (produced_diff=True)
+    # or the job's parent revsets (produced_diff=False); run_job already
+    # rewrote the command commit in place (fixups included), so no later step
+    # touches this (ADR 0020).
     effective_revsets: list[str]
     produced_diff: bool
-    # Parent revsets passed to repo.new() in phase 1. Carried so the absorb
-    # phase knows where to rebase the old commit.
-    parents: list[str] = field(default_factory=list)
-    # change-id of the fresh commit created in phase 1 (None when no diff).
+    # change-id of the fresh commit created when the job ran (None when no diff).
     new_change_id: str | None = None
-    # change-id of the pre-existing bookmark commit (None for new jobs).
-    old_change_id: str | None = None
+    # Branch-shape classification from human_commits.classify_branch() (ADR 0019), taken at
+    # the start of run_job before the fresh commit is created. None for a
+    # JobResult recorded without running (cooldown/successor/run_only_if_changed
+    # skips, generator no-ops) — see _old_change_id.
+    shape: human_commits.BranchShape | None = None
     # Filled in by the apply phase once the MR has been created.
     mr_url: str | None = None
     command_output: str = ""
+    # Jobs a generator (``emits_jobs``) produced, consumed once by _dispatch_run
+    # right after the job runs. Empty for an ordinary job or a generator that
+    # emitted nothing.
+    emitted: list[Job] = field(default_factory=list)
 
 
 @dataclass
 class RunSummary:
     results: dict[str, JobResult] = field(default_factory=dict)
     failed: dict[str, Exception] = field(default_factory=dict)
-    skipped: set[str] = field(default_factory=set)
+    dependency_failed: set[str] = field(default_factory=set)
     on_cooldown: set[str] = field(default_factory=set)
     # Successor jobs skipped because nothing below them in the stack ran this
     # run (see _dispatch_job). Like on_cooldown, an intentional skip: the job's
-    # bookmark is left alone in the absorb phase.
+    # bookmark is left alone when its plan is recorded (_record_job_plan).
     successor_skipped: set[str] = field(default_factory=set)
     # Jobs whose run_only_if_changed gate fired (none of the watched deps
     # produced a diff). Like on_cooldown, an intentional skip: the job's
-    # bookmark is left alone in the absorb phase.
+    # bookmark is left alone when its plan is recorded (_record_job_plan).
     run_only_if_changed_skipped: set[str] = field(default_factory=set)
     # Wall time of the whole run, filled in by run_all just before print_report.
     elapsed: float | None = None
@@ -194,19 +200,19 @@ class RunSummary:
     def ok(self) -> bool:
         # cooldown and successor skips are intentional, not failures, so they
         # do not affect ok.
-        return not self.failed and not self.skipped
+        return not self.failed and not self.dependency_failed
 
     def print_report(self) -> None:
         # A name may sit in more than one bucket - cooldown jobs are also stored
         # in results (so dependents can read their effective_revsets), and a job
         # whose MR failed at apply time is in results and failed - so count the
         # union of names, not the sum of the buckets.
-        total = len(self.results.keys() | self.failed.keys() | self.skipped)
+        total = len(self.results.keys() | self.failed.keys() | self.dependency_failed)
         produced = sum(1 for r in self.results.values() if r.produced_diff)
         print(
             f"\nDone: {produced}/{total} produced changes"
             + (f", {len(self.failed)} failed" if self.failed else "")
-            + (f", {len(self.skipped)} skipped" if self.skipped else "")
+            + (f", {len(self.dependency_failed)} skipped" if self.dependency_failed else "")
             + (f", {len(self.on_cooldown)} on cooldown" if self.on_cooldown else "")
             + (
                 f", {len(self.successor_skipped)} successors unchanged"
@@ -230,7 +236,7 @@ class RunContext:
     Built once in ``run_all`` and threaded through ``_run_jobs`` /
     ``_dispatch_job`` to ``run_job`` / ``_run_generator_job`` so every stage has a
     single handle to the run's config, target repo, accumulating results,
-    selection, and the ``plan`` the absorb phase fills in.
+    selection, and the ``plan`` ``_record_job_plan`` fills in.
     ``selection`` is the live selection object (``_run_jobs`` splices
     generator-emitted jobs into ``selection.jobs`` in place), so ``selection.jobs``
     is always every job in the run.
@@ -241,10 +247,9 @@ class RunContext:
     repo_path: Path
     repo: JJ
     summary: RunSummary
-    blocked: set[str]
     selection: JobSelection
-    # Bookmark pushes and MR descriptors, filled in by _absorb_results and then
-    # applied by apply_plan. Empty until phase 2.
+    # Bookmark pushes and MR descriptors, filled in by _record_job_plan (once
+    # per job, right after it's dispatched) and then applied by apply_plan.
     plan: UpdatePlan = field(default_factory=UpdatePlan)
 
     @property
@@ -425,6 +430,8 @@ def _run_command(
         granted_secret_env=granted_secret_env,
     )
 
+    logger.debug("[%s] running command: %s", job.name, job.command)
+
     # Stream the merged stdout/stderr line by line: keep the full output (needed
     # for the commit message and the success result) while feeding a live tail of
     # the last few lines (see repoactive.progress).
@@ -464,38 +471,33 @@ def _run_command(
             + (f":\n{detail}" if detail else ""),
             elapsed=elapsed,
         )
-    return CommandResult(output=detail, elapsed=elapsed)
-
-
-def _discard_empty_job(
-    *,
-    job: Job,
-    parents: list[str],
-    repo: JJ,
-    command_result: CommandResult,
-    old_change_id: str | None,
-) -> JobResult:
-    """Clean up after a job whose command produced no diff.
-
-    Abandons the empty working commit. The old bookmark (if any) is left intact
-    here; the absorb phase deletes it and records the remote deletion. Returns a
-    JobResult with produced_diff=False, carrying the original parents forward so
-    dependents still have a base.
-    """
-    repo.abandon()
-    elapsed = format_elapsed(command_result.elapsed)
-    if old_change_id:
-        print_status(job.name, ("no changes", "dim"), f", bookmark will be deleted ({elapsed})")
-    else:
-        print_status(job.name, ("no changes", "dim"), f" ({elapsed})")
-    return JobResult(
-        job=job,
-        effective_revsets=parents,
-        parents=parents,
-        produced_diff=False,
-        old_change_id=old_change_id,
-        command_output=command_result.output,
+    command_result = CommandResult(output=detail, elapsed=elapsed)
+    logger.debug(
+        "[%s] command finished in %.3fs, %d bytes output",
+        job.name,
+        command_result.elapsed,
+        len(command_result.output),
     )
+    return command_result
+
+
+def _old_change_id(shape: human_commits.BranchShape | None) -> str | None:
+    """Return the pre-existing bookmark's change-id from a classify_branch() result.
+
+    None when ``shape`` is None (a JobResult recorded without running, see
+    JobResult.shape) or NoBranch (a new job, no pre-existing bookmark). Otherwise
+    the bookmark tip, even for AlreadyMerged: that bookmark still exists and needs
+    deleting, it just has nothing worth restoring/rebasing.
+
+    This is the branch *tip*, and the canonical id run_job records in
+    effective_revsets: "b" depends on "a"'s actual branch, fixups included, so
+    it forks from here, distinct from the *content* anchor used to
+    restore/rebase the command commit itself (``NormalLayers.job_commit``,
+    see _run_job_prepare_command_commit), which is not always the same commit.
+    """
+    if shape is None or isinstance(shape, human_commits.NoBranch):
+        return None
+    return shape.bookmark_change_id
 
 
 def _strip_boxquote_and_trailers(message: str) -> str:
@@ -532,44 +534,159 @@ def _build_commit_message(job: Job, command_result: CommandResult) -> str:
     return message
 
 
-def _commit_job(
+def _run_job_prepare_command_commit(
+    *, repo: JJ, job: Job, parents: list[str]
+) -> human_commits.BranchShape:
+    """Get the repo into a state where we can run the job's command."""
+    bookmark = job.branch_name()
+    shape = human_commits.classify_branch(
+        repo=repo, parents=parents, bookmark=bookmark, job_name=job.name
+    )
+    logger.debug("[%s] bookmark %s shape=%s", job.name, bookmark, shape)
+
+    match shape:
+        case human_commits.NoBranch() | human_commits.AlreadyMerged():
+            repo.new(revset_heads(parents))
+        case human_commits.NormalLayers():
+            # rewrite the command commit in place
+            anchor = shape.command_commit.change_id
+            repo.rebase_source(anchor, revset_heads(shape.prereq_heads + parents))
+            repo.edit(anchor)
+            repo.restore_working_copy()
+        case human_commits.AllPrerequisites():
+            repo.new(revset_heads(shape.prereq_heads + parents))
+        case human_commits.UnexpectedLayers():
+            raise NotImplementedError()
+
+    repo.git_sync_head()
+    return shape
+
+
+def _run_job_build_result(  # noqa: PLR0913
     *,
+    repo: JJ,
     job: Job,
     parents: list[str],
-    repo: JJ,
     command_result: CommandResult,
-    old_change_id: str | None,
+    shape: human_commits.BranchShape,
+    restore: Callable[[], None],
 ) -> JobResult:
-    """Commit the diff a job's command produced in the fresh workspace.
+    commit_empty = repo.is_empty()
+    if commit_empty:
+        logger.debug("[%s] working copy is empty, no diff produced", job.name)
+    elapsed = format_elapsed(command_result.elapsed)
+    message = _build_commit_message(job, command_result)
+    repo.describe(message)
 
-    Writes the commit message and records the new commit's change-id. The
-    bookmark is NOT set here — that happens in the absorb phase (phase 2).
-    Returns a JobResult with produced_diff=True whose effective_revsets is the
-    new change-id so dependent jobs build directly on this commit during phase 1.
-    The push and MR are recorded in the absorb phase once the bookmark is set.
-    """
-    stat = repo.diff_stat()
-    repo.describe(_build_commit_message(job, command_result))
-    new_change_id = repo.change_id()
+    match shape:
+        case human_commits.NoBranch() | human_commits.AlreadyMerged() if commit_empty:
+            print_status(job.name, ("no changes", "dim"), f" ({elapsed})")
+            repo.abandon()
+            return JobResult(
+                job=job,
+                effective_revsets=parents,
+                produced_diff=False,
+                shape=shape,
+                command_output=command_result.output,
+                new_change_id=None,
+            )
+        case (
+            human_commits.NoBranch()
+            | human_commits.AlreadyMerged()
+            | human_commits.AllPrerequisites()
+        ):
+            new_change_id = repo.change_id(revision="@")
+            print_status(
+                job.name,
+                ("committed", "green"),
+                f" [{new_change_id}] ({elapsed})",
+            )
+            if stat := repo.diff_stat():
+                print("\n".join(f"    {line}" for line in stat.splitlines()))
+                print()
+            return JobResult(
+                job=job,
+                effective_revsets=[new_change_id],
+                produced_diff=True,
+                shape=shape,
+                command_output=command_result.output,
+                new_change_id=new_change_id,
+            )
 
-    print_status(
-        job.name,
-        ("committed", "green"),
-        f" [{new_change_id}] ({format_elapsed(command_result.elapsed)})",
-    )
-    if stat:
-        print("\n".join(f"    {line}" for line in stat.splitlines()))
-        print()
+        case human_commits.NormalLayers() if commit_empty and not shape.has_human:
+            # No diff and no human commits to anchor: abandon the empty command
+            # commit and report no-diff. Its bookmark is deleted by the plan step,
+            # which also records the remote deletion. A branch that *does* carry
+            # human commits (prerequisites or fixups) keeps its empty command
+            # commit instead: abandoning it would restructure the branch,
+            # turning fixups into prerequisites on the next run, so it falls
+            # through to the NormalLayers arm below.
+            repo.abandon()
+            print_status(
+                job.name, ("no changes", "dim"), f", bookmark will be deleted ({elapsed})"
+            )
+            return JobResult(
+                job=job,
+                effective_revsets=parents,
+                produced_diff=False,
+                shape=shape,
+                command_output=command_result.output,
+            )
+        case human_commits.NormalLayers():
+            # Non-empty, or empty but anchoring human commits (see the guarded
+            # case above): record the message on the rewritten command commit and
+            # keep it. The in-place rewrite already carried the bookmark tip along
+            # with the preserved change-id, so no bookmark set is needed here.
+            tip = _old_change_id(shape)
+            assert tip is not None
 
-    return JobResult(
-        job=job,
-        effective_revsets=[new_change_id],
-        parents=parents,
-        produced_diff=True,
-        new_change_id=new_change_id,
-        old_change_id=old_change_id,
-        command_output=command_result.output,
-    )
+            # Idempotency skip (ADR 0020): when classify_branch found the rewrite
+            # would neither move the command commit nor diverge it from what was
+            # pushed (run_idempotency_check), and the regenerated tree and stripped
+            # message match the pre-rewrite command commit, roll back the rewrite.
+            # The command commit keeps its original id (so the bookmark does not
+            # move and jj pushes nothing) instead of being rewritten with a fresh
+            # committer timestamp that would retrigger CI. The old commit is hidden
+            # but its git object survives the rewrite, so it is still diffable.
+            if (
+                shape.run_idempotency_check
+                and repo.same_content(shape.command_commit.commit_id, "@")
+                and _strip_boxquote_and_trailers(
+                    repo.get_description(shape.command_commit.commit_id)
+                )
+                == _strip_boxquote_and_trailers(message)
+            ):
+                short_id = repo.change_id()
+                restore()
+                print_status(job.name, ("unchanged", "dim"), f" [{short_id}] ({elapsed})")
+                return JobResult(
+                    job=job,
+                    effective_revsets=[tip],
+                    produced_diff=True,
+                    new_change_id=None,
+                    shape=shape,
+                    command_output=command_result.output,
+                )
+
+            print_status(
+                job.name,
+                ("committed", "green"),
+                f" [{repo.change_id()}] ({elapsed})",
+            )
+            if stat := repo.diff_stat():
+                print("\n".join(f"    {line}" for line in stat.splitlines()))
+                print()
+
+            return JobResult(
+                job=job,
+                effective_revsets=[tip],
+                produced_diff=True,
+                new_change_id=None,
+                shape=shape,
+                command_output=command_result.output,
+            )
+        case _:
+            raise NotImplementedError()
 
 
 def run_job(
@@ -578,54 +695,40 @@ def run_job(
     job: Job,
     parents: list[str],
 ) -> JobResult:
+    """Run a job's command, rewriting its command commit in place (ADR 0020).
+
+    An existing branch's command commit (and its fixup descendants) is rebased
+    onto the run's parents (prerequisites merged in), then emptied so the
+    command regenerates its content directly into it, keeping the change-id so
+    the bookmark and any not-selected dependents follow for free. A new job or a
+    merged-and-undeleted branch gets a fresh commit on the parents instead.
+
+    A failed command is an exact, cheap rollback: ``op_checkpoint`` restores the
+    op captured before any mutation, returning the branch to precisely its prior
+    state (no in-place rewrite to unwind, no fresh-then-fold dance). An empty result abandons
+    the now-empty command commit and lets the plan step retire the bookmark.
+    """
     logger.debug("starting job: %s", job.model_dump_json(indent=2))
     logger.debug("parents: %s", parents)
 
-    with JJ(ctx.repo_path).temp_workspace(workspace_name(job.name)) as repo:
-        bookmark = job.branch_name()
-        # Record the pre-existing bookmark's change-id so the absorb phase can
-        # mutate it in place (preserving jj change-id continuity). None for new jobs.
-        old_change_id = repo.bookmark_change_id(bookmark)
-        logger.debug("[%s] bookmark %s old_change_id=%s", job.name, bookmark, old_change_id)
-
-        # Always start from a fresh commit: old bookmarks are never touched
-        # during the run phase, so a failed command cannot destroy them.
-        repo.new(*parents)
-        repo.git_sync_head()
-        logger.debug("[%s] running command: %s", job.name, job.command)
-        try:
-            command_result = _run_command(
-                job,
-                repo.cwd,
-                stripped_env_names=ctx.stripped_env_names,
-                extra_env=_job_extra_env(job),
-            )
-        except CommandError:
-            # The command timed out or failed; discard only the fresh commit.
-            # The old bookmark is completely unaffected.
-            repo.abandon()
-            raise
-        logger.debug(
-            "[%s] command finished in %.3fs, %d bytes output",
-            job.name,
-            command_result.elapsed,
-            len(command_result.output),
+    with (
+        JJ(ctx.repo_path).temp_workspace(workspace_name(job.name)) as repo,
+        repo.op_checkpoint() as restore,
+    ):
+        shape = _run_job_prepare_command_commit(repo=repo, job=job, parents=parents)
+        command_result = _run_command(
+            job,
+            repo.cwd,
+            stripped_env_names=ctx.stripped_env_names,
+            extra_env=_job_extra_env(job),
         )
-        if repo.is_empty():
-            logger.debug("[%s] working copy is empty, no diff produced", job.name)
-            return _discard_empty_job(
-                job=job,
-                parents=parents,
-                repo=repo,
-                command_result=command_result,
-                old_change_id=old_change_id,
-            )
-        return _commit_job(
+        return _run_job_build_result(
+            repo=repo,
             job=job,
             parents=parents,
-            repo=repo,
+            shape=shape,
             command_result=command_result,
-            old_change_id=old_change_id,
+            restore=restore,
         )
 
 
@@ -788,132 +891,217 @@ def _on_cooldown(job: Job, repo_path: Path) -> datetime | None:
     return last_run
 
 
-def _dispatch_job(ctx: RunContext, *, job: Job) -> list[Job]:
-    """Run a single job, recording its outcome in ``ctx.summary``/``ctx.blocked``.
+class SkipReason(StrEnum):
+    """Which ``RunSummary`` set a skipped job's name is recorded in.
 
-    A failed or skipped job adds its name to ``ctx.blocked`` so its dependents are
-    skipped in turn. Returns the jobs a generator (``emits_jobs``) produced — an
-    empty list for an ordinary job or a generator that emitted nothing/was
-    skipped. ``ctx.selection.jobs`` is every job in this run (``_run_jobs`` keeps
-    it in sync as generators emit), so its names reject an emitted job that
+    ``_apply_outcome`` matches each member to the set it names.
+    """
+
+    dependency_failed = "dependency_failed"
+    run_only_if_changed_skipped = "run_only_if_changed_skipped"
+    successor_skipped = "successor_skipped"
+    on_cooldown = "on_cooldown"
+
+
+@dataclass
+class DispatchOutcome:
+    """What a dispatch step decided for a job; applied to ``ctx`` in one place.
+
+    ``skip_reason`` names the ``RunSummary`` set the job's name is recorded in
+    — ``None`` when the job actually ran. Each gate/run step builds one of
+    these instead of touching ``ctx.summary`` directly, so ``_dispatch_job``
+    has a single place that applies them. A plain ``DispatchOutcome`` instance
+    is always truthy (unlike the ``list[Job]`` it ultimately yields), so gates
+    can chain with ``or`` and still let an empty ``emitted`` list through.
+    """
+
+    result: JobResult | None = None
+    skip_reason: SkipReason | None = None
+    failed: Exception | None = None
+
+    @property
+    def emitted(self) -> list[Job]:
+        return self.result.emitted if self.result is not None else []
+
+
+def _apply_outcome(ctx: RunContext, job: Job, outcome: DispatchOutcome) -> None:
+    """Record a job's dispatch outcome in ``ctx``; the only function that does."""
+    summary = ctx.summary
+    if outcome.result is not None:
+        summary.results[job.name] = outcome.result
+    match outcome.skip_reason:
+        case SkipReason.dependency_failed:
+            summary.dependency_failed.add(job.name)
+        case SkipReason.run_only_if_changed_skipped:
+            summary.run_only_if_changed_skipped.add(job.name)
+        case SkipReason.successor_skipped:
+            summary.successor_skipped.add(job.name)
+        case SkipReason.on_cooldown:
+            summary.on_cooldown.add(job.name)
+        case None:
+            pass
+    if outcome.failed is not None:
+        summary.failed[job.name] = outcome.failed
+
+
+def _dispatch_job(ctx: RunContext, *, job: Job) -> list[Job]:
+    """Run a single job, recording its outcome in ``ctx.summary``.
+
+    A failed or dependency-skipped job lands in ``summary.failed``/
+    ``summary.dependency_failed``, so ``_dispatch_blocked_deps`` blocks its
+    dependents in turn. Returns the jobs a generator (``emits_jobs``) produced
+    — an empty list for an ordinary job or a generator that emitted
+    nothing/was skipped. ``ctx.selection.jobs`` is every job in this run
+    (``_run_jobs`` keeps it in sync as generators emit), so its names reject an emitted job that
     collides with an existing one. ``ctx.selection.refreshed`` names the jobs that
     already have an unmerged branch; such a job is never cooldown-skipped or
     run_only_if_changed-skipped, so its branch is refreshed (ADR 0003).
     ``ctx.selection.successors`` names the jobs force-included because their
     commits sit above a selected job's bookmark; they bypass their own cooldown
     but are skipped when every dependency was itself skipped this run. The plan is
-    built in the absorb phase (phase 2), not here.
+    built by _record_job_plan, not here.
+    """
+    outcome = _dispatch_blocked_deps(ctx, job)
+    if outcome is None:
+        parents = _compute_parents(job, ctx.summary.results)
+        logger.debug("[%s] computed parents: %s", job.name, parents)
+        outcome = (
+            _dispatch_run_only_if_changed_gate(ctx, job, parents)
+            or _dispatch_successor_gate(ctx, job, parents)
+            or _dispatch_cooldown_gate(ctx, job, parents)
+            or _dispatch_run(ctx, job, parents)
+        )
+    _apply_outcome(ctx, job, outcome)
+    return outcome.emitted
+
+
+def _dispatch_blocked_deps(ctx: RunContext, job: Job) -> DispatchOutcome | None:
+    """Skip ``job`` if any of its dependencies already failed or were skipped."""
+    summary = ctx.summary
+    blocking_deps = [
+        d for d in job.depends_on if d in summary.dependency_failed or d in summary.failed
+    ]
+    if not blocking_deps:
+        return None
+    print_status(
+        job.name, ("skipped", "yellow"), f" (dependency failed: {', '.join(blocking_deps)})"
+    )
+    return DispatchOutcome(skip_reason=SkipReason.dependency_failed)
+
+
+def _dispatch_run_only_if_changed_gate(
+    ctx: RunContext, job: Job, parents: list[str]
+) -> DispatchOutcome | None:
+    """Skip ``job`` when none of its ``run_only_if_changed`` deps produced a diff.
+
+    run_only_if_changed gates jobs whose effect is conditional on upstream
+    diffs. A refreshed job bypasses the gate for the same reason it bypasses
+    cooldown: it has an open branch that must be rebased (ADR 0003), and
+    skipping it here would leave the branch un-rebased and orphan its MR.
     """
     summary = ctx.summary
-    selection = ctx.selection
-    blocking_deps = [d for d in job.depends_on if d in ctx.blocked]
-    if blocking_deps:
-        print_status(
-            job.name, ("skipped", "yellow"), f" (dependency failed: {', '.join(blocking_deps)})"
-        )
-        summary.skipped.add(job.name)
-        ctx.blocked.add(job.name)
-        return []
+    if not job.run_only_if_changed or job.name in ctx.selection.refreshed:
+        return None
+    any_changed = any(
+        r.produced_diff
+        for d in job.run_only_if_changed
+        if (r := summary.results.get(d)) is not None
+    )
+    if any_changed:
+        return None
+    print_status(
+        job.name,
+        ("skipped", "yellow"),
+        f" (run_only_if_changed: none of {job.run_only_if_changed} produced changes)",
+    )
+    result = JobResult(job=job, effective_revsets=parents, produced_diff=False)
+    return DispatchOutcome(result=result, skip_reason=SkipReason.run_only_if_changed_skipped)
 
-    parents = _compute_parents(job, summary.results)
 
-    # run_only_if_changed gates jobs whose effect is conditional on upstream
-    # diffs. A refreshed job bypasses the gate for the same reason it bypasses
-    # cooldown: it has an open branch that must be rebased (ADR 0003), and
-    # skipping it here would leave the branch un-rebased and orphan its MR.
-    if job.run_only_if_changed and job.name not in selection.refreshed:
-        any_changed = any(
-            r.produced_diff
-            for d in job.run_only_if_changed
-            if (r := summary.results.get(d)) is not None
-        )
-        if not any_changed:
-            print_status(
-                job.name,
-                ("skipped", "yellow"),
-                f" (run_only_if_changed: none of {job.run_only_if_changed} produced changes)",
-            )
-            summary.run_only_if_changed_skipped.add(job.name)
-            summary.results[job.name] = JobResult(
-                job=job, effective_revsets=parents, produced_diff=False
-            )
-            return []
-    logger.debug("[%s] computed parents: %s", job.name, parents)
-    # A successor exists to be rebuilt when the stack below it moves. If every
-    # dependency was itself skipped this run (cooldown or an earlier successor
-    # skip), nothing it builds on changed, so re-running it would reproduce the
-    # same result; record a no-op so its own successors skip too and the absorb
-    # phase leaves its bookmark alone. Judged on depends_on, not the commit
-    # graph: a successor whose config no longer declares the dependency it is
-    # stacked on falls through and runs — the safe direction.
+def _dispatch_successor_gate(
+    ctx: RunContext, job: Job, parents: list[str]
+) -> DispatchOutcome | None:
+    """Skip a successor ``job`` when nothing below it in the stack ran.
+
+    A successor exists to be rebuilt when the stack below it moves. If every
+    dependency was itself skipped this run (cooldown or an earlier successor
+    skip), nothing it builds on changed, so re-running it would reproduce the
+    same result; record a no-op so its own successors skip too and
+    _record_job_plan leaves its bookmark alone. Judged on depends_on, not the commit
+    graph: a successor whose config no longer declares the dependency it is
+    stacked on falls through and runs — the safe direction.
+    """
+    summary = ctx.summary
     not_run = summary.on_cooldown | summary.successor_skipped
-    if (
-        job.name in selection.successors
+    if not (
+        job.name in ctx.selection.successors
         and job.depends_on
         and all(dep in not_run for dep in job.depends_on)
     ):
-        print_status(job.name, ("skipped", "yellow"), " (successor: no dependency ran)")
-        summary.successor_skipped.add(job.name)
-        summary.results[job.name] = JobResult(
-            job=job, effective_revsets=parents, produced_diff=False
-        )
-        return []
+        return None
+    print_status(job.name, ("skipped", "yellow"), " (successor: no dependency ran)")
+    result = JobResult(job=job, effective_revsets=parents, produced_diff=False)
+    return DispatchOutcome(result=result, skip_reason=SkipReason.successor_skipped)
 
-    # Cooldown only throttles *starting fresh work*. A job that already has an
-    # open (unmerged) branch must always run so it is rebased on the latest trunk
-    # and, when its change is now redundant, produces an empty diff that
-    # self-closes the MR via the empty-diff path; skipping it here would leave the
-    # branch un-rebased and orphan its MR, defeating the refresh guarantee of
-    # ADR 0003. A successor bypasses cooldown for the same reason: its base just
-    # moved, so it must rebuild regardless of when it last landed.
-    #
-    # Checked before the emits_jobs branch on purpose: a generator on cooldown
-    # emits nothing, throttling its whole fan-out as a unit (the dual trailer
-    # records a recent child landing as the generator's); a generator has no
-    # branch, so it is never in selection.refreshed. See docs/adr/0004-job-generators.md.
+
+def _dispatch_cooldown_gate(
+    ctx: RunContext, job: Job, parents: list[str]
+) -> DispatchOutcome | None:
+    """Skip ``job`` if it is still within its cooldown period.
+
+    Cooldown only throttles *starting fresh work*. A job that already has an
+    open (unmerged) branch must always run so it is rebased on the latest trunk
+    and, when its change is now redundant, produces an empty diff that
+    self-closes the MR via the empty-diff path; skipping it here would leave the
+    branch un-rebased and orphan its MR, defeating the refresh guarantee of
+    ADR 0003. A successor bypasses cooldown for the same reason: its base just
+    moved, so it must rebuild regardless of when it last landed.
+
+    Checked before the emits_jobs branch on purpose: a generator on cooldown
+    emits nothing, throttling its whole fan-out as a unit (the dual trailer
+    records a recent child landing as the generator's); a generator has no
+    branch, so it is never in selection.refreshed. See docs/adr/0004-job-generators.md.
+    """
+    selection = ctx.selection
     if (
-        job.name not in selection.refreshed
-        and job.name not in selection.successors
-        and (last_run := _on_cooldown(job, ctx.repo_path))
+        job.name in selection.refreshed
+        or job.name in selection.successors
+        or not (last_run := _on_cooldown(job, ctx.repo_path))
     ):
-        elapsed = datetime.now(UTC) - last_run
-        elapsed_str = _format_duration(elapsed.total_seconds())
-        print_status(
-            job.name,
-            ("on cooldown", "yellow"),
-            f" ({job.cooldown_period}), last run {elapsed_str} ago, skipped",
-        )
-        summary.on_cooldown.add(job.name)
-        # Treat like a no-op run so dependents proceed on the base branch.
-        summary.results[job.name] = JobResult(
-            job=job, effective_revsets=parents, produced_diff=False
-        )
-        return []
+        return None
+    elapsed = datetime.now(UTC) - last_run
+    elapsed_str = _format_duration(elapsed.total_seconds())
+    print_status(
+        job.name,
+        ("on cooldown", "yellow"),
+        f" ({job.cooldown_period}), last run {elapsed_str} ago, skipped",
+    )
+    # Treat like a no-op run so dependents proceed on the base branch.
+    result = JobResult(job=job, effective_revsets=parents, produced_diff=False)
+    return DispatchOutcome(result=result, skip_reason=SkipReason.on_cooldown)
 
+
+def _dispatch_run(ctx: RunContext, job: Job, parents: list[str]) -> DispatchOutcome:
+    """Run ``job`` for real (ordinary command or generator), recording the outcome."""
     start = time.monotonic()
     try:
-        emitted: list[Job] = []
-        if job.emits_jobs:
-            result, emitted = _run_generator_job(ctx, job=job, parents=parents)
-        else:
-            result = run_job(ctx, job=job, parents=parents)
-        summary.results[job.name] = result
-        return emitted
+        result = (
+            _run_generator_job(ctx, job=job, parents=parents)
+            if job.emits_jobs
+            else run_job(ctx, job=job, parents=parents)
+        )
+        return DispatchOutcome(result=result)
     except Exception as e:
         # A command failure reports the command's own time (matching the
         # success prints); other failures have no command time, so fall back
         # to the wall time spent in run_job.
         elapsed = e.elapsed if isinstance(e, CommandError) else time.monotonic() - start
         print_status(job.name, ("failed", "red"), f": {e} ({format_elapsed(elapsed)})")
-        summary.failed[job.name] = e
-        ctx.blocked.add(job.name)
-        return []
+        return DispatchOutcome(failed=e)
 
 
-def _run_generator_job(
-    ctx: RunContext, *, job: Job, parents: list[str]
-) -> tuple[JobResult, list[Job]]:
-    """Run a generator and return its emitted jobs (resolved ``job`` required).
+def _run_generator_job(ctx: RunContext, *, job: Job, parents: list[str]) -> JobResult:
+    """Run a generator and return a result carrying its emitted jobs (resolved ``job`` required).
 
     The command runs in a fresh workspace on top of ``parents`` with
     ``RA_JOBS_DIR`` pointing at an empty directory; it writes ``*.toml``
@@ -958,10 +1146,10 @@ def _run_generator_job(
     names = ", ".join(j.name for j in emitted) if emitted else "none"
     print_status(job.name, f"generated {len(emitted)} job(s): {names}")
 
-    return JobResult(job=job, effective_revsets=parents, produced_diff=False), emitted
+    return JobResult(job=job, effective_revsets=parents, produced_diff=False, emitted=emitted)
 
 
-def _absorb_no_diff_bookmark(
+def _record_deleted_bookmark(
     job: Job, result: JobResult, bookmark: str, *, repo: JJ, plan: UpdatePlan
 ) -> None:
     """Delete the local bookmark (if present) and schedule a remote delete push.
@@ -970,9 +1158,10 @@ def _absorb_no_diff_bookmark(
     remote still has it from a previous push (e.g. after a -mlocal run that
     deleted the local bookmark without applying the plan).
     """
-    if result.old_change_id:
+    old_change_id = _old_change_id(result.shape)
+    if old_change_id:
         repo.bookmark_delete(bookmark)
-    if result.old_change_id or repo.remote_bookmark_exists(bookmark):
+    if old_change_id or repo.remote_bookmark_exists(bookmark):
         plan.updates.append(
             JobUpdate(
                 job_name=job.name,
@@ -982,138 +1171,73 @@ def _absorb_no_diff_bookmark(
         )
 
 
-def _absorb_results(ctx: RunContext) -> None:
-    """Phase 2: absorb fresh phase-1 commits into pre-existing commits.
+def _record_job_plan(ctx: RunContext, job: Job) -> None:
+    """Finalize a job's bookmark and record its push/MR in ``ctx.plan`` (ADR 0020).
 
-    Iterates ``ctx.selection.jobs`` — every job in the run, including
-    generator-emitted ones, in topological order (``_run_jobs`` keeps that list
-    current). For each successful job:
-    - No diff produced: delete the old bookmark if the command ran and found
-      nothing (cooldown skips are left untouched), and record a remote deletion.
-    - Diff produced, new job: set the bookmark directly on the new commit.
-    - Diff produced, existing job: rebase the old commit onto the same parents,
-      then abandon the new commit. Only when the diffs differ is the old
-      commit's content restored from the new commit and its message updated.
-      Change-id continuity is preserved so jj auto-rebases any dependents not
-      in this run.
-
-    Fills in ``ctx.plan`` (bookmark pushes and MR descriptors) as a side-effect.
+    ``run_job`` already rewrote the command commit in place (or wrote a fresh
+    commit) and left ``result.effective_revsets`` at the branch tip, so there is
+    nothing left to fold in here. This only:
+    - No diff produced: deletes the old bookmark if the command ran and found
+      nothing (cooldown/successor/gated skips are left untouched) and records a
+      remote deletion.
+    - Diff produced from a fresh commit (new job or merged branch): sets the
+      bookmark on that commit. An in-place rewrite needs no set; its bookmark
+      tip already followed the preserved change-id.
+    - Diff produced: appends the bookmark push and MR descriptor.
     """
     summary = ctx.summary
     plan = ctx.plan
     repo = ctx.repo
 
-    # Maps each phase-1 new_change_id to the canonical change-id post-absorb so
-    # dependent jobs are rebased onto the right commit, not the abandoned fresh one.
-    absorbed: dict[str, str] = {}
+    result = summary.results.get(job.name)
+    if result is None:
+        logger.debug("plan: [%s] no result, skipping", job.name)
+        return
 
-    for job in ctx.selection.jobs:
-        result = summary.results.get(job.name)
-        if result is None:
-            logger.debug("absorb: [%s] no result, skipping", job.name)
-            continue
+    bookmark = result.job.branch_name()
+    logger.debug(
+        "plan: [%s] produced_diff=%s new=%s shape=%s",
+        job.name,
+        result.produced_diff,
+        result.new_change_id,
+        result.shape,
+    )
 
-        bookmark = result.job.branch_name()
-        logger.debug(
-            "absorb: [%s] produced_diff=%s new=%s old=%s parents=%s",
-            job.name,
-            result.produced_diff,
-            result.new_change_id,
-            result.old_change_id,
-            result.parents,
+    if not result.produced_diff:
+        if job.name not in (
+            summary.on_cooldown | summary.successor_skipped | summary.run_only_if_changed_skipped
+        ):
+            _record_deleted_bookmark(job, result, bookmark, repo=repo, plan=plan)
+        return
+
+    # A fresh commit (new job / merged branch) needs its bookmark pointed at it;
+    # an in-place rewrite (new_change_id is None) already carries the bookmark.
+    if result.new_change_id is not None:
+        repo.bookmark_set(bookmark, result.new_change_id)
+
+    mr: MRUpdate | None = None
+    if result.job.create_mr is not CreateMR.never:
+        mr = MRUpdate(
+            source_branch=bookmark,
+            target_branch=result.job.base_branch,
+            title=f"{result.job.mr_title_prefix}{result.job.title}",
+            description=result.job.description or "",
+            command=result.job.command,
+            command_output=result.command_output,
+            labels=result.job.labels,
+            draft=result.job.draft,
+            auto_merge=result.job.auto_merge or False,
+            required_approvals=result.job.required_approvals,
+            depends_on=list(result.job.depends_on),
         )
-
-        if not result.produced_diff:
-            # Only delete the bookmark when the command ran and produced no
-            # diff. Cooldown, successor, and run_only_if_changed skips are
-            # intentional — leave their bookmarks alone so the branch is not
-            # destroyed.
-            if job.name not in (
-                summary.on_cooldown
-                | summary.successor_skipped
-                | summary.run_only_if_changed_skipped
-            ):
-                _absorb_no_diff_bookmark(job, result, bookmark, repo=repo, plan=plan)
-            continue
-
-        assert result.new_change_id is not None
-        new_change_id = result.new_change_id
-        message = _build_commit_message(
-            result.job, CommandResult(output=result.command_output, elapsed=0.0)
+    plan.updates.append(
+        JobUpdate(
+            job_name=job.name,
+            title=result.job.title,
+            push=BookmarkPush(bookmark=bookmark),
+            mr=mr,
         )
-
-        # Translate phase-1 parent change-ids to their canonical post-absorb ids.
-        canonical_parents = [absorbed.get(p, p) for p in result.parents]
-
-        if result.old_change_id:
-            old_change_id = result.old_change_id
-            repo.rebase_revision(old_change_id, *canonical_parents)
-            content_unchanged = repo.same_content(old_change_id, new_change_id)
-            logger.debug(
-                "absorb: [%s] rebased %s onto %s, content %s",
-                job.name,
-                old_change_id,
-                canonical_parents,
-                "unchanged" if content_unchanged else "differs, restoring",
-            )
-            if not content_unchanged:
-                # restore names both revisions, so it rewrites old_change_id directly
-                # without touching any working copy — no scratch workspace needed.
-                repo.restore(source_rev=new_change_id, destination_rev=old_change_id)
-                repo.describe_revision(old_change_id, message)
-            elif _strip_boxquote_and_trailers(
-                repo.get_description(old_change_id)
-            ) != _strip_boxquote_and_trailers(message):
-                repo.describe_revision(old_change_id, message)
-            # old_change_id now holds the canonical content (restored above, or
-            # already matching new_change_id). Rebase new_change_id -- and any
-            # of its descendants -- onto it *before* abandoning: a
-            # not-yet-absorbed dependent job in this same run may still be
-            # parented on new_change_id (a stacked phase-1 fresh commit), and
-            # rebase_source's "-s" brings such a descendant along to
-            # old_change_id's content. This is a content no-op for
-            # new_change_id itself (old_change_id's tree already equals it),
-            # so it only redirects where such a descendant lands. Plain "-r"
-            # (rebase_revision) will NOT do: it leaves descendants behind,
-            # refilled onto new_change_id's old parent (canonical_parents) --
-            # exactly the corruption this call prevents. Without this call,
-            # the abandon below has the same "-r"-like gap-fill behaviour,
-            # silently dropping this job's diff from the descendant.
-            repo.rebase_source(new_change_id, old_change_id)
-            repo.abandon_revision(new_change_id)
-            # No bookmark_set needed: the bookmark follows old_change_id through
-            # the rewrites above (jj moves local bookmarks with the commit).
-            absorbed[new_change_id] = old_change_id
-        else:
-            logger.debug(
-                "absorb: [%s] new job, bookmark %s -> %s", job.name, bookmark, new_change_id
-            )
-            repo.bookmark_set(bookmark, new_change_id)
-            absorbed[new_change_id] = new_change_id
-
-        mr: MRUpdate | None = None
-        if result.job.create_mr is not CreateMR.never:
-            mr = MRUpdate(
-                source_branch=bookmark,
-                target_branch=result.job.base_branch,
-                title=f"{result.job.mr_title_prefix}{result.job.title}",
-                description=result.job.description or "",
-                command=result.job.command,
-                command_output=result.command_output,
-                labels=result.job.labels,
-                draft=result.job.draft,
-                auto_merge=result.job.auto_merge or False,
-                required_approvals=result.job.required_approvals,
-                depends_on=list(result.job.depends_on),
-            )
-        plan.updates.append(
-            JobUpdate(
-                job_name=job.name,
-                title=result.job.title,
-                push=BookmarkPush(bookmark=bookmark),
-                mr=mr,
-            )
-        )
+    )
 
 
 @contextlib.contextmanager
@@ -1147,19 +1271,21 @@ def _prepare_repo(*, config: Config, repo_path: Path) -> Generator[JJ]:
 
 
 def _run_jobs(ctx: RunContext) -> None:
-    """Run ``ctx.selection`` in topological order, expanding generators in place.
+    """Run each job in topological order and record its plan before the next dispatches.
 
     ``ctx.selection.jobs`` is topologically sorted, so the first job not yet in
     ``started`` always has its dependencies satisfied: every job ahead of it in
-    the order has already run (were one not, *it* would be the first
-    not-started job).
+    the order has already run (were one not, *it* would be the first not-started
+    job). ``run_job`` rewrites each job's command commit in place before it
+    returns (ADR 0020), so a stacked dependent's ``_compute_parents`` forks from
+    its dependency's canonical, fixup-included tip, with no separate fold-in step.
     A generator's emitted jobs are appended and the list re-sorted so each runs
     after its dependencies (the generator included); the next iteration picks
     them up once their turn comes. See docs/adr/0004-job-generators.md.
 
-    Results are recorded in ``ctx.summary`` in place, and generator-emitted jobs
-    are spliced into ``ctx.selection.jobs`` (still topologically sorted) — the
-    absorb phase iterates that same list.
+    Results are recorded in ``ctx.summary`` in place, generator-emitted jobs are
+    spliced into ``ctx.selection.jobs`` (still topologically sorted), and
+    ``ctx.plan`` accumulates each job's push/MR as its plan is recorded.
 
     ``ctx.selection.refreshed`` names the jobs being refreshed because they
     already have an unmerged branch; they bypass the cooldown skip so their
@@ -1176,6 +1302,15 @@ def _run_jobs(ctx: RunContext) -> None:
             break
         started.add(job.name)
         emitted = _dispatch_job(ctx, job=job)
+        # run_job's in-place rewrite (ADR 0020) happens in a temp workspace and
+        # can leave this default workspace stale (a human's @ on the branch it
+        # rewrote); reconcile it before any command runs here: the bookmark
+        # ops below, the next job's `workspace add`, apply_plan's push, and
+        # whatever the user runs after the run.
+        ctx.repo.update_stale_working_copy()
+        # run_job already rewrote this job's command commit in place; finalize its
+        # bookmark and record its push/MR now, before any dependent dispatches.
+        _record_job_plan(ctx, job)
         if emitted:
             # Resolve before splicing in so _dispatch_job receives resolved jobs,
             # matching the invariant for jobs from selection.
@@ -1263,7 +1398,6 @@ def run_all(  # noqa: PLR0913
             repo_path=repo_path,
             repo=repo,
             summary=summary,
-            blocked=set(),
             selection=selection,
         )
 
@@ -1272,15 +1406,16 @@ def run_all(  # noqa: PLR0913
         # selection (generator-emitted jobs appear later, as they run).
         print_job_table(format_job_forest(selection.jobs), indent="  ")
         print()
-        # Phase 1: run every job on a fresh commit; old bookmarks are untouched.
-        # Generator-emitted jobs are spliced into ctx.selection.jobs so the absorb
-        # phase processes them too. Jobs pulled in for refresh bypass the cooldown
-        # skip so their branches are rebased (ADR 0003).
+        # Run each job and rewrite its command commit in place immediately
+        # (before any dependent computes its parents), so a stacked dependent
+        # forks from its dependency's canonical, already-rewritten tip (ADR 0020,
+        # and ADR 0019 "Run ordering"). Old bookmarks are untouched until a job's
+        # own rewrite; a failed command discards only that job's fresh commit.
+        # Generator-emitted jobs are spliced into ctx.selection.jobs and rewritten
+        # in turn. Jobs pulled in for refresh bypass the cooldown skip so their
+        # branches are rebased (ADR 0003). ctx.plan (bookmark pushes + MR
+        # descriptors) is filled in per job as each is rewritten.
         _run_jobs(ctx)
-
-        # Phase 2: absorb fresh commits into old commits (preserving change-ids),
-        # set bookmarks for new jobs, delete bookmarks for empty jobs, fill ctx.plan.
-        _absorb_results(ctx)
 
         # Resolve "unless-superseded" now that every job has run: a job's MR is
         # dropped from the plan when a dependent's MR in this run contains it.
