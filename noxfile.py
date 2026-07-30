@@ -1,6 +1,7 @@
 #!/usr/bin/env -S uv run nox --noxfile
 """Nox sessions for CI: tests, type checking, config validation, and schema checks."""
 
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -65,14 +66,14 @@ def docker_smoketest(session: nox.Session) -> None:
     script = Path("scripts/smoketest.sh").read_text()
     # --entrypoint bash overrides the image's `repoactive` entrypoint so we can
     # script inside the container; repoactive stays on PATH.
-    session.run(
-        "docker",
-        "run",
-        "--rm",
-        "--entrypoint",
-        "bash",
-        "repoactive",
-        "-c",
-        script,
-        external=True,
+    #
+    # Run via subprocess rather than session.run: on failure nox would echo the
+    # entire `docker run ... -c <whole script>` command line, burying the smoke
+    # test's own red failure banner in noise. We check the exit code ourselves and
+    # report a one-line error instead.
+    result = subprocess.run(
+        ["docker", "run", "--rm", "--entrypoint", "bash", "repoactive", "-c", script],
+        check=False,
     )
+    if result.returncode != 0:
+        session.error(f"docker smoke test failed (exit {result.returncode}); see banner above")
