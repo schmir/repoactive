@@ -36,13 +36,17 @@
               just
               prettier
               pyright
-              ruff
               shellcheck
               shfmt
               taplo
               treefmt
               uv
             ];
+
+            shellHook = ''
+              export PATH="$PWD/.venv/bin:$PATH"
+              uv sync --quiet
+            '';
           };
         }
       );
