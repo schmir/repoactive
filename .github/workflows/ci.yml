@@ -43,7 +43,7 @@ jobs:
     strategy:
       matrix:
         python-version: ["3.11", "3.12", "3.13", "3.14"]
-        jj-version: ["v0.42.0", "v0.43.0"]
+        jj-version: ["v0.42.0", "v0.43.0", "v0.44.0"]
     steps:
       - uses: actions/checkout@v6
 
