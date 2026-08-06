@@ -478,6 +478,81 @@ def test_fixup_survives_empty_command_rerun(repo: JJ) -> None:
         _file_content(repo, "release", "release.txt")
 
 
+def test_prerequisite_trunk_merge_conflict_freezes_the_branch(
+    repo: JJ, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An unresolved prerequisite/trunk merge conflict freezes the branch (ADR 0019).
+
+    A prerequisite and a later trunk change edit the same file in conflicting
+    ways, so the rebuilt command commit - which merges the prerequisite with the
+    run's parents - conflicts. The command writes only release.txt and cannot
+    resolve it, so the post-command check freezes: nothing is pushed and the
+    conflict is left materialized on the branch. The conflict lands in the
+    command commit itself (@), not in its parents (@-), so only the post-command
+    check catches it.
+    """
+    repo.describe("root")
+    (repo.cwd / "shared.txt").write_text("base\n")
+    repo.bookmark_set("main")
+
+    run_all(config=_prereq_job_config("echo v1 > release.txt"), repo_path=repo.cwd)
+    command_commit = _change_id(repo, "release")
+
+    # Human prerequisite below the command commit edits shared.txt.
+    repo.new("main")
+    (repo.cwd / "shared.txt").write_text("from prerequisite\n")
+    repo.describe("human prerequisite")
+    prereq_id = _change_id(repo, "@")
+    repo.rebase_revision(command_commit, prereq_id)
+
+    # Trunk moves and edits shared.txt differently, conflicting with the prereq.
+    repo.new("main")
+    (repo.cwd / "shared.txt").write_text("from trunk\n")
+    repo.describe("trunk change")
+    repo.bookmark_set("main")
+
+    summary = run_all(config=_prereq_job_config("echo v2 > release.txt"), repo_path=repo.cwd)
+
+    assert summary.frozen == {"release"}
+    assert summary.results["release"].frozen is True
+    assert "release" not in summary.failed
+    assert "==> [release] frozen" in capsys.readouterr().out
+    # The conflict is left on the branch locally for a human to resolve.
+    assert repo.has_conflict("release")
+
+
+def test_fixup_conflicting_with_new_output_freezes_the_branch(
+    repo: JJ, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A fixup that no longer applies to regenerated output freezes the branch (ADR 0019).
+
+    The command commit itself is clean, but a human fixup that edited the same
+    file the command owns no longer applies once the command regenerates it, so
+    reapplying the fixup conflicts. The conflict sits *above* the command commit,
+    exercising the fixup half of the post-command check's revset.
+    """
+    repo.describe("root")
+    repo.bookmark_set("main")
+    run_all(config=_prereq_job_config("echo v1 > release.txt"), repo_path=repo.cwd)
+    command_commit = _change_id(repo, "release")
+
+    # Human fixup reacts to v1 by editing the file the command owns.
+    repo.new(command_commit)
+    (repo.cwd / "release.txt").write_text("v1 with human edit\n")
+    repo.describe("human fixup")
+    repo.bookmark_set("release", _change_id(repo, "@"))
+
+    # Rerun regenerates release.txt to v2; the fixup's v1-based edit no longer
+    # applies, so reapplying it conflicts.
+    summary = run_all(config=_prereq_job_config("echo v2 > release.txt"), repo_path=repo.cwd)
+
+    assert summary.frozen == {"release"}
+    assert summary.results["release"].frozen is True
+    assert "release" not in summary.failed
+    assert "==> [release] frozen" in capsys.readouterr().out
+    assert repo.has_conflict("release")
+
+
 def _versioned_stacked_config(a_command: str) -> Config:
     """Build the same shape as _stacked_config, with "bookmark_a"'s command parametrized for reruns."""
     return Config.model_validate(

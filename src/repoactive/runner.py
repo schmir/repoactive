@@ -177,6 +177,8 @@ class JobResult:
     # right after the job runs. Empty for an ordinary job or a generator that
     # emitted nothing.
     emitted: list[Job] = field(default_factory=list)
+    # whether the branch is frozen because it has commits with conflicts (ADR 0019)
+    frozen: bool = False
 
 
 @dataclass
@@ -193,6 +195,12 @@ class RunSummary:
     # produced a diff). Like on_cooldown, an intentional skip: the job's
     # bookmark is left alone when its plan is recorded (_record_job_plan).
     run_only_if_changed_skipped: set[str] = field(default_factory=set)
+    # Jobs frozen because rebuilding the branch would push a conflict below the
+    # command commit (ADR 0019). The command did not run and nothing is pushed;
+    # the remote stays at its last clean state and the conflict is left for the
+    # human to resolve locally. Not a failure - like cooldown, an intentional
+    # hold - so it does not affect ok.
+    frozen: set[str] = field(default_factory=set)
     # Wall time of the whole run, filled in by run_all just before print_report.
     elapsed: float | None = None
 
@@ -224,6 +232,7 @@ class RunSummary:
                 if self.run_only_if_changed_skipped
                 else ""
             )
+            + (f", {len(self.frozen)} frozen" if self.frozen else "")
             + "."
             + (f" ({format_elapsed(self.elapsed)})" if self.elapsed is not None else "")
         )
@@ -562,6 +571,66 @@ def _run_job_prepare_command_commit(
     return shape
 
 
+def _pushable_branch_revset(shape: human_commits.BranchShape) -> str:
+    """Revset for this job's own commits that a push would export.
+
+    The command commit and, for a rewritten branch (NormalLayers), the fixups
+    reapplied above it - bounded by the branch tip so a stacked dependent's
+    commits (which sit *above* the tip) are excluded. Used for the post-command
+    conflict check: a conflict here is one the command failed to resolve (its own
+    merge with the run's parents, or a fixup that no longer applies).
+
+    Prerequisites below the command commit are intentionally excluded; an
+    already-conflicted parent is caught before the command runs by checking
+    ``@-``. A prerequisite/trunk *merge* conflict, by contrast, materializes in
+    the command commit itself (``@``) and so is covered here.
+    """
+    match shape:
+        case human_commits.NormalLayers():
+            return f"@::{shape.bookmark_change_id}"
+        case _:
+            return "@"
+
+
+def _run_job_frozen(
+    *,
+    job: Job,
+    parents: list[str],
+    shape: human_commits.BranchShape,
+    detail: str,
+) -> JobResult:
+    """Freeze the branch: push nothing and leave the conflict for a human (ADR 0019).
+
+    jj refuses to push a commit that contains a conflict, so a rebuild that would
+    require one pushes nothing. Two checks in run_job lead here:
+
+    - before the command, ``@-`` (a parent) already holds a conflict - a
+      conflicted dependency tip or a prerequisite left conflicted below the
+      command commit. The command runs on top of it and cannot resolve it, so it
+      is skipped entirely.
+    - after the command, this job's own pushable commits
+      (:func:`_pushable_branch_revset`) still hold a conflict the command did not
+      resolve - the command commit's merge with the run's parents, or a fixup
+      reapplied onto its regenerated output.
+
+    Either way the prepared/rebuilt state is left in place rather than rolled
+    back: nothing is pushed (_record_job_plan leaves the bookmark and any open MR
+    untouched), so the remote stays at its last clean state, while the human
+    running the branch sees the conflict materialized locally where they can
+    resolve it. ``effective_revsets`` stays at the branch's change-id (or the
+    run's parents for a branch that does not exist yet).
+    """
+    frozen_tip = _old_change_id(shape)
+    print_status(job.name, ("frozen", "yellow"), f" ({detail})")
+    return JobResult(
+        job=job,
+        effective_revsets=[frozen_tip] if frozen_tip else parents,
+        produced_diff=False,
+        frozen=True,
+        shape=shape,
+    )
+
+
 def _run_job_build_result(  # noqa: PLR0913
     *,
     repo: JJ,
@@ -716,12 +785,35 @@ def run_job(
         repo.op_checkpoint() as restore,
     ):
         shape = _run_job_prepare_command_commit(repo=repo, job=job, parents=parents)
+        # A conflict already present in a parent (@-) - a conflicted dependency
+        # tip, or a prerequisite left conflicted below the command commit -
+        # cannot be resolved by the command, which only regenerates the command
+        # commit's own content. Stop before running it.
+        if repo.has_conflict("@-"):
+            return _run_job_frozen(
+                job=job,
+                parents=parents,
+                shape=shape,
+                detail="conflict below command commit, needs rebase",
+            )
         command_result = _run_command(
             job,
             repo.cwd,
             stripped_env_names=ctx.stripped_env_names,
             extra_env=_job_extra_env(job),
         )
+        # A conflict materialized by the rebuild itself - the command commit's
+        # merge with the run's parents (a prerequisite/trunk merge lands here, in
+        # @, not in @-), or a fixup reapplied onto regenerated output - is left to
+        # the command, which may clear it by rewriting @. Re-check afterwards:
+        # jj refuses to push a still-conflicted commit, so freeze if one remains.
+        if repo.has_conflict(_pushable_branch_revset(shape)):
+            return _run_job_frozen(
+                job=job,
+                parents=parents,
+                shape=shape,
+                detail="conflict in rebuilt branch, needs rebase",
+            )
         return _run_job_build_result(
             repo=repo,
             job=job,
@@ -929,6 +1021,10 @@ def _apply_outcome(ctx: RunContext, job: Job, outcome: DispatchOutcome) -> None:
     summary = ctx.summary
     if outcome.result is not None:
         summary.results[job.name] = outcome.result
+        # A frozen job ran far enough to classify and prepare but not to push;
+        # it is not a skip_reason (the gates did not fire) and not a failure.
+        if outcome.result.frozen:
+            summary.frozen.add(job.name)
     match outcome.skip_reason:
         case SkipReason.dependency_failed:
             summary.dependency_failed.add(job.name)
@@ -1202,6 +1298,13 @@ def _record_job_plan(ctx: RunContext, job: Job) -> None:
         result.new_change_id,
         result.shape,
     )
+
+    # A frozen branch pushes nothing: the bookmark stays at its last clean state
+    # and any open MR is left exactly as it was (ADR 0019). This is distinct from
+    # the no-diff path below, which retires the bookmark.
+    if result.frozen:
+        logger.debug("plan: [%s] frozen, leaving bookmark and MR untouched", job.name)
+        return
 
     if not result.produced_diff:
         if job.name not in (

@@ -41,6 +41,8 @@ from repoactive.runner import (
     _load_job_specs,
     _old_change_id,
     _prepare_repo,
+    _pushable_branch_revset,
+    _record_job_plan,
     _resolve_granted_secrets,
     _run_command,
     _run_generator_job,
@@ -144,6 +146,9 @@ def _mock_jj(mock_jj_cls: MagicMock) -> MagicMock:
     """
     mock_jj = mock_jj_cls.return_value
     mock_jj.temp_workspace.return_value.__enter__.return_value = mock_jj
+    # Default to a conflict-free workspace so run_job takes its normal path; a
+    # test exercising the freeze-on-conflict check (ADR 0019) overrides this.
+    mock_jj.has_conflict.return_value = False
 
     @contextlib.contextmanager
     def op_checkpoint() -> Generator[Callable[[], None]]:
@@ -547,6 +552,39 @@ class TestOldChangeId:
             fixup_roots=[],
         )
         assert _old_change_id(shape) == "tip-id"
+
+
+class TestPushableBranchRevset:
+    """The revset the post-command conflict check runs on (ADR 0019)."""
+
+    def test_normal_layers_spans_command_commit_through_tip(self) -> None:
+        # Command commit (@) through the branch tip, so fixups above @ are
+        # included and a stacked dependent's commits (above the tip) are not.
+        shape = human_commits.NormalLayers(
+            bookmark_change_id="tip-id",
+            command_commit=JobCommit(
+                commit_id="cmd-commit",
+                change_id="cmd-id",
+                job_names={"job"},
+                subject="subject",
+                relative_age="1 hour ago",
+            ),
+            prereq_heads=[],
+            fixup_roots=[],
+        )
+        assert _pushable_branch_revset(shape) == "@::tip-id"
+
+    def test_fresh_shapes_are_just_the_command_commit(self) -> None:
+        # A fresh/merged branch has no fixups above @, so @ alone is checked; a
+        # prerequisite/trunk merge conflict lands in @ itself and is still caught.
+        assert _pushable_branch_revset(human_commits.NoBranch()) == "@"
+        assert _pushable_branch_revset(human_commits.AlreadyMerged(bookmark_change_id="m")) == "@"
+        assert (
+            _pushable_branch_revset(
+                human_commits.AllPrerequisites(bookmark_change_id="p", prereq_heads=["h"])
+            )
+            == "@"
+        )
 
 
 class TestBuildCommitMessage:
@@ -1337,6 +1375,75 @@ class TestRunJob:
         # leaving the branch byte-for-byte as it was.
         mock_jj.op_restore.assert_called_once_with(mock_jj.op_id.return_value)
         mock_jj.bookmark_set.assert_not_called()
+
+    @patch("repoactive.runner.JJ")
+    @patch("repoactive.runner.subprocess.Popen")
+    def test_conflict_below_command_commit_freezes_without_running(
+        self, mock_sub: MagicMock, mock_jj_cls: MagicMock
+    ) -> None:
+        # A conflict in @- (below the command commit) cannot be resolved by the
+        # command, so run_job freezes: it does not run the command and pushes
+        # nothing. The prepared rewrite is left in place (not rolled back) so the
+        # conflict stays visible locally for a human to resolve (ADR 0019).
+        mock_jj = _mock_jj(mock_jj_cls)
+        _mock_popen(mock_sub)
+        mock_jj.bookmark_change_id.return_value = "old-change-id"
+        mock_jj.has_conflict.side_effect = lambda revset: revset == "@-"
+
+        result = run_job(_ctx(), job=_job("foo"), parents=["trunk()"])
+
+        mock_sub.assert_not_called()  # the command never ran
+        mock_jj.op_restore.assert_not_called()  # the rewrite is kept, not rolled back
+        mock_jj.describe.assert_not_called()
+        mock_jj.bookmark_set.assert_not_called()
+        mock_jj.bookmark_delete.assert_not_called()
+        assert result.frozen is True
+        assert result.produced_diff is False
+        assert result.effective_revsets == ["old-change-id"]
+
+    @patch("repoactive.runner.JJ")
+    @patch("repoactive.runner.subprocess.Popen")
+    def test_conflict_in_rebuilt_branch_freezes_after_running(
+        self, mock_sub: MagicMock, mock_jj_cls: MagicMock
+    ) -> None:
+        # @- is clean, so the command runs. But a conflict the rebuild
+        # materialized (the command commit's merge with the run's parents, or a
+        # fixup) is still present afterwards — the command did not clear it — so
+        # run_job freezes on the post-command check and pushes nothing (ADR 0019).
+        mock_jj = _mock_jj(mock_jj_cls)
+        _mock_popen(mock_sub)
+        mock_jj.is_empty.return_value = False
+        # A fresh/merged shape's pushable revset is "@" (no fixups above it).
+        mock_jj.has_conflict.side_effect = lambda revset: revset == "@"
+
+        result = run_job(_ctx(), job=_job("foo"), parents=["trunk()"])
+
+        mock_sub.assert_called_once()  # the command ran, unlike the @- case
+        mock_jj.describe.assert_not_called()  # frozen before _run_job_build_result
+        mock_jj.bookmark_set.assert_not_called()
+        assert result.frozen is True
+        assert result.produced_diff is False
+
+    def test_frozen_result_pushes_nothing(self) -> None:
+        # _record_job_plan leaves a frozen job's bookmark and MR untouched: no
+        # bookmark set/delete, no push queued (ADR 0019 "push nothing").
+        job = _job("foo")
+        summary = RunSummary()
+        summary.results[job.name] = JobResult(
+            job=job,
+            effective_revsets=["old-change-id"],
+            produced_diff=False,
+            frozen=True,
+            shape=human_commits.AlreadyMerged(bookmark_change_id="old-change-id"),
+        )
+        repo = MagicMock(spec=JJ)
+        ctx = _ctx(summary=summary, repo=repo)
+
+        _record_job_plan(ctx, job)
+
+        assert ctx.plan.updates == []
+        repo.bookmark_set.assert_not_called()
+        repo.bookmark_delete.assert_not_called()
 
     @patch("repoactive.runner.threading.Timer")
     @patch("repoactive.runner.JJ")
