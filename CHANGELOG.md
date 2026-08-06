@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.0 - unreleased
+
+- Naming a job explicitly on the command line (`repoactive run <name>`) now
+  overrides its `cooldown_period`: the job runs immediately regardless of
+  when it last landed. Cooldown continues to throttle the default run and
+  `--tag` selection. See
+  [Throttling jobs with `cooldown_period`](README.md#throttling-jobs-with-cooldown_period).
+
 ## 0.3.1 - 2026-07-27
 
 - A new `secret_env` field lets a job declare the secrets its command may

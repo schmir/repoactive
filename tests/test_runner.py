@@ -71,13 +71,17 @@ def _selection(
     *jobs: Job,
     refreshed: frozenset[str] = frozenset(),
     successors: frozenset[str] = frozenset(),
+    explicit: frozenset[str] = frozenset(),
 ) -> JobSelection:
     """Build a JobSelection for a _dispatch_job call.
 
     ``_dispatch_job`` reads ``selection.jobs`` only for the names of jobs in the
-    run (generator collision check), plus ``refreshed`` and ``successors``.
+    run (generator collision check), plus ``refreshed``, ``successors``, and
+    ``explicit``.
     """
-    return JobSelection(jobs=list(jobs), refreshed=refreshed, successors=successors)
+    return JobSelection(
+        jobs=list(jobs), refreshed=refreshed, successors=successors, explicit=explicit
+    )
 
 
 def _ctx(
@@ -244,6 +248,30 @@ class TestRunOneJob:
                 job=job_a,
             )
         assert "a" not in summary.on_cooldown
+        mock_run_job.assert_called_once()
+        assert summary.results["a"] is result
+
+    def test_explicit_name_bypasses_cooldown(self) -> None:
+        # A job named on the command line runs now regardless of its cooldown:
+        # naming it is a request to run it, so _on_cooldown is never consulted.
+        config = _config(_job("a"))
+        job_a = config.jobs[0]
+        result = JobResult(job=job_a, effective_revsets=["repoactive/a"], produced_diff=True)
+        summary = RunSummary()
+        with (
+            patch("repoactive.runner._on_cooldown") as mock_cooldown,
+            patch("repoactive.runner.run_job", return_value=result) as mock_run_job,
+        ):
+            _dispatch_job(
+                _ctx(
+                    config=config,
+                    summary=summary,
+                    selection=_selection(*config.jobs, explicit=frozenset({"a"})),
+                ),
+                job=job_a,
+            )
+        assert "a" not in summary.on_cooldown
+        mock_cooldown.assert_not_called()
         mock_run_job.assert_called_once()
         assert summary.results["a"] is result
 
@@ -2629,6 +2657,25 @@ class TestRunAll:
         assert summary.ok  # cooldown is not a failure
 
     @patch("repoactive.runner.run_job")
+    def test_explicit_name_ignores_cooldown(
+        self, mock_run_job: MagicMock, mock_jj: MagicMock
+    ) -> None:
+        # Naming a job on the command line runs it now even though it is well
+        # within its cooldown window; its cooldown is never even queried.
+        mock_jj.return_value.last_job_commit_date.return_value = datetime(2026, 1, 1, tzinfo=UTC)
+        mock_run_job.return_value = _result(_job("a"), revsets=["repoactive/a"])
+
+        summary = run_all(
+            config=self._cooldown_config("a", "7d"),
+            repo_path=REPO,
+            requested_names=frozenset({"a"}),
+        )
+
+        mock_run_job.assert_called_once()
+        assert not summary.on_cooldown
+        mock_jj.return_value.last_job_commit_date.assert_not_called()
+
+    @patch("repoactive.runner.run_job")
     def test_cooldown_queries_base_branch(
         self, mock_run_job: MagicMock, mock_jj: MagicMock
     ) -> None:
@@ -2823,7 +2870,13 @@ class TestRunAll:
 
     @staticmethod
     def _successor_config(*, successor_cooldown: str | None = None) -> Config:
-        """Build a config: a with a cooldown, b stacked on a (optionally with its own cooldown)."""
+        """Build a config: a (tagged ``weekly``) with a cooldown, b stacked on a.
+
+        ``a`` carries an explicit tag so a run can select it by tag. Unlike
+        naming it, tag selection does not bypass its cooldown, which is what the
+        successor-skip-on-cooldown case needs. ``b`` optionally gets its own
+        cooldown.
+        """
         b: dict[str, object] = {"name": "b", "command": "cmd", "title": "b", "depends_on": ["a"]}
         if successor_cooldown:
             b["cooldown_period"] = successor_cooldown
@@ -2831,7 +2884,13 @@ class TestRunAll:
             {
                 "platform": [{"url": "https://gitlab.com", "type": "gitlab", "token_env": "T"}],
                 "jobs": [
-                    {"name": "a", "command": "cmd", "title": "a", "cooldown_period": "7d"},
+                    {
+                        "name": "a",
+                        "command": "cmd",
+                        "title": "a",
+                        "cooldown_period": "7d",
+                        "tags": ["weekly"],
+                    },
                     b,
                 ],
             }
@@ -2848,14 +2907,17 @@ class TestRunAll:
     def test_successor_skipped_when_selected_job_on_cooldown(
         self, mock_run_job: MagicMock, mock_jj: MagicMock, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        # Explicitly selecting a pulls in b (stacked above a's bookmark), but a
-        # is on cooldown: nothing below b changed, so b is skipped too and its
-        # bookmark is left alone when its plan is recorded.
+        # Selecting a by tag pulls in b (stacked above a's bookmark), but a is
+        # on cooldown. Tag selection, unlike naming a, does not bypass it, so
+        # nothing below b changed: b is skipped too and its bookmark is left
+        # alone when its plan is recorded.
         mock_jj.return_value.last_job_commit_date.return_value = datetime(2026, 1, 1, tzinfo=UTC)
         self._stub_successors(mock_jj, {"b"})
 
         summary = run_all(
-            config=self._successor_config(), repo_path=REPO, requested_names=frozenset({"a"})
+            config=self._successor_config(),
+            repo_path=REPO,
+            requested_tags=frozenset({"weekly"}),
         )
 
         mock_run_job.assert_not_called()

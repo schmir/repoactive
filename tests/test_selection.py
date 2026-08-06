@@ -279,6 +279,34 @@ class TestSelectJobs:
         assert _names(result.jobs) == ["a"]
 
 
+class TestExplicitSubset:
+    def test_requested_names_recorded_as_explicit(self) -> None:
+        # A job named on the command line is reported in `explicit` so the run
+        # bypasses its cooldown. Force-included dependencies are not explicit and
+        # stay subject to their own cooldowns.
+        config = _config(_djob("a"), _djob("b", depends_on=["a"]))
+        result = JobSelector(
+            config=config, requested_names=frozenset({"b"}), requested_tags=frozenset()
+        ).select_run_jobs(_mock_repo())
+        assert _names(result.jobs) == ["a", "b"]
+        assert result.explicit == frozenset({"b"})
+
+    def test_tag_selection_leaves_explicit_empty(self) -> None:
+        # Selecting by tag is not naming a job, so nothing bypasses cooldown.
+        config = _config(_djob("a", tags=["weekly"]))
+        result = JobSelector(
+            config=config, requested_names=frozenset(), requested_tags=frozenset({"weekly"})
+        ).select_run_jobs(_mock_repo())
+        assert result.explicit == frozenset()
+
+    def test_default_run_leaves_explicit_empty(self) -> None:
+        config = _config(_djob("a"))
+        result = JobSelector(
+            config=config, requested_names=frozenset(), requested_tags=frozenset()
+        ).select_run_jobs(_mock_repo())
+        assert result.explicit == frozenset()
+
+
 class TestExpandSuccessors:
     def test_no_successors_returns_selected_unchanged(self) -> None:
         config = _config(_djob("a"), _djob("b"))

@@ -1120,6 +1120,13 @@ runs: `repoactive` does not fetch, so a clone that has not pulled the merge
 will not see the cooldown and will re-run the job. See
 [Keeping the local clone current](#keeping-the-local-clone-current).
 
+Naming a job explicitly on the command line (`repoactive run <name>`)
+overrides its cooldown: the job runs now regardless of when it last landed,
+as if its `cooldown_period` were unset. The cooldown only ever gates the
+_default_ run and `--tag` selection, the automated paths it exists to
+throttle. Jobs pulled in only as dependencies of a named job are not
+themselves named, so they keep their own cooldowns.
+
 ### Throttling a job when a superset lands with `cooldown_on`
 
 Some jobs are strict supersets of others. `uv lock --upgrade` refreshes

@@ -50,11 +50,18 @@ class JobSelection:
     when the stack below them moves: they bypass their own cooldown, but are
     skipped when every dependency was itself skipped this run — an unchanged
     stack needs no rebuild (see ``_dispatch_job``).
+
+    ``explicit`` names the jobs the caller asked for by name on the command
+    line (``requested_names``, empty on the default run and for tag selection).
+    Naming a job is a request to run it now, so it bypasses the cooldown skip
+    (see ``_dispatch_job``); its force-included dependencies are not in this
+    set and stay subject to their own cooldowns.
     """
 
     jobs: list[Job]
     refreshed: frozenset[str]
     successors: frozenset[str] = frozenset()
+    explicit: frozenset[str] = frozenset()
 
 
 class JobSelector:
@@ -207,4 +214,5 @@ class JobSelector:
             jobs=selected_jobs,
             refreshed=refresh_names,
             successors=frozenset(successor_names),
+            explicit=self.requested_names,
         )

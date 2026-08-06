@@ -1056,8 +1056,10 @@ def _dispatch_job(ctx: RunContext, *, job: Job) -> list[Job]:
     run_only_if_changed-skipped, so its branch is refreshed (ADR 0003).
     ``ctx.selection.successors`` names the jobs force-included because their
     commits sit above a selected job's bookmark; they bypass their own cooldown
-    but are skipped when every dependency was itself skipped this run. The plan is
-    built by _record_job_plan, not here.
+    but are skipped when every dependency was itself skipped this run.
+    ``ctx.selection.explicit`` names the jobs requested by name on the command
+    line; naming a job runs it now, so it too bypasses the cooldown skip. The
+    plan is built by _record_job_plan, not here.
     """
     outcome = _dispatch_blocked_deps(ctx, job)
     if outcome is None:
@@ -1153,7 +1155,9 @@ def _dispatch_cooldown_gate(
     self-closes the MR via the empty-diff path; skipping it here would leave the
     branch un-rebased and orphan its MR, defeating the refresh guarantee of
     ADR 0003. A successor bypasses cooldown for the same reason: its base just
-    moved, so it must rebuild regardless of when it last landed.
+    moved, so it must rebuild regardless of when it last landed. A job named
+    explicitly on the command line also bypasses cooldown: naming it is a
+    request to run it now, so its cooldown_period is ignored for this run.
 
     Checked before the emits_jobs branch on purpose: a generator on cooldown
     emits nothing, throttling its whole fan-out as a unit (the dual trailer
@@ -1164,6 +1168,7 @@ def _dispatch_cooldown_gate(
     if (
         job.name in selection.refreshed
         or job.name in selection.successors
+        or job.name in selection.explicit
         or not (last_run := _on_cooldown(job, ctx.repo_path))
     ):
         return None
