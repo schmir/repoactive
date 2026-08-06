@@ -25,6 +25,23 @@ After changing files, run treefmt to format them. IMPORTANT: invoke it as
 exactly `treefmt` with NO arguments and NO file paths — it discovers the changed
 files itself. Never pass it a filename (e.g. `treefmt path/to/file.py` is wrong).
 
+## Comments and docstrings
+
+ - Use plain text. No reStructuredText/Sphinx markup: never wrap identifiers in
+   double backticks (write `job`, not ``` ``job`` ```), and don't use other RST
+   roles or directives. These docstrings are read as source, not rendered.
+ - Keep them short. Say what the function does and why; leave out what the code
+   already shows. Don't restate the signature, narrate the implementation
+   line-by-line, or repeat a rule that already lives at the call site or on the
+   thing being called.
+ - Keep the non-obvious rationale: subtle invariants, race conditions, ordering
+   constraints, and the reason behind a choice. Reference the relevant ADR by
+   number (e.g. `ADR 0019`) instead of re-explaining it.
+ - Field/attribute comments go on a single line. If one genuinely needs more,
+   the type or name probably wants rethinking first.
+ - Follow the surrounding density and style; match neighbours rather than
+   introducing a second convention.
+
 ## Keeping things in sync
 
 Some files are generated from or checked against the code, and CI fails if they
