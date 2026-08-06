@@ -54,7 +54,14 @@ from repoactive.runner import (
     run_job,
 )
 from repoactive.selection import JobSelection, UnknownJobsError, UnknownTagsError
-from repoactive.updates import BookmarkPush, JobUpdate, MRUpdate, UpdatePlan
+from repoactive.updates import (
+    NEEDS_REBASE_LABEL,
+    BookmarkPush,
+    JobUpdate,
+    MRLabelUpdate,
+    MRUpdate,
+    UpdatePlan,
+)
 from tests.builders import _config, _djob, _job
 
 REPO = Path("/repo")
@@ -1424,9 +1431,10 @@ class TestRunJob:
         assert result.frozen is True
         assert result.produced_diff is False
 
-    def test_frozen_result_pushes_nothing(self) -> None:
-        # _record_job_plan leaves a frozen job's bookmark and MR untouched: no
-        # bookmark set/delete, no push queued (ADR 0019 "push nothing").
+    def test_frozen_result_pushes_nothing_but_labels_mr(self) -> None:
+        # _record_job_plan leaves a frozen job's bookmark untouched and queues no
+        # push (ADR 0019 "push nothing"), but records a label-only update so the
+        # open MR gets the needs-rebase label.
         job = _job("foo")
         summary = RunSummary()
         summary.results[job.name] = JobResult(
@@ -1441,9 +1449,34 @@ class TestRunJob:
 
         _record_job_plan(ctx, job)
 
-        assert ctx.plan.updates == []
+        assert len(ctx.plan.updates) == 1
+        update = ctx.plan.updates[0]
+        assert update.push is None
+        assert update.mr is None
+        assert update.label_only == MRLabelUpdate(
+            source_branch="repoactive/foo",
+            add_labels=[NEEDS_REBASE_LABEL],
+        )
         repo.bookmark_set.assert_not_called()
         repo.bookmark_delete.assert_not_called()
+
+    def test_frozen_result_without_mr_records_nothing(self) -> None:
+        # A frozen job that never opens MRs has nothing to label, so no update is
+        # queued at all.
+        job = _job("foo", create_mr=CreateMR.never)
+        summary = RunSummary()
+        summary.results[job.name] = JobResult(
+            job=job,
+            effective_revsets=["old-change-id"],
+            produced_diff=False,
+            frozen=True,
+            shape=human_commits.AlreadyMerged(bookmark_change_id="old-change-id"),
+        )
+        ctx = _ctx(summary=summary, repo=MagicMock(spec=JJ))
+
+        _record_job_plan(ctx, job)
+
+        assert ctx.plan.updates == []
 
     @patch("repoactive.runner.threading.Timer")
     @patch("repoactive.runner.JJ")
@@ -2034,6 +2067,55 @@ class TestApplyPlan:
         assert params.labels == ["auto"]
         assert params.draft is False
         assert result.mr_urls == {"a": "https://example.com/mr/1"}
+
+    @patch("repoactive.runner.JJ")
+    def test_label_only_update_labels_existing_mr(self, mock_jj_cls: MagicMock) -> None:
+        # A frozen job's label-only update adds the label to the open MR and
+        # pushes no bookmark.
+        platform = MagicMock()
+        platform.add_mr_labels.return_value = "https://example.com/mr/1"
+        plan = UpdatePlan(
+            updates=[
+                JobUpdate(
+                    job_name="a",
+                    title="Change a",
+                    label_only=MRLabelUpdate(
+                        source_branch="repoactive/a",
+                        add_labels=[NEEDS_REBASE_LABEL],
+                    ),
+                )
+            ]
+        )
+
+        result = apply_plan(plan, repo_path=REPO, platform=platform, mode=RunMode.publish)
+
+        mock_jj_cls.return_value.git_push_bookmarks.assert_called_once_with()
+        platform.add_mr_labels.assert_called_once_with("repoactive/a", [NEEDS_REBASE_LABEL])
+        platform.ensure_mr.assert_not_called()
+        assert result.mr_urls == {"a": "https://example.com/mr/1"}
+
+    @patch("repoactive.runner.JJ")
+    def test_label_only_update_no_open_mr_is_noop(self, mock_jj_cls: MagicMock) -> None:
+        # No open MR to label: add_mr_labels returns None and nothing is recorded.
+        platform = MagicMock()
+        platform.add_mr_labels.return_value = None
+        plan = UpdatePlan(
+            updates=[
+                JobUpdate(
+                    job_name="a",
+                    title="Change a",
+                    label_only=MRLabelUpdate(
+                        source_branch="repoactive/a",
+                        add_labels=[NEEDS_REBASE_LABEL],
+                    ),
+                )
+            ]
+        )
+
+        result = apply_plan(plan, repo_path=REPO, platform=platform, mode=RunMode.publish)
+
+        platform.add_mr_labels.assert_called_once_with("repoactive/a", [NEEDS_REBASE_LABEL])
+        assert result.mr_urls == {}
 
     @patch("repoactive.runner.JJ")
     def test_unresolved_target_branch_uses_platform_default(self, mock_jj_cls: MagicMock) -> None:

@@ -202,6 +202,28 @@ class TestGitHubEnsureMR:
         repo.create_pull.return_value.set_labels.assert_not_called()
 
     @patch("repoactive.platforms.github.Github")
+    def test_add_mr_labels_adds_to_existing_pr(self, mock_github: MagicMock) -> None:
+        platform, repo = self._platform(mock_github)
+        pr = MagicMock()
+        pr.html_url = "https://example.com/pull/1"
+        repo.get_pulls.return_value = [pr]
+
+        url = platform.add_mr_labels("repoactive/a", ["repoactive:needs-rebase"])
+
+        repo.get_pulls.assert_called_once_with(state="open", head="owner:repoactive/a")
+        pr.add_to_labels.assert_called_once_with("repoactive:needs-rebase")
+        assert url == "https://example.com/pull/1"
+
+    @patch("repoactive.platforms.github.Github")
+    def test_add_mr_labels_returns_none_when_no_pr(self, mock_github: MagicMock) -> None:
+        platform, repo = self._platform(mock_github)
+        repo.get_pulls.return_value = []
+
+        url = platform.add_mr_labels("repoactive/a", ["repoactive:needs-rebase"])
+
+        assert url is None
+
+    @patch("repoactive.platforms.github.Github")
     def test_auto_merge_calls_enable_automerge_on_existing(self, mock_github: MagicMock) -> None:
         platform, repo = self._platform(mock_github)
         pr = MagicMock()
@@ -321,6 +343,47 @@ class TestGitLabEnsureMR:
             }
         )
         assert url == "https://example.com/mr/2"
+
+    @patch("repoactive.platforms.gitlab.gitlab")
+    def test_add_mr_labels_unions_with_existing(self, mock_gitlab: MagicMock) -> None:
+        platform, project = self._platform(mock_gitlab)
+        mr = MagicMock()
+        mr.web_url = "https://example.com/mr/1"
+        mr.labels = ["auto"]
+        project.mergerequests.list.return_value = [mr]
+
+        url = platform.add_mr_labels("repoactive/a", ["repoactive:needs-rebase"])
+
+        project.mergerequests.list.assert_called_once_with(
+            source_branch="repoactive/a", state="opened", iterator=False
+        )
+        # Existing labels are preserved; the new one is appended.
+        assert mr.labels == ["auto", "repoactive:needs-rebase"]
+        mr.save.assert_called_once_with()
+        assert url == "https://example.com/mr/1"
+
+    @patch("repoactive.platforms.gitlab.gitlab")
+    def test_add_mr_labels_skips_save_when_already_present(self, mock_gitlab: MagicMock) -> None:
+        platform, project = self._platform(mock_gitlab)
+        mr = MagicMock()
+        mr.web_url = "https://example.com/mr/1"
+        mr.labels = ["auto", "repoactive:needs-rebase"]
+        project.mergerequests.list.return_value = [mr]
+
+        url = platform.add_mr_labels("repoactive/a", ["repoactive:needs-rebase"])
+
+        mr.save.assert_not_called()
+        assert url == "https://example.com/mr/1"
+
+    @patch("repoactive.platforms.gitlab.gitlab")
+    def test_add_mr_labels_returns_none_when_no_mr(self, mock_gitlab: MagicMock) -> None:
+        platform, project = self._platform(mock_gitlab)
+        project.mergerequests.list.return_value = []
+
+        url = platform.add_mr_labels("repoactive/a", ["repoactive:needs-rebase"])
+
+        assert url is None
+        project.mergerequests.create.assert_not_called()
 
     @staticmethod
     def _ready_mr() -> MagicMock:

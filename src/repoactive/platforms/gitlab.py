@@ -93,6 +93,22 @@ class GitLabPlatform(Platform):
             self._enable_auto_merge(mr)
         return web_url
 
+    def add_mr_labels(self, source_branch: str, labels: list[str]) -> str | None:
+        existing = self._project.mergerequests.list(
+            source_branch=source_branch,
+            state="opened",
+            iterator=False,
+        )
+        if not existing:
+            return None
+        mr = existing[0]
+        current = list(mr.labels)
+        merged = current + [label for label in labels if label not in current]
+        if merged != current:
+            mr.labels = merged
+            mr.save()
+        return mr.web_url
+
     def _enable_auto_merge(self, mr: ProjectMergeRequest) -> None:
         """Enable auto-merge on ``mr``, retrying until it is accepted.
 

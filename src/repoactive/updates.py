@@ -16,6 +16,11 @@ from dataclasses import dataclass
 
 from pydantic import BaseModel, Field
 
+# Applied to a frozen branch's open MR so the human sees it needs attention
+# (ADR 0019). Added to the MR without touching the rest of it; a clean rebuild
+# later replaces the MR's labels via ensure_mr and drops it again.
+NEEDS_REBASE_LABEL = "repoactive:needs-rebase"
+
 
 class BookmarkPush(BaseModel):
     """A bookmark to push to the remote.
@@ -51,17 +56,35 @@ class MRUpdate(BaseModel):
     depends_on: list[str] = Field(default_factory=list)
 
 
+class MRLabelUpdate(BaseModel):
+    """Add labels to an already-open MR without creating or otherwise changing it.
+
+    A frozen branch (ADR 0019) is not pushed and its MR's content is left
+    untouched, but the ``repoactive:needs-rebase`` label is added to the open MR
+    if there is one, so the signal reaches the human where they are looking. A
+    no-op when no MR is open. Labels are added to whatever the MR already
+    carries, never replacing them, and re-adding one already present is a no-op.
+    """
+
+    source_branch: str
+    add_labels: list[str]
+
+
 class JobUpdate(BaseModel):
     """One job's pending remote operations.
 
     ``title`` is the job's bare title (no prefix); it is the label used when this
     job appears as a dependency link in a dependent's MR description.
+
+    ``label_only`` is set instead of ``push``/``mr`` for a frozen branch: nothing
+    is pushed and the MR is not recreated, only labelled.
     """
 
     job_name: str
     title: str
     push: BookmarkPush | None = None
     mr: MRUpdate | None = None
+    label_only: MRLabelUpdate | None = None
 
 
 class UpdatePlan(BaseModel):

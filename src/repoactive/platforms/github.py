@@ -83,3 +83,20 @@ class GitHubPlatform(Platform):
             except GithubException as e:
                 print(f"  warning: could not enable auto-merge ({e})")
         return pr.html_url
+
+    def add_mr_labels(self, source_branch: str, labels: list[str]) -> str | None:
+        owner = self._repo.owner.login
+        existing = list(
+            self._repo.get_pulls(
+                state="open",
+                head=f"{owner}:{source_branch}",
+            )
+        )
+        if not existing:
+            return None
+        pr = existing[0]
+        # add_to_labels is additive and idempotent on GitHub, so it preserves the
+        # PR's existing labels and re-adding one already present is a no-op.
+        if labels:
+            pr.add_to_labels(*labels)
+        return pr.html_url

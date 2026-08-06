@@ -38,6 +38,15 @@ class Platform(ABC):
     def ensure_mr(self, params: MRParams) -> str:
         """Create or update an MR/PR. Returns the MR/PR URL."""
 
+    @abstractmethod
+    def add_mr_labels(self, source_branch: str, labels: list[str]) -> str | None:
+        """Add ``labels`` to the open MR/PR for ``source_branch``, preserving its existing labels.
+
+        Never creates an MR/PR: returns the MR/PR URL if one is open, or ``None``
+        if none is. Adding a label the MR/PR already carries is a no-op. Used to
+        signal a frozen branch (ADR 0019) without touching the rest of the MR.
+        """
+
 
 def parse_repo_from_url(url: str) -> str:
     """Extract 'namespace/repo' from an HTTPS or SSH git remote URL."""

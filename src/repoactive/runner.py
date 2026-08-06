@@ -38,8 +38,10 @@ from repoactive.settings import load_settings
 from repoactive.trailers import strip_trailers
 from repoactive.ui import print_status, print_undo_hint
 from repoactive.updates import (
+    NEEDS_REBASE_LABEL,
     BookmarkPush,
     JobUpdate,
+    MRLabelUpdate,
     MRLink,
     MRUpdate,
     UpdatePlan,
@@ -1300,10 +1302,26 @@ def _record_job_plan(ctx: RunContext, job: Job) -> None:
     )
 
     # A frozen branch pushes nothing: the bookmark stays at its last clean state
-    # and any open MR is left exactly as it was (ADR 0019). This is distinct from
-    # the no-diff path below, which retires the bookmark.
+    # and the MR's content is left exactly as it was (ADR 0019). This is distinct
+    # from the no-diff path below, which retires the bookmark. The only remote
+    # change is the repoactive:needs-rebase label added to an already-open MR so
+    # the human sees the branch needs attention; a job that never opens MRs has
+    # nothing to label.
     if result.frozen:
-        logger.debug("plan: [%s] frozen, leaving bookmark and MR untouched", job.name)
+        if result.job.create_mr is CreateMR.never:
+            logger.debug("plan: [%s] frozen, no MR to label", job.name)
+            return
+        logger.debug("plan: [%s] frozen, labelling MR needs-rebase", job.name)
+        plan.updates.append(
+            JobUpdate(
+                job_name=job.name,
+                title=result.job.title,
+                label_only=MRLabelUpdate(
+                    source_branch=bookmark,
+                    add_labels=[NEEDS_REBASE_LABEL],
+                ),
+            )
+        )
         return
 
     if not result.produced_diff:
@@ -1566,15 +1584,12 @@ def _apply_plan_publish(
     result = ApplyResult()
 
     pending = [
-        u for u in plan.updates if not (u.push is not None and u.push.delete) and u.mr is not None
+        u
+        for u in plan.updates
+        if not (u.push is not None and u.push.delete)
+        and (u.mr is not None or u.label_only is not None)
     ]
     for i, update in enumerate(pending):
-        assert update.mr is not None  # filtered above
-        dependency_links = [
-            MRLink(title=titles[dep], url=result.mr_urls[dep])
-            for dep in update.mr.depends_on
-            if dep in result.mr_urls
-        ]
         # Fail fast: a failing platform call usually means something is wrong
         # (expired token, rate limit), so the remaining MRs are not attempted
         # rather than hammered against the same failure. Nothing is lost - the
@@ -1582,6 +1597,25 @@ def _apply_plan_publish(
         # run re-attempts every MR. The failure is recorded per job and
         # surfaces in the run summary.
         try:
+            if update.label_only is not None:
+                # Frozen branch (ADR 0019): only label the already-open MR, if
+                # any. A no-op returning None when no MR is open - nothing was
+                # ever pushed, so there is nothing to signal on.
+                url = platform.add_mr_labels(
+                    update.label_only.source_branch, update.label_only.add_labels
+                )
+                if url is None:
+                    continue
+                result.mr_urls[update.job_name] = url
+                print_status(update.job_name, ("needs-rebase", "yellow"), f" {url}")
+                continue
+
+            assert update.mr is not None  # filtered above
+            dependency_links = [
+                MRLink(title=titles[dep], url=result.mr_urls[dep])
+                for dep in update.mr.depends_on
+                if dep in result.mr_urls
+            ]
             params = MRParams(
                 source_branch=update.mr.source_branch,
                 target_branch=update.mr.target_branch or platform.default_branch(),
