@@ -202,6 +202,21 @@ class TestGitHubEnsureMR:
         repo.create_pull.return_value.set_labels.assert_not_called()
 
     @patch("repoactive.platforms.github.Github")
+    def test_ensure_mr_clears_needs_rebase_label_on_rebuild(self, mock_github: MagicMock) -> None:
+        # A clean rebuild replaces the PR's label set with the job's labels
+        # (ADR 0019 "cleared once a later run rebuilds the branch cleanly"): the
+        # repoactive:needs-rebase label a freeze added is dropped because it is
+        # not in the requested set.
+        platform, repo = self._platform(mock_github)
+        pr = MagicMock()
+        pr.html_url = "https://example.com/pull/1"
+        repo.get_pulls.return_value = [pr]
+
+        platform.ensure_mr(_mr_params(labels=["auto"]))
+
+        pr.set_labels.assert_called_once_with("auto")
+
+    @patch("repoactive.platforms.github.Github")
     def test_add_mr_labels_adds_to_existing_pr(self, mock_github: MagicMock) -> None:
         platform, repo = self._platform(mock_github)
         pr = MagicMock()
@@ -343,6 +358,21 @@ class TestGitLabEnsureMR:
             }
         )
         assert url == "https://example.com/mr/2"
+
+    @patch("repoactive.platforms.gitlab.gitlab")
+    def test_ensure_mr_clears_needs_rebase_label_on_rebuild(self, mock_gitlab: MagicMock) -> None:
+        # A clean rebuild replaces the MR's label set with the job's labels
+        # (ADR 0019 "cleared once a later run rebuilds the branch cleanly"): a
+        # repoactive:needs-rebase label left by an earlier freeze is dropped.
+        platform, project = self._platform(mock_gitlab)
+        mr = MagicMock()
+        mr.labels = ["auto", "repoactive:needs-rebase"]
+        project.mergerequests.list.return_value = [mr]
+
+        platform.ensure_mr(_mr_params(labels=["auto"]))
+
+        assert mr.labels == ["auto"]
+        mr.save.assert_called_once_with()
 
     @patch("repoactive.platforms.gitlab.gitlab")
     def test_add_mr_labels_unions_with_existing(self, mock_gitlab: MagicMock) -> None:
