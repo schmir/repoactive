@@ -205,7 +205,10 @@ class TestRunOneJob:
         job_a = config.jobs[0]
         summary = RunSummary()
         with (
-            patch("repoactive.runner._on_cooldown", return_value=datetime(2026, 1, 1, tzinfo=UTC)),
+            patch(
+                "repoactive.runner._last_run_if_on_cooldown",
+                return_value=datetime(2026, 1, 1, tzinfo=UTC),
+            ),
             patch("repoactive.runner.run_job") as mock_run_job,
         ):
             _dispatch_job(
@@ -232,7 +235,7 @@ class TestRunOneJob:
         summary = RunSummary()
         with (
             patch(
-                "repoactive.runner._on_cooldown",
+                "repoactive.runner._last_run_if_on_cooldown",
                 return_value=datetime(2026, 1, 1, tzinfo=UTC),
             ),
             patch("repoactive.runner.run_job", return_value=result) as mock_run_job,
@@ -252,13 +255,13 @@ class TestRunOneJob:
 
     def test_explicit_name_bypasses_cooldown(self) -> None:
         # A job named on the command line runs now regardless of its cooldown:
-        # naming it is a request to run it, so _on_cooldown is never consulted.
+        # naming it is a request to run it, so _last_run_if_on_cooldown is never consulted.
         config = _config(_job("a"))
         job_a = config.jobs[0]
         result = JobResult(job=job_a, effective_revsets=["repoactive/a"], produced_diff=True)
         summary = RunSummary()
         with (
-            patch("repoactive.runner._on_cooldown") as mock_cooldown,
+            patch("repoactive.runner._last_run_if_on_cooldown") as mock_cooldown,
             patch("repoactive.runner.run_job", return_value=result) as mock_run_job,
         ):
             _dispatch_job(
@@ -334,7 +337,7 @@ class TestRunOneJob:
         )
         with (
             patch(
-                "repoactive.runner._on_cooldown",
+                "repoactive.runner._last_run_if_on_cooldown",
                 return_value=datetime(2026, 1, 1, tzinfo=UTC),
             ) as mock_cooldown,
             patch("repoactive.runner.run_job", return_value=result_b) as mock_run_job,
@@ -399,7 +402,7 @@ class TestRunOneJob:
         result = JobResult(job=job_a, effective_revsets=["repoactive/a"], produced_diff=True)
         summary = RunSummary()
         with (
-            patch("repoactive.runner._on_cooldown", return_value=False),
+            patch("repoactive.runner._last_run_if_on_cooldown", return_value=False),
             patch("repoactive.runner.run_job", return_value=result) as mock_run_job,
         ):
             _dispatch_job(
@@ -419,7 +422,7 @@ class TestRunOneJob:
         err = CommandError("boom", elapsed=1.5)
         summary = RunSummary()
         with (
-            patch("repoactive.runner._on_cooldown", return_value=False),
+            patch("repoactive.runner._last_run_if_on_cooldown", return_value=False),
             patch("repoactive.runner.run_job", side_effect=err),
         ):
             _dispatch_job(
@@ -439,7 +442,7 @@ class TestRunOneJob:
         err = RuntimeError("kaboom")
         summary = RunSummary()
         with (
-            patch("repoactive.runner._on_cooldown", return_value=False),
+            patch("repoactive.runner._last_run_if_on_cooldown", return_value=False),
             patch("repoactive.runner.run_job", side_effect=err),
         ):
             _dispatch_job(
@@ -481,7 +484,7 @@ class TestRunOneJob:
             job=job_a, effective_revsets=["repoactive/a"], produced_diff=True
         )
         with (
-            patch("repoactive.runner._on_cooldown", return_value=False),
+            patch("repoactive.runner._last_run_if_on_cooldown", return_value=False),
             patch("repoactive.runner.run_job", return_value=result_b) as mock_run_job,
         ):
             _dispatch_job(
@@ -536,7 +539,7 @@ class TestRunOneJob:
             job=job_a, effective_revsets=["trunk()"], produced_diff=False
         )
         with (
-            patch("repoactive.runner._on_cooldown", return_value=False),
+            patch("repoactive.runner._last_run_if_on_cooldown", return_value=False),
             patch("repoactive.runner.run_job", return_value=result_b) as mock_run_job,
         ):
             _dispatch_job(

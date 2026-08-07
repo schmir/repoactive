@@ -960,7 +960,7 @@ def _format_duration(seconds: float) -> str:
     return f"{seconds}s"
 
 
-def _on_cooldown(job: Job, repo_path: Path) -> datetime | None:
+def _last_run_if_on_cooldown(job: Job, repo_path: Path) -> datetime | None:
     """Return the last-run timestamp if the job is still on cooldown, else None."""
     delta = job.cooldown_timedelta()
     if delta is None:
@@ -1165,7 +1165,7 @@ def _dispatch_cooldown_gate(
         job.name in selection.refreshed
         or job.name in selection.successors
         or job.name in selection.explicit
-        or not (last_run := _on_cooldown(job, ctx.repo_path))
+        or not (last_run := _last_run_if_on_cooldown(job, ctx.repo_path))
     ):
         return None
     elapsed = datetime.now(UTC) - last_run
