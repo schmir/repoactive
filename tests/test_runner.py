@@ -351,9 +351,9 @@ class TestRunOneJob:
         mock_cooldown.assert_not_called()
 
     def test_successor_runs_when_dependency_ran_without_diff(self) -> None:
-        # a ran and found nothing — its bookmark will be deleted when its plan
-        # is recorded, so b must still rebuild (on trunk) rather than stay stacked on
-        # a's old, soon-to-be-orphaned commit.
+        # a ran and found nothing — its bookmark is retired, so b must still
+        # rebuild (on trunk) rather than stay stacked on a's old,
+        # soon-to-be-orphaned commit.
         job_a = _job("a")
         job_b = _job("b", depends_on=["a"])
         config = _config(job_a, job_b)
@@ -1350,12 +1350,13 @@ class TestRunJob:
 
     @patch("repoactive.runner.JJ")
     @patch("repoactive.runner.subprocess.Popen")
-    def test_no_output_existing_bookmark_not_deleted_during_run(
+    def test_no_output_existing_bookmark_deleted_during_run(
         self, mock_sub: MagicMock, mock_jj_cls: MagicMock
     ) -> None:
-        # When an existing bookmark's job produces no diff, run_job does NOT
-        # delete the bookmark — _record_job_plan does. The detected branch shape
-        # is recorded so it knows a bookmark exists to delete.
+        # When an existing bookmark's job produces no diff, run_job deletes the
+        # local bookmark right after the command runs; _record_job_plan later
+        # schedules the matching remote delete push. The detected branch shape is
+        # recorded so the plan step knows a bookmark existed.
         mock_jj = _mock_jj(mock_jj_cls)
         _mock_popen(mock_sub)
         mock_jj.bookmark_change_id.return_value = "old-change-id"
@@ -1363,10 +1364,10 @@ class TestRunJob:
 
         result = run_job(_ctx(), job=_job("foo"), parents=["trunk()"])
 
-        # The empty command commit is abandoned, but the bookmark itself is left
-        # for _record_job_plan to delete.
+        # The empty command commit is abandoned and its bookmark deleted here,
+        # not deferred to the plan step.
         mock_jj.abandon.assert_called_once_with()
-        mock_jj.bookmark_delete.assert_not_called()
+        mock_jj.bookmark_delete.assert_called_once_with("repoactive/foo")
         mock_jj.bookmark_set.assert_not_called()
         mock_jj.git_push_bookmarks.assert_not_called()
         assert result.produced_diff is False

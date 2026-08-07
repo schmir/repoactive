@@ -618,6 +618,20 @@ def _run_job_frozen(
     )
 
 
+def _delete_local_bookmark(
+    repo: JJ, job: Job, prerun_branch_shape: human_commits.BranchShape
+) -> None:
+    """Delete the branch's local bookmark after a no-diff run, if it existed.
+
+    A fresh no-diff job never had a bookmark, so there is nothing to delete.
+    run_job calls this in its temp workspace right after the command runs; the
+    deletion persists to the shared repo, and _record_deleted_bookmark then
+    schedules the matching remote-delete push (ADR 0020).
+    """
+    if _bookmark_change_id(prerun_branch_shape) is not None:
+        repo.bookmark_delete(job.branch_name())
+
+
 def _run_job_build_result(  # noqa: PLR0913
     *,
     repo: JJ,
@@ -637,6 +651,7 @@ def _run_job_build_result(  # noqa: PLR0913
     match prerun_branch_shape:
         case human_commits.NoBranch() | human_commits.AlreadyMerged() if commit_empty:
             print_status(job.name, ("no changes", "dim"), f" ({elapsed})")
+            _delete_local_bookmark(repo, job, prerun_branch_shape)
             repo.abandon()
             return JobResult(
                 job=job,
@@ -670,16 +685,15 @@ def _run_job_build_result(  # noqa: PLR0913
 
         case human_commits.NormalLayers() if commit_empty and not prerun_branch_shape.has_human:
             # No diff and no human commits to anchor: abandon the empty command
-            # commit and report no-diff. Its bookmark is deleted by the plan step,
-            # which also records the remote deletion. A branch that *does* carry
+            # commit and delete its bookmark, then report no-diff. The plan step
+            # records the matching remote deletion. A branch that *does* carry
             # human commits (prerequisites or fixups) keeps its empty command
             # commit instead: abandoning it would restructure the branch,
             # turning fixups into prerequisites on the next run, so it falls
             # through to the NormalLayers arm below.
+            _delete_local_bookmark(repo, job, prerun_branch_shape)
             repo.abandon()
-            print_status(
-                job.name, ("no changes", "dim"), f", bookmark will be deleted ({elapsed})"
-            )
+            print_status(job.name, ("no changes", "dim"), f", bookmark deleted ({elapsed})")
             return JobResult(
                 job=job,
                 effective_revsets=parents,
@@ -1235,16 +1249,16 @@ def _run_generator_job(ctx: RunContext, *, job: Job, parents: list[str]) -> JobR
 
 
 def _record_deleted_bookmark(result: JobResult, *, repo: JJ, plan: UpdatePlan) -> None:
-    """Delete the local bookmark (if present) and schedule a remote delete push.
+    """Schedule a remote delete push for a bookmark run_job retired.
 
-    Schedules the push when either the local bookmark was just deleted, or the
-    remote still has it from a previous push (e.g. after a -mlocal run that
-    deleted the local bookmark without applying the plan).
+    run_job already deleted the local bookmark after the command produced no
+    diff (see _delete_local_bookmark). Schedule the push when either the
+    bookmark existed before this run, or the remote still has it from a previous
+    push (e.g. after a -mlocal run that deleted the local bookmark without
+    applying the plan).
     """
     bookmark = result.job.branch_name()
     bookmark_existed_prerun = _bookmark_change_id(result.prerun_branch_shape) is not None
-    if bookmark_existed_prerun:
-        repo.bookmark_delete(bookmark)
     if bookmark_existed_prerun or repo.remote_bookmark_exists(bookmark):
         plan.updates.append(
             JobUpdate(
