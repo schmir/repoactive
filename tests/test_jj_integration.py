@@ -2,6 +2,7 @@
 
 import shutil
 import subprocess
+import tempfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -1103,6 +1104,33 @@ class TestTempWorkspace:
         self._commit(repo, "a.txt", "initial")
         with repo.temp_workspace(f"{WORKSPACE_PREFIX}myjob"):
             assert f"{WORKSPACE_PREFIX}myjob" in repo.workspace_names()
+
+    def test_removes_temp_dir_when_setup_fails(
+        self, repo: JJ, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # If workspace setup raises part-way through, the temp directory created
+        # for it must not leak under $TMPDIR.
+        self._commit(repo, "a.txt", "initial")
+
+        created: list[Path] = []
+        real_mkdtemp = tempfile.mkdtemp
+
+        def _record_mkdtemp(prefix: str | None = None) -> str:
+            path = real_mkdtemp(prefix=prefix)
+            created.append(Path(path))
+            return path
+
+        def _fail_workspace_add(*args: object, **kwargs: object) -> None:
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(tempfile, "mkdtemp", _record_mkdtemp)
+        monkeypatch.setattr(JJ, "_workspace_add", _fail_workspace_add)
+
+        with pytest.raises(RuntimeError, match="boom"), repo.temp_workspace("ws"):
+            pass
+
+        assert created, "temp_workspace did not create a temp directory"
+        assert not created[0].exists()
 
 
 class TestWorkspaceColocation:

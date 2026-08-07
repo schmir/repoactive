@@ -702,14 +702,11 @@ class JJ:
         during cleanup are suppressed so they cannot mask the body's outcome.
         """
         tmp_root = Path(tempfile.mkdtemp(prefix="repoactive-workspace-"))
-        workspace_path = tmp_root / "workspace"
-        logger.debug("adding workspace %s at %s", name, workspace_path)
-        # A previous job's in-place rewrite (ADR 0020) may have left this (the
-        # default) workspace stale; jj refuses `workspace add` while it is, so
-        # reconcile it first. No-op when nothing staled it.
-        self.update_stale_working_copy()
-        self._workspace_add(name, workspace_path, colocation)
         try:
+            workspace_path = tmp_root / "workspace"
+            logger.debug("adding workspace %s at %s", name, workspace_path)
+            self.update_stale_working_copy()
+            self._workspace_add(name, workspace_path, colocation)
             yield JJ(workspace_path)
         finally:
             logger.debug("cleaning up workspace %s", name)
