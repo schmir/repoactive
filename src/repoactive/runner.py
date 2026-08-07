@@ -165,11 +165,8 @@ class JobResult:
     # touches this (ADR 0020).
     effective_revsets: list[str]
     produced_diff: bool
-    # Branch-shape classification from human_commits.classify_branch() (ADR 0019), taken at
-    # the start of run_job before the fresh commit is created. None for a
-    # JobResult recorded without running (cooldown/successor/run_only_if_changed
-    # skips, generator no-ops) — see _old_change_id.
-    shape: human_commits.BranchShape | None = None
+    # human_commits.classify_branch() result (ADR 0019); None when recorded without running.
+    prerun_branch_shape: human_commits.BranchShape | None = None
     # Filled in by the apply phase once the MR has been created.
     mr_url: str | None = None
     command_output: str = ""
@@ -494,7 +491,8 @@ def _old_change_id(shape: human_commits.BranchShape | None) -> str | None:
     """Return the pre-existing bookmark's change-id from a classify_branch() result.
 
     None when ``shape`` is None (a JobResult recorded without running, see
-    JobResult.shape) or NoBranch (a new job, no pre-existing bookmark). Otherwise
+    JobResult.prerun_branch_shape) or NoBranch (a new job, no pre-existing
+    bookmark). Otherwise
     the bookmark tip, even for AlreadyMerged: that bookmark still exists and needs
     deleting, it just has nothing worth restoring/rebasing.
 
@@ -627,7 +625,7 @@ def _run_job_frozen(
         effective_revsets=[frozen_tip] if frozen_tip else parents,
         produced_diff=False,
         frozen=True,
-        shape=shape,
+        prerun_branch_shape=shape,
     )
 
 
@@ -655,7 +653,7 @@ def _run_job_build_result(  # noqa: PLR0913
                 job=job,
                 effective_revsets=parents,
                 produced_diff=False,
-                shape=shape,
+                prerun_branch_shape=shape,
                 command_output=command_result.output,
             )
         case (
@@ -677,7 +675,7 @@ def _run_job_build_result(  # noqa: PLR0913
                 job=job,
                 effective_revsets=[new_change_id],
                 produced_diff=True,
-                shape=shape,
+                prerun_branch_shape=shape,
                 command_output=command_result.output,
             )
 
@@ -697,7 +695,7 @@ def _run_job_build_result(  # noqa: PLR0913
                 job=job,
                 effective_revsets=parents,
                 produced_diff=False,
-                shape=shape,
+                prerun_branch_shape=shape,
                 command_output=command_result.output,
             )
         case human_commits.NormalLayers():
@@ -731,7 +729,7 @@ def _run_job_build_result(  # noqa: PLR0913
                     job=job,
                     effective_revsets=[tip],
                     produced_diff=True,
-                    shape=shape,
+                    prerun_branch_shape=shape,
                     command_output=command_result.output,
                 )
 
@@ -748,7 +746,7 @@ def _run_job_build_result(  # noqa: PLR0913
                 job=job,
                 effective_revsets=[tip],
                 produced_diff=True,
-                shape=shape,
+                prerun_branch_shape=shape,
                 command_output=command_result.output,
             )
         case _:
@@ -1256,7 +1254,7 @@ def _record_deleted_bookmark(
     remote still has it from a previous push (e.g. after a -mlocal run that
     deleted the local bookmark without applying the plan).
     """
-    old_change_id = _old_change_id(result.shape)
+    old_change_id = _old_change_id(result.prerun_branch_shape)
     if old_change_id:
         repo.bookmark_delete(bookmark)
     if old_change_id or repo.remote_bookmark_exists(bookmark):
@@ -1291,10 +1289,10 @@ def _record_job_plan(ctx: RunContext, job: Job) -> None:
 
     bookmark = result.job.branch_name()
     logger.debug(
-        "plan: [%s] produced_diff=%s shape=%s",
+        "plan: [%s] produced_diff=%s prerun_branch_shape=%s",
         job.name,
         result.produced_diff,
-        result.shape,
+        result.prerun_branch_shape,
     )
 
     # A frozen branch pushes nothing: the bookmark stays at its last clean state

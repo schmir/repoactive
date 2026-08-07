@@ -1371,7 +1371,7 @@ class TestRunJob:
         mock_jj.git_push_bookmarks.assert_not_called()
         assert result.produced_diff is False
         assert result.effective_revsets == ["trunk()"]
-        assert _old_change_id(result.shape) == "old-change-id"
+        assert _old_change_id(result.prerun_branch_shape) == "old-change-id"
 
     @patch("repoactive.runner.JJ")
     @patch("repoactive.runner.subprocess.Popen")
@@ -1468,7 +1468,7 @@ class TestRunJob:
             effective_revsets=["old-change-id"],
             produced_diff=False,
             frozen=True,
-            shape=human_commits.AlreadyMerged(bookmark_change_id="old-change-id"),
+            prerun_branch_shape=human_commits.AlreadyMerged(bookmark_change_id="old-change-id"),
         )
         repo = MagicMock(spec=JJ)
         ctx = _ctx(summary=summary, repo=repo)
@@ -1496,7 +1496,7 @@ class TestRunJob:
             effective_revsets=["old-change-id"],
             produced_diff=False,
             frozen=True,
-            shape=human_commits.AlreadyMerged(bookmark_change_id="old-change-id"),
+            prerun_branch_shape=human_commits.AlreadyMerged(bookmark_change_id="old-change-id"),
         )
         ctx = _ctx(summary=summary, repo=MagicMock(spec=JJ))
 
@@ -1705,7 +1705,7 @@ class TestRunJob:
         mock_jj.new.assert_called_once_with("heads(trunk())")
         mock_jj.rebase.assert_not_called()
         mock_jj.bookmark_set.assert_called_once_with("repoactive/foo", "@")
-        assert _old_change_id(result.shape) == "old-change-id"
+        assert _old_change_id(result.prerun_branch_shape) == "old-change-id"
 
     @patch("repoactive.runner.JJ")
     @patch("repoactive.runner.subprocess.Popen")
