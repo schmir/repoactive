@@ -165,8 +165,6 @@ class JobResult:
     # touches this (ADR 0020).
     effective_revsets: list[str]
     produced_diff: bool
-    # change-id of the fresh commit created when the job ran (None when no diff).
-    new_change_id: str | None = None
     # Branch-shape classification from human_commits.classify_branch() (ADR 0019), taken at
     # the start of run_job before the fresh commit is created. None for a
     # JobResult recorded without running (cooldown/successor/run_only_if_changed
@@ -659,13 +657,13 @@ def _run_job_build_result(  # noqa: PLR0913
                 produced_diff=False,
                 shape=shape,
                 command_output=command_result.output,
-                new_change_id=None,
             )
         case (
             human_commits.NoBranch()
             | human_commits.AlreadyMerged()
             | human_commits.AllPrerequisites()
         ):
+            repo.bookmark_set(job.branch_name(), "@")
             new_change_id = repo.change_id(revision="@")
             print_status(
                 job.name,
@@ -681,7 +679,6 @@ def _run_job_build_result(  # noqa: PLR0913
                 produced_diff=True,
                 shape=shape,
                 command_output=command_result.output,
-                new_change_id=new_change_id,
             )
 
         case human_commits.NormalLayers() if commit_empty and not shape.has_human:
@@ -734,7 +731,6 @@ def _run_job_build_result(  # noqa: PLR0913
                     job=job,
                     effective_revsets=[tip],
                     produced_diff=True,
-                    new_change_id=None,
                     shape=shape,
                     command_output=command_result.output,
                 )
@@ -752,7 +748,6 @@ def _run_job_build_result(  # noqa: PLR0913
                 job=job,
                 effective_revsets=[tip],
                 produced_diff=True,
-                new_change_id=None,
                 shape=shape,
                 command_output=command_result.output,
             )
@@ -1278,14 +1273,11 @@ def _record_job_plan(ctx: RunContext, job: Job) -> None:
     """Finalize a job's bookmark and record its push/MR in ``ctx.plan`` (ADR 0020).
 
     ``run_job`` already rewrote the command commit in place (or wrote a fresh
-    commit) and left ``result.effective_revsets`` at the branch tip, so there is
-    nothing left to fold in here. This only:
+    commit and pointed the bookmark at it) and left ``result.effective_revsets``
+    at the branch tip, so the bookmark is already positioned. This only:
     - No diff produced: deletes the old bookmark if the command ran and found
       nothing (cooldown/successor/gated skips are left untouched) and records a
       remote deletion.
-    - Diff produced from a fresh commit (new job or merged branch): sets the
-      bookmark on that commit. An in-place rewrite needs no set; its bookmark
-      tip already followed the preserved change-id.
     - Diff produced: appends the bookmark push and MR descriptor.
     """
     summary = ctx.summary
@@ -1299,10 +1291,9 @@ def _record_job_plan(ctx: RunContext, job: Job) -> None:
 
     bookmark = result.job.branch_name()
     logger.debug(
-        "plan: [%s] produced_diff=%s new=%s shape=%s",
+        "plan: [%s] produced_diff=%s shape=%s",
         job.name,
         result.produced_diff,
-        result.new_change_id,
         result.shape,
     )
 
@@ -1335,11 +1326,6 @@ def _record_job_plan(ctx: RunContext, job: Job) -> None:
         ):
             _record_deleted_bookmark(job, result, bookmark, repo=repo, plan=plan)
         return
-
-    # A fresh commit (new job / merged branch) needs its bookmark pointed at it;
-    # an in-place rewrite (new_change_id is None) already carries the bookmark.
-    if result.new_change_id is not None:
-        repo.bookmark_set(bookmark, result.new_change_id)
 
     mr: MRUpdate | None = None
     if result.job.create_mr is not CreateMR.never:

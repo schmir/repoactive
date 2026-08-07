@@ -111,7 +111,6 @@ def _result(job: Job, *, revsets: list[str], produced: bool = True) -> JobResult
         job=job,
         effective_revsets=revsets,
         produced_diff=produced,
-        new_change_id="new-cid" if produced else None,
     )
 
 
@@ -1213,16 +1212,15 @@ class TestRunJob:
 
         result = run_job(_ctx(), job=job, parents=["trunk()"])
 
-        # run_job uses new() for a fresh commit; bookmark_set is done in _record_job_plan.
+        # run_job uses new() for a fresh commit and points the bookmark at it.
         mock_jj.new.assert_called_once_with("heads(trunk())")
-        mock_jj.bookmark_set.assert_not_called()
+        mock_jj.bookmark_set.assert_called_once_with("repoactive/foo", "@")
         mock_jj.describe.assert_called_once_with("Change foo\n\nRepoactive-Job: foo")
         mock_jj.git_push_bookmarks.assert_not_called()
         mock_jj.abandon.assert_not_called()
         assert result.produced_diff is True
         # Dependents use the new change-id directly as their parent revset.
         assert result.effective_revsets == [mock_jj.change_id.return_value]
-        assert result.new_change_id == mock_jj.change_id.return_value
 
     @patch("repoactive.runner._run_command", return_value=CommandResult(output="", elapsed=0.0))
     @patch("repoactive.runner.JJ")
@@ -1694,8 +1692,9 @@ class TestRunJob:
     def test_always_uses_new_regardless_of_existing_bookmark(
         self, mock_sub: MagicMock, mock_jj_cls: MagicMock
     ) -> None:
-        # Phase 1 always creates a fresh commit. Old bookmarks are untouched
-        # so a failed command cannot destroy them.
+        # Phase 1 always creates a fresh commit; the old bookmark is never
+        # rebased onto, so a failed command cannot destroy it. Only after the
+        # command succeeds is the bookmark repointed at the fresh commit.
         mock_jj = _mock_jj(mock_jj_cls)
         _mock_popen(mock_sub)
         mock_jj.bookmark_change_id.return_value = "old-change-id"
@@ -1705,7 +1704,7 @@ class TestRunJob:
 
         mock_jj.new.assert_called_once_with("heads(trunk())")
         mock_jj.rebase.assert_not_called()
-        mock_jj.bookmark_set.assert_not_called()
+        mock_jj.bookmark_set.assert_called_once_with("repoactive/foo", "@")
         assert _old_change_id(result.shape) == "old-change-id"
 
     @patch("repoactive.runner.JJ")
@@ -2418,7 +2417,7 @@ class TestRunAll:
             config=_config(a), repo_path=REPO, platform=platform, mode=RunMode.publish
         )
 
-        # _record_job_plan sets the bookmark and builds the plan; apply pushes it.
+        # run_job sets the bookmark, _record_job_plan builds the plan, apply pushes it.
         mock_jj.return_value.git_push_bookmarks.assert_called_once_with("repoactive/a")
         platform.ensure_mr.assert_called_once()
         # The MR URL is written back into the summary by the apply phase.
