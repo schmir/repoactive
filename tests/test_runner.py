@@ -909,6 +909,24 @@ class TestRunCommand:
 
         assert result.output == "�"  # U+FFFD REPLACEMENT CHARACTER
 
+    def test_stdin_reading_command_fails_fast_at_eof(self, tmp_path: Path) -> None:
+        # stdin is detached (subprocess.DEVNULL), so a command that reads it gets
+        # EOF immediately and fails fast instead of blocking on the inherited
+        # terminal and burning the whole timeout window.
+        job = Job(
+            name="foo",
+            command="read line; echo got=[$line]",
+            title="t",
+            timeout="30s",
+            branch_prefix="repoactive/",
+            commit_title_prefix="",
+        )
+        # A timeout would raise CommandError; reaching here means it did not hang.
+        result = _run_command(job, tmp_path)
+
+        # `read` hits EOF immediately, so $line is empty in the echo that follows.
+        assert result.output.strip() == "got=[]"
+
     def test_secret_env_stripped_from_command(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

@@ -398,6 +398,8 @@ def _spawn(job: Job, cwd: Path, env: dict[str, str]) -> Generator[subprocess.Pop
         # runs the command as `<shell> -c <command>` (see Job.shell).
         executable=job.shell,
         cwd=cwd,
+        # Detach stdin so a command that reads it fails fast at EOF instead of hanging.
+        stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
