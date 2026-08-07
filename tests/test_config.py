@@ -275,6 +275,39 @@ class TestRunOnlyIfChangedValidation:
         assert cfg.jobs[1].run_only_if_changed == ["a"]
 
 
+class TestUniqueBranchNameValidation:
+    def test_distinct_bookmarks_accepted(self) -> None:
+        cfg = _config(jobs=[_job("a"), _job("b")])
+        assert {j.branch_name() for j in cfg._resolved_jobs()} == {
+            "repoactive/a",
+            "repoactive/b",
+        }
+
+    def test_colliding_prefix_and_name_rejected(self) -> None:
+        # a/ + b-c and a/b- + c both resolve to a/b-c
+        with pytest.raises(ValueError, match="both resolve to bookmark 'a/b-c'"):
+            _config(
+                jobs=[
+                    _job("b-c", branch_prefix="a/"),
+                    _job("c", branch_prefix="a/b-"),
+                ]
+            )
+
+    def test_bookmark_equal_to_other_jobs_base_branch_rejected(self) -> None:
+        with pytest.raises(ValueError, match="uses as its base_branch"):
+            _config(
+                jobs=[
+                    _job("shared"),  # bookmark: repoactive/shared
+                    _job("downstream", base_branch="repoactive/shared"),
+                ]
+            )
+
+    def test_bookmark_matching_own_base_branch_allowed(self) -> None:
+        # a revset-style base such as trunk() never collides with a bookmark name.
+        cfg = _config(jobs=[_job("a", base_branch="trunk()")])
+        assert cfg.jobs[0].base_branch == "trunk()"
+
+
 class TestCooldownOnValidation:
     def test_valid_cooldown_on(self) -> None:
         cfg = _config(

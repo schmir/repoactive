@@ -222,6 +222,36 @@ class DuplicatePlatformHostError(ValueError):
         )
 
 
+class DuplicateBranchNameError(ValueError):
+    """Raised when two jobs resolve to the same bookmark name.
+
+    A job's bookmark is ``branch_prefix + name``. Job names are unique, but
+    ``branch_prefix`` is per-job, so different (prefix, name) pairs can collide —
+    both jobs would then read, set, delete, and push the same bookmark and target
+    the same MR source branch, silently clobbering each other's result.
+    """
+
+    def __init__(self, branch: str, first_job: str, second_job: str) -> None:
+        super().__init__(
+            f"jobs {first_job!r} and {second_job!r} both resolve to bookmark {branch!r}; "
+            "job bookmark names (branch_prefix + name) must be unique"
+        )
+
+
+class BranchNameIsBaseBranchError(ValueError):
+    """Raised when a job's bookmark name is also another job's base_branch.
+
+    The job would push over the bookmark a second job builds on, so the second
+    job's base moves under it every run.
+    """
+
+    def __init__(self, branch: str, job: str, base_job: str) -> None:
+        super().__init__(
+            f"job {job!r} resolves to bookmark {branch!r}, which job {base_job!r} "
+            "uses as its base_branch; a job's bookmark must not be another job's base_branch"
+        )
+
+
 class ConfigError(Exception):
     """Wraps a parse or validation error with the config source it came from."""
 
@@ -563,6 +593,25 @@ class Config(BaseModel):
             if host in url_by_host:
                 raise DuplicatePlatformHostError(host, url_by_host[host], platform.url)
             url_by_host[host] = platform.url
+        return self
+
+    @model_validator(mode="after")
+    def validate_unique_branch_names(self) -> Config:
+        # A bookmark is branch_prefix + name; per-job prefixes let two distinct
+        # (prefix, name) pairs collide onto one bookmark, which both jobs would then
+        # clobber. Also reject a bookmark that doubles as another job's base_branch.
+        resolved = self._resolved_jobs()
+        job_by_branch: dict[str, str] = {}
+        for job in resolved:
+            branch = job.branch_name()
+            if branch in job_by_branch:
+                raise DuplicateBranchNameError(branch, job_by_branch[branch], job.name)
+            job_by_branch[branch] = job.name
+        for job in resolved:
+            if job.base_branch and job.base_branch in job_by_branch:
+                raise BranchNameIsBaseBranchError(
+                    job.base_branch, job_by_branch[job.base_branch], job.name
+                )
         return self
 
     @model_validator(mode="after")
