@@ -487,24 +487,13 @@ def _run_command(
     return command_result
 
 
-def _old_change_id(shape: human_commits.BranchShape | None) -> str | None:
-    """Return the pre-existing bookmark's change-id from a classify_branch() result.
-
-    None when ``shape`` is None (a JobResult recorded without running, see
-    JobResult.prerun_branch_shape) or NoBranch (a new job, no pre-existing
-    bookmark). Otherwise
-    the bookmark tip, even for AlreadyMerged: that bookmark still exists and needs
-    deleting, it just has nothing worth restoring/rebasing.
-
-    This is the branch *tip*, and the canonical id run_job records in
-    effective_revsets: "b" depends on "a"'s actual branch, fixups included, so
-    it forks from here, distinct from the *content* anchor used to
-    restore/rebase the command commit itself (``NormalLayers.job_commit``,
-    see _run_job_prepare_command_commit), which is not always the same commit.
-    """
-    if shape is None or isinstance(shape, human_commits.NoBranch):
-        return None
-    return shape.bookmark_change_id
+def _bookmark_change_id(shape: human_commits.BranchShape | None) -> str | None:
+    """Return the bookmark's change-id from a classify_branch() result."""
+    match shape:
+        case None | human_commits.NoBranch():
+            return None
+        case _:
+            return shape.bookmark_change_id
 
 
 def _strip_boxquote_and_trailers(message: str) -> str:
@@ -594,7 +583,7 @@ def _run_job_frozen(
     *,
     job: Job,
     parents: list[str],
-    shape: human_commits.BranchShape,
+    prerun_branch_shape: human_commits.BranchShape,
     detail: str,
 ) -> JobResult:
     """Freeze the branch: push nothing and leave the conflict for a human (ADR 0019).
@@ -618,14 +607,14 @@ def _run_job_frozen(
     resolve it. ``effective_revsets`` stays at the branch's change-id (or the
     run's parents for a branch that does not exist yet).
     """
-    frozen_tip = _old_change_id(shape)
+    frozen_tip = _bookmark_change_id(prerun_branch_shape)
     print_status(job.name, ("frozen", "yellow"), f" ({detail})")
     return JobResult(
         job=job,
         effective_revsets=[frozen_tip] if frozen_tip else parents,
         produced_diff=False,
         frozen=True,
-        prerun_branch_shape=shape,
+        prerun_branch_shape=prerun_branch_shape,
     )
 
 
@@ -635,7 +624,7 @@ def _run_job_build_result(  # noqa: PLR0913
     job: Job,
     parents: list[str],
     command_result: CommandResult,
-    shape: human_commits.BranchShape,
+    prerun_branch_shape: human_commits.BranchShape,
     restore: Callable[[], None],
 ) -> JobResult:
     commit_empty = repo.is_empty()
@@ -645,7 +634,7 @@ def _run_job_build_result(  # noqa: PLR0913
     message = _build_commit_message(job, command_result)
     repo.describe(message)
 
-    match shape:
+    match prerun_branch_shape:
         case human_commits.NoBranch() | human_commits.AlreadyMerged() if commit_empty:
             print_status(job.name, ("no changes", "dim"), f" ({elapsed})")
             repo.abandon()
@@ -653,7 +642,7 @@ def _run_job_build_result(  # noqa: PLR0913
                 job=job,
                 effective_revsets=parents,
                 produced_diff=False,
-                prerun_branch_shape=shape,
+                prerun_branch_shape=prerun_branch_shape,
                 command_output=command_result.output,
             )
         case (
@@ -675,11 +664,11 @@ def _run_job_build_result(  # noqa: PLR0913
                 job=job,
                 effective_revsets=[new_change_id],
                 produced_diff=True,
-                prerun_branch_shape=shape,
+                prerun_branch_shape=prerun_branch_shape,
                 command_output=command_result.output,
             )
 
-        case human_commits.NormalLayers() if commit_empty and not shape.has_human:
+        case human_commits.NormalLayers() if commit_empty and not prerun_branch_shape.has_human:
             # No diff and no human commits to anchor: abandon the empty command
             # commit and report no-diff. Its bookmark is deleted by the plan step,
             # which also records the remote deletion. A branch that *does* carry
@@ -695,7 +684,7 @@ def _run_job_build_result(  # noqa: PLR0913
                 job=job,
                 effective_revsets=parents,
                 produced_diff=False,
-                prerun_branch_shape=shape,
+                prerun_branch_shape=prerun_branch_shape,
                 command_output=command_result.output,
             )
         case human_commits.NormalLayers():
@@ -703,7 +692,7 @@ def _run_job_build_result(  # noqa: PLR0913
             # case above): record the message on the rewritten command commit and
             # keep it. The in-place rewrite already carried the bookmark tip along
             # with the preserved change-id, so no bookmark set is needed here.
-            tip = _old_change_id(shape)
+            tip = _bookmark_change_id(prerun_branch_shape)
             assert tip is not None
 
             # Idempotency skip (ADR 0020): when classify_branch found the rewrite
@@ -715,10 +704,10 @@ def _run_job_build_result(  # noqa: PLR0913
             # committer timestamp that would retrigger CI. The old commit is hidden
             # but its git object survives the rewrite, so it is still diffable.
             if (
-                shape.run_idempotency_check
-                and repo.same_content(shape.command_commit.commit_id, "@")
+                prerun_branch_shape.run_idempotency_check
+                and repo.same_content(prerun_branch_shape.command_commit.commit_id, "@")
                 and _strip_boxquote_and_trailers(
-                    repo.get_description(shape.command_commit.commit_id)
+                    repo.get_description(prerun_branch_shape.command_commit.commit_id)
                 )
                 == _strip_boxquote_and_trailers(message)
             ):
@@ -729,7 +718,7 @@ def _run_job_build_result(  # noqa: PLR0913
                     job=job,
                     effective_revsets=[tip],
                     produced_diff=True,
-                    prerun_branch_shape=shape,
+                    prerun_branch_shape=prerun_branch_shape,
                     command_output=command_result.output,
                 )
 
@@ -746,7 +735,7 @@ def _run_job_build_result(  # noqa: PLR0913
                 job=job,
                 effective_revsets=[tip],
                 produced_diff=True,
-                prerun_branch_shape=shape,
+                prerun_branch_shape=prerun_branch_shape,
                 command_output=command_result.output,
             )
         case _:
@@ -788,7 +777,7 @@ def run_job(
             return _run_job_frozen(
                 job=job,
                 parents=parents,
-                shape=shape,
+                prerun_branch_shape=shape,
                 detail="conflict below command commit, needs rebase",
             )
         command_result = _run_command(
@@ -806,14 +795,14 @@ def run_job(
             return _run_job_frozen(
                 job=job,
                 parents=parents,
-                shape=shape,
+                prerun_branch_shape=shape,
                 detail="conflict in rebuilt branch, needs rebase",
             )
         return _run_job_build_result(
             repo=repo,
             job=job,
             parents=parents,
-            shape=shape,
+            prerun_branch_shape=shape,
             command_result=command_result,
             restore=restore,
         )
@@ -1245,22 +1234,21 @@ def _run_generator_job(ctx: RunContext, *, job: Job, parents: list[str]) -> JobR
     return JobResult(job=job, effective_revsets=parents, produced_diff=False, emitted=emitted)
 
 
-def _record_deleted_bookmark(
-    job: Job, result: JobResult, bookmark: str, *, repo: JJ, plan: UpdatePlan
-) -> None:
+def _record_deleted_bookmark(result: JobResult, *, repo: JJ, plan: UpdatePlan) -> None:
     """Delete the local bookmark (if present) and schedule a remote delete push.
 
     Schedules the push when either the local bookmark was just deleted, or the
     remote still has it from a previous push (e.g. after a -mlocal run that
     deleted the local bookmark without applying the plan).
     """
-    old_change_id = _old_change_id(result.prerun_branch_shape)
-    if old_change_id:
+    bookmark = result.job.branch_name()
+    bookmark_existed_prerun = _bookmark_change_id(result.prerun_branch_shape) is not None
+    if bookmark_existed_prerun:
         repo.bookmark_delete(bookmark)
-    if old_change_id or repo.remote_bookmark_exists(bookmark):
+    if bookmark_existed_prerun or repo.remote_bookmark_exists(bookmark):
         plan.updates.append(
             JobUpdate(
-                job_name=job.name,
+                job_name=result.job.name,
                 title=result.job.title,
                 push=BookmarkPush(bookmark=bookmark, delete=True),
             )
@@ -1322,7 +1310,7 @@ def _record_job_plan(ctx: RunContext, job: Job) -> None:
         if job.name not in (
             summary.on_cooldown | summary.successor_skipped | summary.run_only_if_changed_skipped
         ):
-            _record_deleted_bookmark(job, result, bookmark, repo=repo, plan=plan)
+            _record_deleted_bookmark(result, repo=repo, plan=plan)
         return
 
     mr: MRUpdate | None = None

@@ -32,6 +32,7 @@ from repoactive.runner import (
     RunContext,
     RunMode,
     RunSummary,
+    _bookmark_change_id,
     _build_commit_message,
     _build_generated_jobs,
     _compute_parents,
@@ -39,7 +40,6 @@ from repoactive.runner import (
     _format_duration,
     _job_extra_env,
     _load_job_specs,
-    _old_change_id,
     _prepare_repo,
     _pushable_branch_revset,
     _record_job_plan,
@@ -551,28 +551,28 @@ class TestRunOneJob:
         assert "b" not in summary.run_only_if_changed_skipped
 
 
-class TestOldChangeId:
-    """_old_change_id returns the bookmark tip used for cleanup.
+class TestBookmarkChangeId:
+    """_bookmark_change_id returns the bookmark tip used for cleanup.
 
     AlreadyMerged carries a real bookmark_change_id (the branch was manually
     merged and left un-deleted): the stale bookmark still exists and must be
     deleted, even though per ADR 0019 it has nothing worth restoring/rebasing.
     """
 
-    def test_old_change_id_none_for_no_branch(self) -> None:
-        assert _old_change_id(human_commits.NoBranch()) is None
+    def test_bookmark_change_id_none_for_no_branch(self) -> None:
+        assert _bookmark_change_id(human_commits.NoBranch()) is None
 
-    def test_old_change_id_none_for_none(self) -> None:
-        assert _old_change_id(None) is None
+    def test_bookmark_change_id_none_for_none(self) -> None:
+        assert _bookmark_change_id(None) is None
 
-    def test_old_change_id_returns_tip_for_already_merged(self) -> None:
+    def test_bookmark_change_id_returns_tip_for_already_merged(self) -> None:
         # The stale bookmark still exists and must be deleted when its plan is recorded.
         assert (
-            _old_change_id(human_commits.AlreadyMerged(bookmark_change_id="merged-id"))
+            _bookmark_change_id(human_commits.AlreadyMerged(bookmark_change_id="merged-id"))
             == "merged-id"
         )
 
-    def test_old_change_id_returns_tip_for_normal_layers(self) -> None:
+    def test_bookmark_change_id_returns_tip_for_normal_layers(self) -> None:
         shape = human_commits.NormalLayers(
             bookmark_change_id="tip-id",
             command_commit=JobCommit(
@@ -585,7 +585,7 @@ class TestOldChangeId:
             prereq_heads=[],
             fixup_roots=[],
         )
-        assert _old_change_id(shape) == "tip-id"
+        assert _bookmark_change_id(shape) == "tip-id"
 
 
 class TestPushableBranchRevset:
@@ -1371,7 +1371,7 @@ class TestRunJob:
         mock_jj.git_push_bookmarks.assert_not_called()
         assert result.produced_diff is False
         assert result.effective_revsets == ["trunk()"]
-        assert _old_change_id(result.prerun_branch_shape) == "old-change-id"
+        assert _bookmark_change_id(result.prerun_branch_shape) == "old-change-id"
 
     @patch("repoactive.runner.JJ")
     @patch("repoactive.runner.subprocess.Popen")
@@ -1705,7 +1705,7 @@ class TestRunJob:
         mock_jj.new.assert_called_once_with("heads(trunk())")
         mock_jj.rebase.assert_not_called()
         mock_jj.bookmark_set.assert_called_once_with("repoactive/foo", "@")
-        assert _old_change_id(result.prerun_branch_shape) == "old-change-id"
+        assert _bookmark_change_id(result.prerun_branch_shape) == "old-change-id"
 
     @patch("repoactive.runner.JJ")
     @patch("repoactive.runner.subprocess.Popen")
@@ -2587,7 +2587,7 @@ class TestRunAll:
     ) -> None:
         # Regression: if a -mlocal run deleted the local bookmark without
         # applying the plan, a subsequent -mpush run must still push the
-        # deletion to the remote (old_change_id is None, but remote has it).
+        # deletion to the remote (bookmark_existed_prerun is False, but remote has it).
         a = _job("a")
         mock_run_job.return_value = _result(a, revsets=["trunk()"], produced=False)
         mock_jj.return_value.remote_bookmark_exists.return_value = True
