@@ -1476,21 +1476,16 @@ def run_all(  # noqa: PLR0913
     requested_tags: frozenset[str] = frozenset(),
     mode: RunMode = RunMode.local,
 ) -> RunSummary:
-    # A publish run needs a platform to create MRs; local/push runs must not be
-    # given one. The CLI keeps these in sync - this guards direct callers.
+    # Only publish needs a platform (for MRs); guards direct callers, the CLI keeps these aligned.
     assert (mode is RunMode.publish) == (platform is not None), (
         f"mode={mode} is inconsistent with platform={platform!r}"
     )
     run_start = time.monotonic()
-    # Building the selector validates the request, failing on a mistyped job name
-    # or tag before the lock is taken and before _prepare_repo mutates anything
-    # (or promises an undo hint for a run that never started).
+    # Building the selector may fail on a bad job name or tag, so do it before touching the repo.
     selector = JobSelector(
         config=config, requested_names=requested_names, requested_tags=requested_tags
     )
-    # Serialise runs against the same repository: a run mutates repo-global state
-    # (workspaces, bookmarks, pushes), and forget_stale_workspaces would clobber a
-    # concurrent run's live workspaces. Fail-fast if another run holds the lock.
+    # Serialise runs: _prepare_repo's forget_stale_workspaces would clobber a concurrent run.
     with run_lock(repo_path), _prepare_repo(config=config, repo_path=repo_path) as repo:
         logger.debug(
             "run_all: repo=%s mode=%s requested_names=%s requested_tags=%s",
@@ -1500,52 +1495,35 @@ def run_all(  # noqa: PLR0913
             requested_tags,
         )
 
-        selection = selector.select_run_jobs(repo)
-        summary = RunSummary()
-        # Run-wide state, built once and threaded through _run_jobs → _dispatch_job.
-        # ctx.selection is this same selection object, so the in-place splice in
-        # _run_jobs keeps ctx.selection.jobs current as generators emit.
         ctx = RunContext(
             config=config,
             repo_path=repo_path,
             repo=repo,
-            summary=summary,
-            selection=selection,
+            summary=RunSummary(),
+            selection=selector.select_run_jobs(repo),
         )
 
-        print(f"Running {len(selection.jobs)} job(s):")
-        # The same dependency tree 'info jobs' shows, restricted to this run's
-        # selection (generator-emitted jobs appear later, as they run).
-        print_job_table(format_job_forest(selection.jobs), indent="  ")
+        # Print 'info jobs'-like overview of selected jobs.
+        print(f"Running {len(ctx.selection.jobs)} job(s):")
+        print_job_table(format_job_forest(ctx.selection.jobs), indent="  ")
         print()
-        # Run each job and rewrite its command commit in place immediately
-        # (before any dependent computes its parents), so a stacked dependent
-        # forks from its dependency's canonical, already-rewritten tip (ADR 0020,
-        # and ADR 0019 "Run ordering"). Old bookmarks are untouched until a job's
-        # own rewrite; a failed command discards only that job's fresh commit.
-        # Generator-emitted jobs are spliced into ctx.selection.jobs and rewritten
-        # in turn. Jobs pulled in for refresh bypass the cooldown skip so their
-        # branches are rebased (ADR 0003). ctx.plan (bookmark pushes + MR
-        # descriptors) is filled in per job as each is rewritten.
+
         _run_jobs(ctx)
 
-        # Resolve "unless-superseded" now that every job has run: a job's MR is
-        # dropped from the plan when a dependent's MR in this run contains it.
-        _suppress_superseded_mrs(plan=ctx.plan, results=summary.results)
+        # Resolve "unless-superseded"
+        _suppress_superseded_mrs(plan=ctx.plan, results=ctx.summary.results)
 
-        # A local run stops here: the plan is built but deliberately not applied, so
-        # nothing is pushed and no MR is created.
         if mode is not RunMode.local:
             applied = apply_plan(ctx.plan, repo_path=repo_path, platform=platform, mode=mode)
             for name, url in applied.mr_urls.items():
-                summary.results[name].mr_url = url
+                ctx.summary.results[name].mr_url = url
             # A job whose MR failed keeps its results entry (the command ran and
             # its branch was pushed) but the run still counts as failed.
-            summary.failed.update(applied.failed)
+            ctx.summary.failed.update(applied.failed)
 
-        summary.elapsed = time.monotonic() - run_start
-        summary.print_report()
-        return summary
+        ctx.summary.elapsed = time.monotonic() - run_start
+        ctx.summary.print_report()
+        return ctx.summary
 
 
 def _apply_plan_push(plan: UpdatePlan, *, repo_path: Path) -> None:
