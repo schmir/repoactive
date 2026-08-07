@@ -185,18 +185,14 @@ class RunSummary:
     dependency_failed: set[str] = field(default_factory=set)
     on_cooldown: set[str] = field(default_factory=set)
     # Successor jobs skipped because nothing below them in the stack ran this
-    # run (see _dispatch_job). Like on_cooldown, an intentional skip: the job's
-    # bookmark is left alone when its plan is recorded (_record_job_plan).
+    # run (see _dispatch_job); an intentional skip, like on_cooldown.
     successor_skipped: set[str] = field(default_factory=set)
-    # Jobs whose run_only_if_changed gate fired (none of the watched deps
-    # produced a diff). Like on_cooldown, an intentional skip: the job's
-    # bookmark is left alone when its plan is recorded (_record_job_plan).
+    # Jobs whose run_only_if_changed gate fired (no watched dep produced a
+    # diff); an intentional skip, like on_cooldown.
     run_only_if_changed_skipped: set[str] = field(default_factory=set)
-    # Jobs frozen because rebuilding the branch would push a conflict below the
-    # command commit (ADR 0019). The command did not run and nothing is pushed;
-    # the remote stays at its last clean state and the conflict is left for the
-    # human to resolve locally. Not a failure - like cooldown, an intentional
-    # hold - so it does not affect ok.
+    # Jobs frozen because rebuilding would push a conflict (ADR 0019, see
+    # _run_job_frozen). Not a failure but an intentional hold, so it does not
+    # affect ok.
     frozen: set[str] = field(default_factory=set)
     # Wall time of the whole run, filled in by run_all just before print_report.
     elapsed: float | None = None
@@ -1044,20 +1040,11 @@ def _dispatch_job(ctx: RunContext, *, job: Job) -> list[Job]:
     """Run a single job, recording its outcome in ctx.summary.
 
     A failed or dependency-skipped job lands in summary.failed/
-    summary.dependency_failed, so _dispatch_blocked_deps blocks its
-    dependents in turn. Returns the jobs a generator (emits_jobs) produced
-    — an empty list for an ordinary job or a generator that emitted
-    nothing/was skipped. ctx.selection.jobs is every job in this run
-    (_run_jobs keeps it in sync as generators emit), so its names reject an emitted job that
-    collides with an existing one. ctx.selection.refreshed names the jobs that
-    already have an unmerged branch; such a job is never cooldown-skipped or
-    run_only_if_changed-skipped, so its branch is refreshed (ADR 0003).
-    ctx.selection.successors names the jobs force-included because their
-    commits sit above a selected job's bookmark; they bypass their own cooldown
-    but are skipped when every dependency was itself skipped this run.
-    ctx.selection.explicit names the jobs requested by name on the command
-    line; naming a job runs it now, so it too bypasses the cooldown skip. The
-    plan is built by _record_job_plan, not here.
+    summary.dependency_failed, so _dispatch_blocked_deps blocks its dependents
+    in turn. Returns the jobs a generator (emits_jobs) produced, empty for an
+    ordinary job or one that emitted nothing. Which jobs bypass a skip gate is
+    driven by ctx.selection (see JobSelection); the plan is built by
+    _record_job_plan, not here.
     """
     outcome = _dispatch_blocked_deps(ctx, job)
     if outcome is None:
@@ -1397,13 +1384,6 @@ def _run_jobs(ctx: RunContext) -> None:
 
     Results are recorded in ctx.summary in place and ctx.plan accumulates
     each job's push/MR as its plan is recorded.
-
-    ctx.selection.refreshed names the jobs being refreshed because they
-    already have an unmerged branch; they bypass the cooldown skip so their
-    branches are rebased (ADR 0003). Empty for explicit selection, which does not
-    refresh (ADR 0003). ctx.selection.successors names the jobs force-included
-    because their commits sit above a selected job's bookmark; they run only when
-    something below them in the stack ran (see _dispatch_job).
     """
     started: set[str] = set()
     while True:

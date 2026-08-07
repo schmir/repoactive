@@ -13,7 +13,7 @@ true): it points the RA_JOBS_DIR environment variable at a
 directory this script writes *.toml job fragments into, and runs the emitted
 jobs in the same invocation. See docs/adr/0004-job-generators.md.
 
-Register it by adding to your repoactive config::
+Register it by adding to your repoactive config:
 
     [job.upgrade-deps]
     command = "./scripts/emit-upgrade-jobs.py"

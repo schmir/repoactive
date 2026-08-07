@@ -169,10 +169,9 @@ class JobSelector:
         jobs whose commits sit in the stack above a selected job's bookmark are
         pulled in as successors so they are rebuilt on the new output (ADR 0012).
 
-        Returns a JobSelection carrying the ordered jobs and the refreshed
-        and successor subsets; the caller reuses refreshed so a job being
-        refreshed bypasses the cooldown skip without a second unmerged-branch
-        query.
+        Returns a JobSelection carrying the ordered jobs and the refreshed,
+        successor, and explicit subsets (see JobSelection for how each affects
+        the run).
         """
         # On the bare default run, also refresh jobs with an unmerged branch so a
         # stale branch is rebased on trunk now rather than at the job's next run.

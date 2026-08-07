@@ -278,7 +278,7 @@ class JJ:
         the whole repository is rolled back to that operation via
         op_restore before the exception propagates, undoing any in-place
         rewrites the block performed. The yielded callable triggers the same
-        restore explicitly, for cases that need to roll back without raising::
+        restore explicitly, for cases that need to roll back without raising:
 
             with repo.op_checkpoint() as restore:
                 ...  # rewrites; any exception here rolls back automatically
