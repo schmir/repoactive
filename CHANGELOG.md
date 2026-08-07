@@ -2,11 +2,26 @@
 
 ## 0.4.0 - unreleased
 
-- Naming a job explicitly on the command line (`repoactive run <name>`) now
-  overrides its `cooldown_period`: the job runs immediately regardless of
-  when it last landed. Cooldown continues to throttle the default run and
-  `--tag` selection. See
+- Explicitly named jobs on the command line (`repoactive run <name>`) now
+  run immediately ignoring the cooldown checks. Cooldown continues to
+  throttle the default run and `--tag` selection. See
   [Throttling jobs with `cooldown_period`](README.md#throttling-jobs-with-cooldown_period).
+- repoactive now preserves human commits that share a job's branch. See
+  [ADR 0019](docs/adr/0019-preserve-human-commits.md) and
+  [ADR 0020](docs/adr/0020-rewrite-command-commit-in-place.md).
+- branches with merge conflicts will now be frozen: repoactive will not push
+  the bookmark and an open MR is tagged with a `repoactive:needs-rebase`
+  label so the stall is visible. See
+  [ADR 0019](docs/adr/0019-preserve-human-commits.md).
+- `run_only_if_changed` now requires every watched job to be ordered
+  strictly before the gated job, and rejects any other arrangement at config
+  load time.
+- repoactive's config validation now rejects two jobs that use the same
+  bookmark, and a job whose bookmark matches another job's `base_branch`.
+- repoactive now detaches the command's standard input from the terminal. A
+  command that reads stdin fails fast at end-of-file instead of blocking
+  until its timeout.
+- The Docker image's default jj version is now 0.44.0.
 
 ## 0.3.1 - 2026-07-27
 
