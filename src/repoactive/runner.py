@@ -1385,54 +1385,42 @@ def _prepare_repo(*, config: Config, repo_path: Path) -> Generator[JJ]:
 def _run_jobs(ctx: RunContext) -> None:
     """Run each job in topological order and record its plan before the next dispatches.
 
-    ``ctx.selection.jobs`` is topologically sorted, so the first job not yet in
-    ``started`` always has its dependencies satisfied: every job ahead of it in
-    the order has already run (were one not, *it* would be the first not-started
-    job). ``run_job`` rewrites each job's command commit in place before it
-    returns (ADR 0020), so a stacked dependent's ``_compute_parents`` forks from
-    its dependency's canonical, fixup-included tip, with no separate fold-in step.
-    A generator's emitted jobs are appended and the list re-sorted so each runs
-    after its dependencies (the generator included); the next iteration picks
-    them up once their turn comes. See docs/adr/0004-job-generators.md.
+    ctx.selection.jobs is topologically sorted, so each job's dependencies
+    have already run by the time it dispatches. run_job rewrites each job's
+    command commit in place before it returns (ADR 0020), so a stacked
+    dependent's _compute_parents forks from its dependency's canonical,
+    fixup-included tip, with no separate fold-in step. A generator's emitted jobs
+    are spliced in and the list re-sorted so each runs after its dependencies
+    (the generator included). See docs/adr/0004-job-generators.md.
 
-    Results are recorded in ``ctx.summary`` in place, generator-emitted jobs are
-    spliced into ``ctx.selection.jobs`` (still topologically sorted), and
-    ``ctx.plan`` accumulates each job's push/MR as its plan is recorded.
+    Results are recorded in ctx.summary in place and ctx.plan accumulates
+    each job's push/MR as its plan is recorded.
 
-    ``ctx.selection.refreshed`` names the jobs being refreshed because they
+    ctx.selection.refreshed names the jobs being refreshed because they
     already have an unmerged branch; they bypass the cooldown skip so their
     branches are rebased (ADR 0003). Empty for explicit selection, which does not
-    refresh (ADR 0003). ``ctx.selection.successors`` names the jobs force-included
+    refresh (ADR 0003). ctx.selection.successors names the jobs force-included
     because their commits sit above a selected job's bookmark; they run only when
     something below them in the stack ran (see _dispatch_job).
     """
-    selection = ctx.selection
     started: set[str] = set()
     while True:
-        job = next((j for j in selection.jobs if j.name not in started), None)
+        job = next((j for j in ctx.selection.jobs if j.name not in started), None)
         if job is None:
             break
         started.add(job.name)
         emitted = _dispatch_job(ctx, job=job)
-        # run_job's in-place rewrite (ADR 0020) happens in a temp workspace and
-        # can leave this default workspace stale (a human's @ on the branch it
-        # rewrote); reconcile it before any command runs here: the bookmark
-        # ops below, the next job's `workspace add`, apply_plan's push, and
-        # whatever the user runs after the run.
+        # run_job's rewrite (ADR 0020) can leave this workspace stale; reconcile before commands.
         ctx.repo.update_stale_working_copy()
-        # run_job already rewrote this job's command commit in place; finalize its
-        # bookmark and record its push/MR now, before any dependent dispatches.
+        # run_job rewrote this job's commit in place; finalize its bookmark and push/MR now.
         _record_job_plan(ctx, job)
         if emitted:
-            # Resolve before splicing in so _dispatch_job receives resolved jobs,
-            # matching the invariant for jobs from selection.
+            # Resolve before splicing in so _dispatch_job receives resolved jobs.
             resolved_emitted = [j.resolve(ctx.config.job_defaults) for j in emitted]
-            # Track the new jobs' bookmarks so a branch an earlier run already
-            # pushed is reused rather than recreated, then splice them into the
-            # selection and re-sort so they run after their dependencies.
+            # Track the new jobs' bookmarks so an already-pushed branch is reused, not recreated.
             ctx.repo.bookmark_track(*sorted(j.branch_name() for j in resolved_emitted))
-            selection.jobs = topological_sort(selection.jobs + resolved_emitted)
-            print_job_table(format_job_forest(selection.jobs), indent="  ")
+            ctx.selection.jobs = topological_sort(ctx.selection.jobs + resolved_emitted)
+            print_job_table(format_job_forest(ctx.selection.jobs), indent="  ")
 
 
 def _suppress_superseded_mrs(*, plan: UpdatePlan, results: dict[str, JobResult]) -> None:
