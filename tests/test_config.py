@@ -274,6 +274,32 @@ class TestRunOnlyIfChangedValidation:
         assert cfg.jobs[1].depends_on == []
         assert cfg.jobs[1].run_only_if_changed == ["a"]
 
+    def test_watched_job_ordered_after_rejected(self) -> None:
+        # 'a' is listed in config after 'b', so it runs after b: the gate would
+        # see it as "no diff" and fire wrongly. Rejected at load.
+        with pytest.raises(ValueError, match="not ordered before it"):
+            _config(
+                jobs=[
+                    _job("b", run_only_if_changed=["a"]),
+                    _job("a"),
+                ]
+            )
+
+    def test_watched_job_ordered_before_via_depends_on(self) -> None:
+        # 'a' comes later in config order but is a depends_on ancestor, so it is
+        # ordered before 'b' topologically and is accepted.
+        cfg = _config(
+            jobs=[
+                _job("b", depends_on=["a"], run_only_if_changed=["a"]),
+                _job("a"),
+            ]
+        )
+        assert cfg.jobs[0].run_only_if_changed == ["a"]
+
+    def test_watching_self_rejected(self) -> None:
+        with pytest.raises(ValueError, match="not ordered before it"):
+            _config(jobs=[_job("a", run_only_if_changed=["a"])])
+
 
 class TestUniqueBranchNameValidation:
     def test_distinct_bookmarks_accepted(self) -> None:

@@ -26,7 +26,7 @@ from pydantic import (
 )
 
 from repoactive.constants import JOB_TRAILER_KEY
-from repoactive.graph import detect_dependency_cycle
+from repoactive.graph import detect_dependency_cycle, topological_sort
 
 logger = logging.getLogger(__name__)
 
@@ -146,6 +146,22 @@ class UnknownRunOnlyIfChangedError(ValueError):
     def __init__(self, name: str, unknown: list[str]) -> None:
         super().__init__(
             f"job '{name}' run_only_if_changed references unknown job(s): {', '.join(unknown)}"
+        )
+
+
+class RunOnlyIfChangedOrderError(ValueError):
+    """Raised when a run_only_if_changed name is not guaranteed to run first.
+
+    The gate reads the watched job's result from the current run, so a watched
+    job that runs after (or alongside, in config order without a depends_on edge)
+    the gated job would be seen as "no diff" and fire the gate wrongly. The
+    watched job must therefore be ordered strictly before the gated one.
+    """
+
+    def __init__(self, name: str, out_of_order: list[str]) -> None:
+        super().__init__(
+            f"job '{name}' run_only_if_changed lists job(s) not ordered before it: "
+            f"{', '.join(out_of_order)}; add them to depends_on or move them earlier in the config"
         )
 
 
@@ -631,6 +647,19 @@ class Config(BaseModel):
             unknown = sorted(set(job.run_only_if_changed) - names)
             if unknown:
                 raise UnknownRunOnlyIfChangedError(job.name, unknown)
+
+        # The gate reads each watched job's result from the current run, so a
+        # watched job must be guaranteed to have run first. Jobs execute in
+        # topological order (dependencies first, config order otherwise), so
+        # "ordered before" is simply a lower index in that order. depends_on has
+        # been validated (cycle-free) above, so topological_sort terminates.
+        order = {job.name: i for i, job in enumerate(topological_sort(self.jobs))}
+        for job in self.jobs:
+            out_of_order = [
+                name for name in job.run_only_if_changed if order[name] >= order[job.name]
+            ]
+            if out_of_order:
+                raise RunOnlyIfChangedOrderError(job.name, out_of_order)
         return self
 
     @model_validator(mode="after")

@@ -1092,10 +1092,13 @@ Key behaviour:
 - **Dependents are unaffected.** A skipped job records a no-op result (like
   a job on cooldown), so any job that `depends_on` it still runs on the base
   branch - the skip does not cascade.
-- **No ordering constraint.** Names in `run_only_if_changed` do not have to
-  appear in `depends_on`. Any job that runs before this one in topological
-  order can be listed; in practice most usages name a direct dependency, as
-  in the example above.
+- **Watched jobs must run first.** A watched job does not have to appear in
+  `depends_on`, but it must be ordered before this one so its result is
+  known when the gate is evaluated - either as a (direct or transitive)
+  `depends_on` ancestor, or simply earlier in the config file. Listing a job
+  that runs later (or alongside, with no `depends_on` edge) is rejected at
+  config load. In practice most usages name a direct dependency, as in the
+  example above.
 
 ### Throttling jobs with `cooldown_period`
 
