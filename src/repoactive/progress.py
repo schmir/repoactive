@@ -1,15 +1,15 @@
 """A live tail of a running command's output.
 
-While a job command runs, ``_run_command`` streams its output line by line into a
-``ProgressView``. The view keeps only the last few lines and renders them as a
+While a job command runs, _run_command streams its output line by line into a
+ProgressView. The view keeps only the last few lines and renders them as a
 small, fixed-height block that scrolls in place — so a long command shows live
 progress without flooding the terminal. The header line shows the job name, a
 ticking elapsed clock (with the job's timeout), and the command:
-``==> [<name>] [<elapsed>/<timeout>] <command>``. When the command finishes
+==> [<name>] [<elapsed>/<timeout>] <command>. When the command finishes
 the block is left in place (its final lines stay on screen), with the status
 line printed below it.
 
-Rendering is delegated to ``rich.live.Live``. Rich handles terminal-width
+Rendering is delegated to rich.live.Live. Rich handles terminal-width
 truncation and only draws when stdout is a real terminal, so piped/CI output is
 left untouched.
 """
@@ -31,7 +31,7 @@ def format_duration(seconds: float) -> str:
 
     Zero components are omitted (except a bare '0s'), so a round timeout like
     120s renders as '2m'. Second-level granularity, unlike the coarser
-    ``runner._format_duration`` used for cooldown ages.
+    runner._format_duration used for cooldown ages.
     """
     seconds = int(seconds)
     hours, seconds = divmod(seconds, 3600)
@@ -49,7 +49,7 @@ def format_duration(seconds: float) -> str:
 def format_elapsed(seconds: float) -> str:
     """Format an elapsed wall time.
 
-    Sub-second precision under a minute ('4.2s'), ``format_duration``
+    Sub-second precision under a minute ('4.2s'), format_duration
     granularity above ('3m 12s').
     """
     if seconds < 60:  # noqa: PLR2004
@@ -58,15 +58,15 @@ def format_elapsed(seconds: float) -> str:
 
 
 class ProgressView:
-    """A live tail of the last ``max_lines`` output lines.
+    """A live tail of the last max_lines output lines.
 
-    Use as a context manager around a streaming read loop, calling ``feed`` for
-    each line. The header line is ``==> [<name>] [<elapsed>] <command>``, with
-    the elapsed time ticking (measured from ``__enter__``) and, when ``timeout``
-    is given, shown as ``[<elapsed>/<timeout>]``. On exit the block's final
+    Use as a context manager around a streaming read loop, calling feed for
+    each line. The header line is ==> [<name>] [<elapsed>] <command>, with
+    the elapsed time ticking (measured from __enter__) and, when timeout
+    is given, shown as [<elapsed>/<timeout>]. On exit the block's final
     lines are left on screen (non-transient Live). When disabled —
-    ``max_lines <= 0`` or stdout is not a terminal — nothing is drawn, but
-    ``feed`` still tracks the most recent lines, queryable via ``tail``.
+    max_lines <= 0 or stdout is not a terminal — nothing is drawn, but
+    feed still tracks the most recent lines, queryable via tail.
     """
 
     def __init__(  # noqa: PLR0913
@@ -118,7 +118,7 @@ class ProgressView:
         self._tail_lines.append(line.rstrip("\n"))
 
     def tail(self) -> list[str]:
-        """Return the most recent lines kept (the last ``max_lines`` fed)."""
+        """Return the most recent lines kept (the last max_lines fed)."""
         return list(self._tail_lines)
 
     def _render(self) -> Group:

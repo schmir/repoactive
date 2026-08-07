@@ -50,8 +50,8 @@ from repoactive.updates import (
 
 logger = logging.getLogger(__name__)
 
-# Environment variable naming the directory a generator (``emits_jobs``) command
-# writes its ``*.toml`` job fragments into. See docs/adr/0004-job-generators.md.
+# Environment variable naming the directory a generator (emits_jobs) command
+# writes its *.toml job fragments into. See docs/adr/0004-job-generators.md.
 RA_JOBS_DIR_ENV = "RA_JOBS_DIR"
 
 # Environment variable exposing to a job command the directory of the config
@@ -85,7 +85,7 @@ RA_JOB_NAME_ENV = "RA_JOB_NAME"
 RA_JOB_BASE_BRANCH_ENV = "RA_JOB_BASE_BRANCH"
 
 # Fields an emitted job inherits from its generator when the emitted entry does
-# not set them itself (``tags`` and ``depends_on`` are handled separately because
+# not set them itself (tags and depends_on are handled separately because
 # their defaults are not a plain copy). See docs/adr/0004-job-generators.md.
 _INHERITED_FIELDS = (
     "cooldown_period",
@@ -170,7 +170,7 @@ class JobResult:
     # Filled in by the apply phase once the MR has been created.
     mr_url: str | None = None
     command_output: str = ""
-    # Jobs a generator (``emits_jobs``) produced, consumed once by _dispatch_run
+    # Jobs a generator (emits_jobs) produced, consumed once by _dispatch_run
     # right after the job runs. Empty for an ordinary job or a generator that
     # emitted nothing.
     emitted: list[Job] = field(default_factory=list)
@@ -239,14 +239,14 @@ class RunSummary:
 class RunContext:
     """Run-wide state shared by every job in a single run_all pass.
 
-    Built once in ``run_all`` and threaded through ``_run_jobs`` /
-    ``_dispatch_job`` to ``run_job`` / ``_run_generator_job`` so every stage has a
+    Built once in run_all and threaded through _run_jobs /
+    _dispatch_job to run_job / _run_generator_job so every stage has a
     single handle to the run's config, target repo, accumulating results,
-    selection, and the ``plan`` ``_record_job_plan`` fills in.
-    ``selection`` is the live selection object (``_run_jobs`` splices
-    generator-emitted jobs into ``selection.jobs`` in place), so ``selection.jobs``
+    selection, and the plan _record_job_plan fills in.
+    selection is the live selection object (_run_jobs splices
+    generator-emitted jobs into selection.jobs in place), so selection.jobs
     is always every job in the run.
-    ``repo`` is the prepared, colocated ``JJ`` bound to ``repo_path``.
+    repo is the prepared, colocated JJ bound to repo_path.
     """
 
     config: Config
@@ -282,9 +282,9 @@ def _compute_parents(job: Job, results: dict[str, JobResult]) -> list[str]:
 
 
 def _kill_process_group(proc: subprocess.Popen[str]) -> None:
-    """SIGKILL the whole process group led by ``proc``.
+    """SIGKILL the whole process group led by proc.
 
-    The command is started with ``start_new_session=True`` so it leads its own
+    The command is started with start_new_session=True so it leads its own
     process group; killing the group reaps any children the command spawned, not
     just the top-level shell.
     """
@@ -301,9 +301,9 @@ def _command_env(
     """Build the environment a job command runs in.
 
     Starts from the inherited environment (so the command still sees PATH etc.),
-    drops ``stripped_env_names`` (the platform tokens of ADR 0006 plus every
+    drops stripped_env_names (the platform tokens of ADR 0006 plus every
     marked secret of ADR 0017), injects back only the secrets this job granted
-    (``granted_secret_env``), then layers on ``extra_env`` (the RA_* variables,
+    (granted_secret_env), then layers on extra_env (the RA_* variables,
     e.g. RA_JOBS_DIR for a generator) last so repoactive's own variables win.
     """
     env = {k: v for k, v in os.environ.items() if k not in stripped_env_names}
@@ -315,9 +315,9 @@ def _command_env(
 
 
 def _resolve_granted_secrets(job: Job) -> dict[str, str]:
-    """Values for the secrets ``job`` grants, read from repoactive's own environment.
+    """Values for the secrets job grants, read from repoactive's own environment.
 
-    Only the names in the job's own ``secret_env`` are granted; ``job-defaults``
+    Only the names in the job's own secret_env are granted; job-defaults
     marks names but grants to no job (ADR 0017). Raises MissingSecretError on the
     first granted name that is unset, so a misconfigured job fails legibly before
     its command runs rather than deep inside it.
@@ -332,12 +332,12 @@ def _resolve_granted_secrets(job: Job) -> dict[str, str]:
 
 
 def _job_extra_env(job: Job, extra: dict[str, str] | None = None) -> dict[str, str]:
-    """Extra environment for ``job``'s command: its name, branches, config dir, ``extra``.
+    """Extra environment for job's command: its name, branches, config dir, extra.
 
     Always adds RA_JOB_NAME (the job's name), RA_JOB_BRANCH (the bookmark
     repoactive uses for the job's output), and RA_JOB_BASE_BRANCH (the branch the
     job's MR targets). Adds RA_CONFIG_SOURCE_DIR when the job has a
-    ``config_source_dir`` (the directory of the config source that defined its
+    config_source_dir (the directory of the config source that defined its
     command), on top of any caller-supplied entries (e.g. RA_JOBS_DIR for a
     generator).
     """
@@ -352,16 +352,16 @@ def _job_extra_env(job: Job, extra: dict[str, str] | None = None) -> dict[str, s
 
 @contextlib.contextmanager
 def _watchdog(proc: subprocess.Popen[str], timeout: float | None) -> Generator[threading.Event]:
-    """Kill ``proc``'s process group if it outlives ``timeout`` seconds.
+    """Kill proc's process group if it outlives timeout seconds.
 
-    The blocking stdout read in ``_run_command`` cannot be interrupted by a
+    The blocking stdout read in _run_command cannot be interrupted by a
     timeout, so a background timer SIGKILLs the process group once the deadline
     passes; that closes stdout and ends the read loop. The poll() guard avoids
     flagging a false timeout when the command finishes just as the timer fires;
     the remaining race (the command exits between poll() and the kill) is closed
     by the caller, which treats only a non-zero exit as a timeout.
 
-    Yields an event that is set iff the watchdog fired. ``timeout is None`` means
+    Yields an event that is set iff the watchdog fired. timeout is None means
     no deadline: no timer is started and the event never fires.
     """
     timed_out = threading.Event()
@@ -383,7 +383,7 @@ def _watchdog(proc: subprocess.Popen[str], timeout: float | None) -> Generator[t
 
 @contextlib.contextmanager
 def _spawn(job: Job, cwd: Path, env: dict[str, str]) -> Generator[subprocess.Popen[str]]:
-    """Run ``job.command`` in its own session, cleaning up on exit.
+    """Run job.command in its own session, cleaning up on exit.
 
     start_new_session puts the command in its own process group so a timeout can
     kill the whole tree (see _kill_process_group). On exit, if the command is
@@ -503,10 +503,10 @@ def _strip_boxquote_and_trailers(message: str) -> str:
 
     Returns the author-controlled parts - the title line and description - so two
     commit messages can be compared while ignoring the command output (rendered
-    in a boxquote) and the ``Repoactive-Job`` trailer(s).
+    in a boxquote) and the Repoactive-Job trailer(s).
 
     Trailers are stripped first, while they are still the final paragraph of the
-    built message; ``strip_boxquotes`` reflows whitespace and could otherwise
+    built message; strip_boxquotes reflows whitespace and could otherwise
     disturb that.
 
     Note: inaccurate when the commit description itself contains a boxquote
@@ -518,8 +518,8 @@ def _build_commit_message(job: Job, command_result: CommandResult) -> str:
     """Build the commit message recorded for a job's change.
 
     The title, an optional description, the command output rendered in a
-    boxquote.el-style box (when ``output_in_commit`` is set), and finally the
-    ``Repoactive-Job`` trailer(s).
+    boxquote.el-style box (when output_in_commit is set), and finally the
+    Repoactive-Job trailer(s).
     """
     message = f"{job.commit_title_prefix}{job.title}"
     if job.description:
@@ -571,8 +571,8 @@ def _pushable_branch_revset(shape: human_commits.BranchShape) -> str:
 
     Prerequisites below the command commit are intentionally excluded; an
     already-conflicted parent is caught before the command runs by checking
-    ``@-``. A prerequisite/trunk *merge* conflict, by contrast, materializes in
-    the command commit itself (``@``) and so is covered here.
+    @-. A prerequisite/trunk *merge* conflict, by contrast, materializes in
+    the command commit itself (@) and so is covered here.
     """
     match shape:
         case human_commits.NormalLayers():
@@ -593,12 +593,12 @@ def _run_job_frozen(
     jj refuses to push a commit that contains a conflict, so a rebuild that would
     require one pushes nothing. Two checks in run_job lead here:
 
-    - before the command, ``@-`` (a parent) already holds a conflict - a
+    - before the command, @- (a parent) already holds a conflict - a
       conflicted dependency tip or a prerequisite left conflicted below the
       command commit. The command runs on top of it and cannot resolve it, so it
       is skipped entirely.
     - after the command, this job's own pushable commits
-      (:func:`_pushable_branch_revset`) still hold a conflict the command did not
+      (_pushable_branch_revset) still hold a conflict the command did not
       resolve - the command commit's merge with the run's parents, or a fixup
       reapplied onto its regenerated output.
 
@@ -606,7 +606,7 @@ def _run_job_frozen(
     back: nothing is pushed (_record_job_plan leaves the bookmark and any open MR
     untouched), so the remote stays at its last clean state, while the human
     running the branch sees the conflict materialized locally where they can
-    resolve it. ``effective_revsets`` stays at the branch's change-id (or the
+    resolve it. effective_revsets stays at the branch's change-id (or the
     run's parents for a branch that does not exist yet).
     """
     frozen_tip = _bookmark_change_id(prerun_branch_shape)
@@ -772,7 +772,7 @@ def run_job(
     the bookmark and any not-selected dependents follow for free. A new job or a
     merged-and-undeleted branch gets a fresh commit on the parents instead.
 
-    A failed command is an exact, cheap rollback: ``op_checkpoint`` restores the
+    A failed command is an exact, cheap rollback: op_checkpoint restores the
     op captured before any mutation, returning the branch to precisely its prior
     state (no in-place rewrite to unwind, no fresh-then-fold dance). An empty result abandons
     the now-empty command commit and lets the plan step retire the bookmark.
@@ -825,12 +825,12 @@ def run_job(
 
 
 def _load_job_specs(jobs_dir: Path) -> dict[str, dict]:
-    """Parse the ``*.toml`` fragments a generator wrote into ``jobs_dir``.
+    """Parse the *.toml fragments a generator wrote into jobs_dir.
 
-    Files are read in sorted order and their ``[job.<name>]`` tables merged by
-    name (later files win), the same machinery used for the ``.repoactive.d``
-    directory. Fragments may only contain ``[job.<name>]`` tables (see
-    ``FragmentShape``). Returns the raw job-spec table keyed by name, before
+    Files are read in sorted order and their [job.<name>] tables merged by
+    name (later files win), the same machinery used for the .repoactive.d
+    directory. Fragments may only contain [job.<name>] tables (see
+    FragmentShape). Returns the raw job-spec table keyed by name, before
     inheritance/validation.
     """
     specs: dict[str, dict] = {}
@@ -849,14 +849,14 @@ def _build_generated_job(  # noqa: PLR0913
     all_config_names: set[str],
     marked_secret_names: frozenset[str],
 ) -> Job:
-    """Build one emitted ``Job`` from its raw spec, applying inheritance.
+    """Build one emitted Job from its raw spec, applying inheritance.
 
-    ``name`` is the spec's table key. The job inherits the (resolved) generator's
-    tags, ``depends_on`` and the ``_INHERITED_FIELDS`` unless the spec overrides
-    them, and records the generator in ``generated_by``. Raises GeneratedJobError
+    name is the spec's table key. The job inherits the (resolved) generator's
+    tags, depends_on and the _INHERITED_FIELDS unless the spec overrides
+    them, and records the generator in generated_by. Raises GeneratedJobError
     on a name colliding with an existing job, a nested generator, a job that
-    fails validation, or a ``secret_env`` naming a secret the static config did
-    not already mark (``marked_secret_names``).
+    fails validation, or a secret_env naming a secret the static config did
+    not already mark (marked_secret_names).
     """
     if name in run_names or name in all_config_names:
         raise GeneratedJobError(
@@ -905,13 +905,13 @@ def _build_generated_jobs(
     all_config_names: set[str],
     marked_secret_names: frozenset[str] = frozenset(),
 ) -> list[Job]:
-    """Turn a generator's raw specs into validated ``Job`` objects.
+    """Turn a generator's raw specs into validated Job objects.
 
-    Validates each spec (see ``_build_generated_job``), that every
-    ``depends_on`` target is within this run (the existing jobs or a sibling
+    Validates each spec (see _build_generated_job), that every
+    depends_on target is within this run (the existing jobs or a sibling
     emitted job), and that the emitted jobs are acyclic — a cycle would
     otherwise silently mis-order the topological sort and crash the run.
-    ``generator`` must be resolved (its inherited fields filled in).
+    generator must be resolved (its inherited fields filled in).
     """
     emitted = [
         _build_generated_job(
@@ -984,9 +984,9 @@ def _last_run_if_on_cooldown(job: Job, repo_path: Path) -> datetime | None:
 
 
 class SkipReason(StrEnum):
-    """Which ``RunSummary`` set a skipped job's name is recorded in.
+    """Which RunSummary set a skipped job's name is recorded in.
 
-    ``_apply_outcome`` matches each member to the set it names.
+    _apply_outcome matches each member to the set it names.
     """
 
     dependency_failed = "dependency_failed"
@@ -997,14 +997,14 @@ class SkipReason(StrEnum):
 
 @dataclass
 class DispatchOutcome:
-    """What a dispatch step decided for a job; applied to ``ctx`` in one place.
+    """What a dispatch step decided for a job; applied to ctx in one place.
 
-    ``skip_reason`` names the ``RunSummary`` set the job's name is recorded in
-    — ``None`` when the job actually ran. Each gate/run step builds one of
-    these instead of touching ``ctx.summary`` directly, so ``_dispatch_job``
-    has a single place that applies them. A plain ``DispatchOutcome`` instance
-    is always truthy (unlike the ``list[Job]`` it ultimately yields), so gates
-    can chain with ``or`` and still let an empty ``emitted`` list through.
+    skip_reason names the RunSummary set the job's name is recorded in
+    — None when the job actually ran. Each gate/run step builds one of
+    these instead of touching ctx.summary directly, so _dispatch_job
+    has a single place that applies them. A plain DispatchOutcome instance
+    is always truthy (unlike the list[Job] it ultimately yields), so gates
+    can chain with or and still let an empty emitted list through.
     """
 
     result: JobResult | None = None
@@ -1017,7 +1017,7 @@ class DispatchOutcome:
 
 
 def _apply_outcome(ctx: RunContext, job: Job, outcome: DispatchOutcome) -> None:
-    """Record a job's dispatch outcome in ``ctx``; the only function that does."""
+    """Record a job's dispatch outcome in ctx; the only function that does."""
     summary = ctx.summary
     if outcome.result is not None:
         summary.results[job.name] = outcome.result
@@ -1041,21 +1041,21 @@ def _apply_outcome(ctx: RunContext, job: Job, outcome: DispatchOutcome) -> None:
 
 
 def _dispatch_job(ctx: RunContext, *, job: Job) -> list[Job]:
-    """Run a single job, recording its outcome in ``ctx.summary``.
+    """Run a single job, recording its outcome in ctx.summary.
 
-    A failed or dependency-skipped job lands in ``summary.failed``/
-    ``summary.dependency_failed``, so ``_dispatch_blocked_deps`` blocks its
-    dependents in turn. Returns the jobs a generator (``emits_jobs``) produced
+    A failed or dependency-skipped job lands in summary.failed/
+    summary.dependency_failed, so _dispatch_blocked_deps blocks its
+    dependents in turn. Returns the jobs a generator (emits_jobs) produced
     — an empty list for an ordinary job or a generator that emitted
-    nothing/was skipped. ``ctx.selection.jobs`` is every job in this run
-    (``_run_jobs`` keeps it in sync as generators emit), so its names reject an emitted job that
-    collides with an existing one. ``ctx.selection.refreshed`` names the jobs that
+    nothing/was skipped. ctx.selection.jobs is every job in this run
+    (_run_jobs keeps it in sync as generators emit), so its names reject an emitted job that
+    collides with an existing one. ctx.selection.refreshed names the jobs that
     already have an unmerged branch; such a job is never cooldown-skipped or
     run_only_if_changed-skipped, so its branch is refreshed (ADR 0003).
-    ``ctx.selection.successors`` names the jobs force-included because their
+    ctx.selection.successors names the jobs force-included because their
     commits sit above a selected job's bookmark; they bypass their own cooldown
     but are skipped when every dependency was itself skipped this run.
-    ``ctx.selection.explicit`` names the jobs requested by name on the command
+    ctx.selection.explicit names the jobs requested by name on the command
     line; naming a job runs it now, so it too bypasses the cooldown skip. The
     plan is built by _record_job_plan, not here.
     """
@@ -1074,7 +1074,7 @@ def _dispatch_job(ctx: RunContext, *, job: Job) -> list[Job]:
 
 
 def _dispatch_blocked_deps(ctx: RunContext, job: Job) -> DispatchOutcome | None:
-    """Skip ``job`` if any of its dependencies already failed or were skipped."""
+    """Skip job if any of its dependencies already failed or were skipped."""
     summary = ctx.summary
     blocking_deps = [
         d for d in job.depends_on if d in summary.dependency_failed or d in summary.failed
@@ -1090,7 +1090,7 @@ def _dispatch_blocked_deps(ctx: RunContext, job: Job) -> DispatchOutcome | None:
 def _dispatch_run_only_if_changed_gate(
     ctx: RunContext, job: Job, parents: list[str]
 ) -> DispatchOutcome | None:
-    """Skip ``job`` when none of its ``run_only_if_changed`` deps produced a diff.
+    """Skip job when none of its run_only_if_changed deps produced a diff.
 
     run_only_if_changed gates jobs whose effect is conditional on upstream
     diffs. A refreshed job bypasses the gate for the same reason it bypasses
@@ -1119,7 +1119,7 @@ def _dispatch_run_only_if_changed_gate(
 def _dispatch_successor_gate(
     ctx: RunContext, job: Job, parents: list[str]
 ) -> DispatchOutcome | None:
-    """Skip a successor ``job`` when nothing below it in the stack ran.
+    """Skip a successor job when nothing below it in the stack ran.
 
     A successor exists to be rebuilt when the stack below it moves. If every
     dependency was itself skipped this run (cooldown or an earlier successor
@@ -1145,7 +1145,7 @@ def _dispatch_successor_gate(
 def _dispatch_cooldown_gate(
     ctx: RunContext, job: Job, parents: list[str]
 ) -> DispatchOutcome | None:
-    """Skip ``job`` if it is still within its cooldown period.
+    """Skip job if it is still within its cooldown period.
 
     Cooldown only throttles *starting fresh work*. A job that already has an
     open (unmerged) branch must always run so it is rebased on the latest trunk
@@ -1183,7 +1183,7 @@ def _dispatch_cooldown_gate(
 
 
 def _dispatch_run(ctx: RunContext, job: Job, parents: list[str]) -> DispatchOutcome:
-    """Run ``job`` for real (ordinary command or generator), recording the outcome."""
+    """Run job for real (ordinary command or generator), recording the outcome."""
     start = time.monotonic()
     try:
         result = (
@@ -1202,13 +1202,13 @@ def _dispatch_run(ctx: RunContext, job: Job, parents: list[str]) -> DispatchOutc
 
 
 def _run_generator_job(ctx: RunContext, *, job: Job, parents: list[str]) -> JobResult:
-    """Run a generator and return a result carrying its emitted jobs (resolved ``job`` required).
+    """Run a generator and return a result carrying its emitted jobs (resolved job required).
 
-    The command runs in a fresh workspace on top of ``parents`` with
-    ``RA_JOBS_DIR`` pointing at an empty directory; it writes ``*.toml``
+    The command runs in a fresh workspace on top of parents with
+    RA_JOBS_DIR pointing at an empty directory; it writes *.toml
     fragments there which are parsed once it exits. The generator itself produces
     no diff: any working-copy change it leaves is discarded (ADR 0004), and a
-    no-op ``JobResult`` is recorded so its emitted jobs (which depend on it)
+    no-op JobResult is recorded so its emitted jobs (which depend on it)
     compute their parents through it. A failure to run or to build the emitted
     set blocks the generator's dependents, exactly like an ordinary job failure.
     """
@@ -1272,10 +1272,10 @@ def _record_deleted_bookmark(result: JobResult, *, repo: JJ, plan: UpdatePlan) -
 
 
 def _record_job_plan(ctx: RunContext, job: Job) -> None:
-    """Finalize a job's bookmark and record its push/MR in ``ctx.plan`` (ADR 0020).
+    """Finalize a job's bookmark and record its push/MR in ctx.plan (ADR 0020).
 
-    ``run_job`` already rewrote the command commit in place (or wrote a fresh
-    commit and pointed the bookmark at it) and left ``result.effective_revsets``
+    run_job already rewrote the command commit in place (or wrote a fresh
+    commit and pointed the bookmark at it) and left result.effective_revsets
     at the branch tip, so the bookmark is already positioned. This only:
     - No diff produced: deletes the old bookmark if the command ran and found
       nothing (cooldown/successor/gated skips are left untouched) and records a
@@ -1426,11 +1426,11 @@ def _run_jobs(ctx: RunContext) -> None:
 
 
 def _suppress_superseded_mrs(*, plan: UpdatePlan, results: dict[str, JobResult]) -> None:
-    """Drop the MR of every ``create_mr = "unless-superseded"`` job whose changes a dependent's MR already contains.
+    """Drop the MR of every create_mr = "unless-superseded" job whose changes a dependent's MR already contains.
 
     A dependent's change is stacked on its dependencies' branches
-    (``_compute_parents``), so a dependent's MR diff already includes this job's
-    changes. ``results`` is in run order (topological), so walking it in reverse
+    (_compute_parents), so a dependent's MR diff already includes this job's
+    changes. results is in run order (topological), so walking it in reverse
     decides each job before its dependencies: a job whose MR survives covers its
     dependencies, and a covered job passes its cover down (even when it records
     no MR itself, e.g. an empty job the stack built through). Only MRs recorded
@@ -1603,7 +1603,7 @@ def apply_plan(
 ) -> ApplyResult:
     """Carry out the remote operations collected during a run.
 
-    Pushes each bookmark and, in ``publish`` mode, creates/updates each MR. MRs
+    Pushes each bookmark and, in publish mode, creates/updates each MR. MRs
     are processed in plan order (topological), so a dependency's MR URL is known
     by the time a dependent that links to it is reached. The MR loop is
     fail-fast: the first failing MR is recorded per job and the remaining

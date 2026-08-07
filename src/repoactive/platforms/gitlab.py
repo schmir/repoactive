@@ -30,11 +30,11 @@ def _mr_title(title: str, *, draft: bool) -> str:
 
 
 def _ready_for_auto_merge(mr: ProjectMergeRequest) -> bool:
-    """Report whether GitLab can accept merge_when_pipeline_succeeds for ``mr``.
+    """Report whether GitLab can accept merge_when_pipeline_succeeds for mr.
 
     Two conditions must hold. The mergeability check must be done: setting the
-    flag while detailed_merge_status is still ``checking``/``unchecked``/
-    ``preparing`` returns 422 "Branch cannot be merged". And a pipeline must
+    flag while detailed_merge_status is still checking/unchecked/preparing
+    returns 422 "Branch cannot be merged". And a pipeline must
     exist: with none, merge_when_pipeline_succeeds has nothing to wait for and
     GitLab merges immediately, defeating the point of auto-merge.
     """
@@ -110,10 +110,10 @@ class GitLabPlatform(Platform):
         return mr.web_url
 
     def _enable_auto_merge(self, mr: ProjectMergeRequest) -> None:
-        """Enable auto-merge on ``mr``, retrying until it is accepted.
+        """Enable auto-merge on mr, retrying until it is accepted.
 
         The merge call sends both auto-merge parameters: on GitLab >= 17.11
-        ``auto_merge`` selects the "merge when checks pass" strategy and older
+        auto_merge selects the "merge when checks pass" strategy and older
         GitLab ignores it and honors the deprecated
         merge_when_pipeline_succeeds. Right after a push GitLab rejects the
         call (405/422) while its state is still settling - the mergeability

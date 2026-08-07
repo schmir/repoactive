@@ -73,7 +73,7 @@ BranchShape = NoBranch | AlreadyMerged | AllPrerequisites | NormalLayers | Unexp
 
 
 def classify_branch(*, repo: JJ, bookmark: str, parents: list[str], job_name: str) -> BranchShape:
-    """Classify ``bookmark``'s commits relative to ``parents`` per ADR 0019's branch-layer detection."""
+    """Classify bookmark's commits relative to parents per ADR 0019's branch-layer detection."""
     bookmark_change_id = repo.bookmark_change_id(bookmark)
     if bookmark_change_id is None:
         return NoBranch()

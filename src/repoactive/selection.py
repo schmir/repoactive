@@ -1,10 +1,10 @@
 """Choose and order the jobs a run operates on.
 
-``JobSelector`` is the entry point: constructed from a config and the requested
-names/tags (validating them), its ``select_run_jobs`` resolves an ordered
-``JobSelection`` for a repo, folding in unmerged-branch refresh and stacked
-successors. ``run_all`` builds the selector before taking the lock (so a bad
-request fails early) and calls ``select_run_jobs`` once the repository is prepared.
+JobSelector is the entry point: constructed from a config and the requested
+names/tags (validating them), its select_run_jobs resolves an ordered
+JobSelection for a repo, folding in unmerged-branch refresh and stacked
+successors. run_all builds the selector before taking the lock (so a bad
+request fails early) and calls select_run_jobs once the repository is prepared.
 """
 
 import logging
@@ -38,23 +38,23 @@ class UnknownTagsError(ValueError):
 
 @dataclass
 class JobSelection:
-    """The outcome of ``select_run_jobs``: the ordered jobs and the force-included subsets.
+    """The outcome of select_run_jobs: the ordered jobs and the force-included subsets.
 
-    ``refreshed`` names the jobs pulled in because they have an unmerged branch
+    refreshed names the jobs pulled in because they have an unmerged branch
     (empty for explicit selection). It lets the run bypass the cooldown skip for
     those jobs so their branches are rebased (ADR 0003) without a second
     unmerged-branch query.
 
-    ``successors`` names the jobs pulled in because their commits sit above a
-    selected job's bookmark (``select_run_jobs``). They exist to be rebuilt
+    successors names the jobs pulled in because their commits sit above a
+    selected job's bookmark (select_run_jobs). They exist to be rebuilt
     when the stack below them moves: they bypass their own cooldown, but are
     skipped when every dependency was itself skipped this run — an unchanged
-    stack needs no rebuild (see ``_dispatch_job``).
+    stack needs no rebuild (see _dispatch_job).
 
-    ``explicit`` names the jobs the caller asked for by name on the command
-    line (``requested_names``, empty on the default run and for tag selection).
+    explicit names the jobs the caller asked for by name on the command
+    line (requested_names, empty on the default run and for tag selection).
     Naming a job is a request to run it now, so it bypasses the cooldown skip
-    (see ``_dispatch_job``); its force-included dependencies are not in this
+    (see _dispatch_job); its force-included dependencies are not in this
     set and stay subject to their own cooldowns.
     """
 
@@ -65,13 +65,13 @@ class JobSelection:
 
 
 class JobSelector:
-    """Resolves a requested ``(names, tags)`` selection against a config into a run.
+    """Resolves a requested (names, tags) selection against a config into a run.
 
-    Construction validates the request (``_validate_selection``) so a mistyped job
+    Construction validates the request (_validate_selection) so a mistyped job
     name or tag fails before any repository work - run_all builds the selector
     before taking the lock or touching the repo, so the failure comes before any
     state changes and before the undo hint is printed for a run that did nothing.
-    ``select_run_jobs`` then produces the ordered ``JobSelection`` for a repo.
+    select_run_jobs then produces the ordered JobSelection for a repo.
     """
 
     def __init__(
@@ -93,7 +93,7 @@ class JobSelector:
     def _include_dependencies(self, preselected: frozenset[str]) -> frozenset[str]:
         """Add the transitive dependencies of every selected job.
 
-        Iterating ``_all_jobs`` in reverse propagates dependencies of dependencies
+        Iterating _all_jobs in reverse propagates dependencies of dependencies
         in a single pass (relies on topological order).
         """
         selected = set(preselected)
@@ -103,9 +103,9 @@ class JobSelector:
         return frozenset(selected)
 
     def _drop_jobs_with_unselected_deps(self, preselected: frozenset[str]) -> frozenset[str]:
-        """Drop from ``preselected`` any job that depends on a job not selected.
+        """Drop from preselected any job that depends on a job not selected.
 
-        The drop cascades to further dependents because ``_all_jobs`` is topologically
+        The drop cascades to further dependents because _all_jobs is topologically
         sorted: a dependency removed earlier is already gone by the time its
         dependent is checked.
         """
@@ -129,7 +129,7 @@ class JobSelector:
         """Retrieve job names with an unmerged commit to refresh on the bare default run.
 
         Scans the mutable commits that are not ancestors of any job's base branch
-        (``base_branch``, defaulting to ``trunk()``) for ``Repoactive-Job``
+        (base_branch, defaulting to trunk()) for Repoactive-Job
         trailers, then intersects with the configured job names. These are the
         stale branches the default run rebases on their base now rather than
         waiting for each job's next scheduled run (ADR 0003).
@@ -157,20 +157,20 @@ class JobSelector:
         """Pick and order the jobs to run.
 
         Selection is by tag. With no names and no tags this is the default run:
-        every job carrying ``DEFAULT_TAG`` (see ``Job.effective_tags``), with a
+        every job carrying DEFAULT_TAG (see Job.effective_tags), with a
         job dropped if any dependency is not itself selected, plus any job with
         an unmerged branch (refreshed so its stale branch is rebased on trunk
         now rather than at the job's next run, ADR 0003). A job whose dependency
         is refreshed into the run this way is kept, not dropped - the dependency
         is present, so the job stacks on its fresh output. Naming jobs or passing
         tags is explicit selection: the union of the named jobs and the jobs
-        matching any requested tag (``DEFAULT_TAG`` is not implied), with all
+        matching any requested tag (DEFAULT_TAG is not implied), with all
         dependencies force-included and no unmerged-branch refresh. Either way,
         jobs whose commits sit in the stack above a selected job's bookmark are
         pulled in as successors so they are rebuilt on the new output (ADR 0012).
 
-        Returns a ``JobSelection`` carrying the ordered jobs and the refreshed
-        and successor subsets; the caller reuses ``refreshed`` so a job being
+        Returns a JobSelection carrying the ordered jobs and the refreshed
+        and successor subsets; the caller reuses refreshed so a job being
         refreshed bypasses the cooldown skip without a second unmerged-branch
         query.
         """

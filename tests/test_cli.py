@@ -42,7 +42,7 @@ def _plain(output: str) -> str:
 
     typer forces terminal mode (and thus rich's styled help output) when
     GITHUB_ACTIONS, FORCE_COLOR, or PY_COLORS is set, even under CliRunner;
-    the styling splits option names like ``--debug`` across escape sequences.
+    the styling splits option names like --debug across escape sequences.
     """
     return _ANSI_RE.sub("", output)
 

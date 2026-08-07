@@ -4,13 +4,13 @@
 # ///
 """repoactive generator: emit one dependency-upgrade job per project dependency.
 
-Reads ``pyproject.toml`` from the current directory and, for every dependency D
-in ``[project.dependencies]``, emits a job named ``upgrade-D`` whose command is
-``uv lock -P D`` (bump only that one dependency in the lockfile).
+Reads pyproject.toml from the current directory and, for every dependency D
+in [project.dependencies], emits a job named upgrade-D whose command is
+uv lock -P D (bump only that one dependency in the lockfile).
 
-repoactive runs this as a generator (a ``[job.<name>]`` with ``emits_jobs =
-true``): it points the ``RA_JOBS_DIR`` environment variable at a
-directory this script writes ``*.toml`` job fragments into, and runs the emitted
+repoactive runs this as a generator (a [job.<name>] with emits_jobs =
+true): it points the RA_JOBS_DIR environment variable at a
+directory this script writes *.toml job fragments into, and runs the emitted
 jobs in the same invocation. See docs/adr/0004-job-generators.md.
 
 Register it by adding to your repoactive config::
@@ -40,11 +40,11 @@ _NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 
 
 def dependency_names(pyproject: dict) -> list[str]:
-    """Return the distribution name of each entry in ``[project.dependencies]``.
+    """Return the distribution name of each entry in [project.dependencies].
 
     Order is preserved and duplicates dropped; the version specifier, extras and
-    markers are stripped, leaving just the name (e.g. ``"pydantic>=2,<3"`` ->
-    ``"pydantic"``).
+    markers are stripped, leaving just the name (e.g. "pydantic>=2,<3" ->
+    "pydantic").
     """
     names: list[str] = []
     for requirement in pyproject.get("project", {}).get("dependencies", []):
@@ -55,17 +55,17 @@ def dependency_names(pyproject: dict) -> list[str]:
 
 
 def job_name(dependency: str) -> str:
-    """Map a dependency name to a valid repoactive job name ``upgrade-<dep>``.
+    """Map a dependency name to a valid repoactive job name upgrade-<dep>.
 
-    Job names allow only letters, digits, ``-`` and ``_``, so every other run of
-    characters (e.g. the dot in ``ruamel.yaml``) collapses to a single hyphen.
+    Job names allow only letters, digits, - and _, so every other run of
+    characters (e.g. the dot in ruamel.yaml) collapses to a single hyphen.
     """
     slug = re.sub(r"[^A-Za-z0-9_-]+", "-", dependency).strip("-")
     return f"upgrade-{slug}"
 
 
 def jobs_document(names: list[str]) -> dict:
-    """Build the TOML document mapping with one ``[job.<name>]`` per dependency."""
+    """Build the TOML document mapping with one [job.<name>] per dependency."""
     return {
         "job": {
             job_name(name): {

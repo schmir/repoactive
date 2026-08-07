@@ -36,7 +36,7 @@ JJ_INSTALL_URL = "https://docs.jj-vcs.dev/latest/install-and-setup/#installation
 
 
 def _jj_timestamp(dt: datetime) -> str:
-    """Format ``dt`` for a jj date filter expression.
+    """Format dt for a jj date filter expression.
 
     jj's date parser rejects fractional seconds, so microseconds are dropped.
     """
@@ -49,9 +49,9 @@ def workspace_name(job_name: str) -> str:
 
 
 def revset_heads(revs: list[str]) -> str:
-    """Build a revset selecting the heads of ``revs``.
+    """Build a revset selecting the heads of revs.
 
-    Wraps the (non-empty) union of ``revs`` in jj's ``heads()``, dropping any
+    Wraps the (non-empty) union of revs in jj's heads(), dropping any
     commit that is an ancestor of another in the set. Used to merge prerequisite
     heads with the run's parents: an unmoved trunk collapses to a single parent
     (no needless merge commit), a diverged one survives as a real second parent
@@ -66,7 +66,7 @@ class JJError(Exception):
 
 
 class CommandFailedError(JJError):
-    """Raised when an invoked ``jj`` or ``git`` command exits non-zero."""
+    """Raised when an invoked jj or git command exits non-zero."""
 
     def __init__(self, program: str, args: tuple[str, ...], stderr: str) -> None:
         super().__init__(f"{program} {' '.join(args)} failed:\n{stderr.strip()}")
@@ -80,7 +80,7 @@ class RemoteNotFoundError(JJError):
 
 
 class JJNotFoundError(Exception):
-    """Raised when the ``jj`` executable is not on PATH."""
+    """Raised when the jj executable is not on PATH."""
 
     def __init__(self) -> None:
         super().__init__(
@@ -89,7 +89,7 @@ class JJNotFoundError(Exception):
 
 
 def require_jj_on_path() -> None:
-    """Verify the ``jj`` executable is on PATH, raising JJNotFoundError otherwise."""
+    """Verify the jj executable is on PATH, raising JJNotFoundError otherwise."""
     if shutil.which("jj") is None:
         raise JJNotFoundError()
 
@@ -128,9 +128,9 @@ class MissingGitDirError(NotAColocatedRepoError):
 
 
 def require_colocated_repo(repo: Path) -> None:
-    """Verify ``repo`` is the root of a colocated jj repository.
+    """Verify repo is the root of a colocated jj repository.
 
-    A colocated repository has a ``.jj`` directory next to a ``.git`` directory.
+    A colocated repository has a .jj directory next to a .git directory.
     Raises NotAColocatedRepoError otherwise.
     """
     has_jj = (repo / ".jj").is_dir()
@@ -212,10 +212,10 @@ class JJ:
         global_args: tuple[str, ...] = (),
         cwd: Path | None = None,
     ) -> str:
-        """Run ``program`` with ``args``, raising CommandFailedError on a non-zero exit.
+        """Run program with args, raising CommandFailedError on a non-zero exit.
 
-        ``global_args`` are inserted between the program and ``args`` but kept out
-        of logs and error messages, which show only the caller's ``args``.
+        global_args are inserted between the program and args but kept out
+        of logs and error messages, which show only the caller's args.
         """
         run_cwd = cwd or self.cwd
         logger.debug("%s %s (cwd=%s)", program, " ".join(args), run_cwd)
@@ -253,17 +253,17 @@ class JJ:
         """Return the current operation id.
 
         Captured at the start of a run for the debug log and, on a local run, to
-        tell the user the exact ``jj op restore`` command that rolls the
+        tell the user the exact jj op restore command that rolls the
         repository back to this state.
         """
         return self._run("op", "log", "--no-graph", "--limit", "1", "-T", "id.short()").strip()
 
     def op_restore(self, op_id: str) -> None:
-        """Roll the whole repository back to operation ``op_id``.
+        """Roll the whole repository back to operation op_id.
 
         Used to undo a job's in-place rewrite when its command fails (ADR 0020):
         the rebase/edit/restore that regenerates the command commit are all
-        recorded as operations after ``op_id``, so restoring to it leaves the
+        recorded as operations after op_id, so restoring to it leaves the
         branch byte-for-byte as it was. Safe because runs are serialised by the
         run lock and jobs execute sequentially, so no concurrent operation races
         this restore.
@@ -274,9 +274,9 @@ class JJ:
     def op_checkpoint(self) -> Generator[Callable[[], None]]:
         """Capture the current operation and restore it if the block raises.
 
-        On entry the current ``op_id`` is recorded. If the ``with`` block raises,
+        On entry the current op_id is recorded. If the with block raises,
         the whole repository is rolled back to that operation via
-        :meth:`op_restore` before the exception propagates, undoing any in-place
+        op_restore before the exception propagates, undoing any in-place
         rewrites the block performed. The yielded callable triggers the same
         restore explicitly, for cases that need to roll back without raising::
 
@@ -297,10 +297,10 @@ class JJ:
             raise
 
     def git_init_colocate(self) -> None:
-        """Initialise a jj repository colocated with the git repository at ``cwd``.
+        """Initialise a jj repository colocated with the git repository at cwd.
 
-        Runs ``jj git init --colocate``, which creates a ``.jj`` directory next
-        to the existing ``.git`` without touching git history.
+        Runs jj git init --colocate, which creates a .jj directory next
+        to the existing .git without touching git history.
         """
         self._run("git", "init", "--colocate")
 
@@ -308,11 +308,11 @@ class JJ:
         self._run("new", *parents)
 
     def edit(self, revision: str) -> None:
-        """Make ``revision`` the working-copy commit (``@``) of this workspace.
+        """Make revision the working-copy commit (@) of this workspace.
 
-        Used to rewrite a commit in place: point ``@`` at the command commit so a
+        Used to rewrite a commit in place: point @ at the command commit so a
         subsequent restore + command run regenerate its content directly, keeping
-        its change-id (ADR 0020). Only this workspace's ``@`` moves.
+        its change-id (ADR 0020). Only this workspace's @ moves.
         """
         self._run("edit", revision)
 
@@ -320,10 +320,10 @@ class JJ:
         self._run("restore", "--from", source_rev, "--into", destination_rev)
 
     def restore_working_copy(self) -> None:
-        """Reset ``@`` to its parent's contents, discarding its own diff.
+        """Reset @ to its parent's contents, discarding its own diff.
 
-        ``jj restore`` with no paths restores every path from the parent, leaving
-        ``@`` empty. Used after ``edit`` to give a command a clean tree to
+        jj restore with no paths restores every path from the parent, leaving
+        @ empty. Used after edit to give a command a clean tree to
         regenerate its output into, in place of the old command commit's diff
         (ADR 0020).
         """
@@ -343,11 +343,11 @@ class JJ:
         return self.bookmark_change_id(name) is not None
 
     def remote_bookmark_exists(self, name: str) -> bool:
-        """Return True if a remote-tracking bookmark for ``name`` exists."""
+        """Return True if a remote-tracking bookmark for name exists."""
         return self.remote_bookmark_commit_id(name) is not None
 
     def remote_bookmark_commit_id(self, name: str) -> str | None:
-        """Return the git commit id the remote-tracking bookmark ``name`` points at, or None."""
+        """Return the git commit id the remote-tracking bookmark name points at, or None."""
         revset = f'remote_bookmarks(exact:"{name}")'
         output = self._run("log", "--no-graph", "-r", revset, "-T", 'commit_id ++ "\\n"')
         lines = [line for line in output.splitlines() if line]
@@ -390,34 +390,34 @@ class JJ:
         self._run("abandon", revision)
 
     def same_content(self, rev1: str, rev2: str) -> bool:
-        """Return True if ``rev1`` and ``rev2`` have identical tree contents."""
+        """Return True if rev1 and rev2 have identical tree contents."""
         return not self._run("diff", "--git", "--from", rev1, "--to", rev2).strip()
 
     def bookmark_change_id(self, name: str) -> str | None:
-        """Return the change-id of the local bookmark ``name``, or None if absent."""
+        """Return the change-id of the local bookmark name, or None if absent."""
         revset = f'bookmarks(exact:"{name}")'
         output = self._run("log", "--no-graph", "-r", revset, "-T", 'change_id ++ "\\n"')
         lines = [line for line in output.splitlines() if line]
         return lines[0] if lines else None
 
     def rebase_revision(self, revision: str, *onto: str) -> None:
-        """Rebase a specific revision onto ``onto`` without touching ``@``.
+        """Rebase a specific revision onto onto without touching @.
 
-        Uses ``-r``: only ``revision`` moves. Any existing descendant of
-        ``revision`` is left behind, refilled onto ``revision``'s old
-        parent(s) instead of following it to ``onto`` (jj's own "-r" gap-fill
-        behaviour) — use ``rebase_source`` when descendants must follow.
+        Uses -r: only revision moves. Any existing descendant of
+        revision is left behind, refilled onto revision's old
+        parent(s) instead of following it to onto (jj's own "-r" gap-fill
+        behaviour) — use rebase_source when descendants must follow.
         """
         onto_args = [arg for parent in onto for arg in ("--onto", parent)]
         self._run("rebase", "-r", revision, *onto_args)
 
     def rebase_source(self, revision: str, *onto: str) -> None:
-        """Rebase ``revision`` and all its descendants onto ``onto`` without touching ``@``."""
+        """Rebase revision and all its descendants onto onto without touching @."""
         onto_args = [arg for parent in onto for arg in ("--onto", parent)]
         self._run("rebase", "-s", revision, *onto_args)
 
     def describe_revision(self, revision: str, message: str) -> None:
-        """Set the commit message of a specific revision without touching ``@``."""
+        """Set the commit message of a specific revision without touching @."""
         self._run("describe", "-r", revision, "--message", message)
 
     def get_description(self, revision: str) -> str:
@@ -431,15 +431,15 @@ class JJ:
         self._run("describe", "--message", message)
 
     def change_id(self, revision: str = "@") -> str:
-        """Return the short change id of ``revision`` (the working copy by default)."""
+        """Return the short change id of revision (the working copy by default)."""
         return self._run("log", "--no-graph", "-r", revision, "-T", "change_id.short()").strip()
 
     def recent_job_commits(self, since: datetime, revset: str = "all()") -> list[JobCommit]:
-        """Return commits matching ``revset`` within ``since`` that carry a repoactive job trailer.
+        """Return commits matching revset within since that carry a repoactive job trailer.
 
         Results are ordered newest-first (jj's default log order).
-        Pass ``revset="::trunk()"`` for merged commits only,
-        ``revset="~(::trunk())"`` for unmerged only.
+        Pass revset="::trunk()" for merged commits only,
+        revset="~(::trunk())" for unmerged only.
         """
         revset = f'{revset} & committer_date(after:"{_jj_timestamp(since)}")'
         template = f"""
@@ -452,11 +452,11 @@ class JJ:
         return _parse_job_commits(output)
 
     def job_commits_in_revset(self, revset: str, job_name: str) -> list[JobCommit]:
-        """Return commits in ``revset`` carrying a ``Repoactive-Job`` trailer for ``job_name``.
+        """Return commits in revset carrying a Repoactive-Job trailer for job_name.
 
         Ordered newest-first (jj's default log order). Branch-layer detection
         (ADR 0019) uses this to locate this job's command commit within a
-        branch slice ``P..R`` - exactly one match on a normal branch, zero when
+        branch slice P..R - exactly one match on a normal branch, zero when
         the branch is all human commits, more than one only on a corrupted
         branch.
         """
@@ -477,9 +477,9 @@ class JJ:
         return not output.strip()
 
     def heads(self, revset: str) -> list[str]:
-        """Return the change-id heads of ``revset``, or [] if empty.
+        """Return the change-id heads of revset, or [] if empty.
 
-        Used to find the prerequisite tip ``heads((P..C) & ~C)``. A linear
+        Used to find the prerequisite tip heads((P..C) & ~C). A linear
         prerequisite chain has one head; [] means there are no prerequisites.
         """
         output = self._run(
@@ -488,9 +488,9 @@ class JJ:
         return [line for line in output.splitlines() if line]
 
     def roots(self, revset: str) -> list[str]:
-        """Return the change-id roots of ``revset``, or [] if empty.
+        """Return the change-id roots of revset, or [] if empty.
 
-        Used to find the bottom fixups ``roots(C..R)`` - the commits directly
+        Used to find the bottom fixups roots(C..R) - the commits directly
         above the command commit - so the fixup chain can be reapplied on the
         regenerated output. A linear fixup chain has one root; [] means there
         are no fixups.
@@ -501,12 +501,12 @@ class JJ:
         return [line for line in output.splitlines() if line]
 
     def commit_ids(self, revset: str) -> list[str]:
-        """Return the git commit ids of the commits in ``revset``, or [] if empty."""
+        """Return the git commit ids of the commits in revset, or [] if empty."""
         output = self._run("log", "--no-graph", "-r", revset, "-T", 'commit_id ++ "\\n"')
         return [line for line in output.splitlines() if line]
 
     def has_conflict(self, revset: str) -> bool:
-        """Return True if any commit in ``revset`` contains a materialized conflict.
+        """Return True if any commit in revset contains a materialized conflict.
 
         jj refuses to push a conflicted commit, so ADR 0019 checks this before
         pushing a rebuilt branch and freezes (pushes nothing) when it holds.
@@ -534,19 +534,19 @@ class JJ:
     def last_job_commit_date(
         self, *, job_names: Collection[str], base: str, since: datetime
     ) -> datetime | None:
-        """Return the committer date of the most recent job commit on ``base``, or ``None``.
+        """Return the committer date of the most recent job commit on base, or None.
 
-        Matches commits that have a ``Repoactive-Job`` trailer whose value is any
-        of ``job_names`` and a committer date at or after ``since``. Used to
+        Matches commits that have a Repoactive-Job trailer whose value is any
+        of job_names and a committer date at or after since. Used to
         throttle jobs: a recent landing on the base branch means the job is still
         on cooldown. Passing more than one name lets a job be throttled by a
-        superseding job's landing too (``cooldown_on``, ADR 0015).
+        superseding job's landing too (cooldown_on, ADR 0015).
 
         The trailer is matched via jj's trailer parsing, which only considers the
         final paragraph of the description, so a stray matching line in the body
         is correctly ignored.
 
-        Returns the newest matching committer timestamp, or ``None`` if no match.
+        Returns the newest matching committer timestamp, or None if no match.
         """
         # Job names are regex-restricted (config._JOB_NAME_RE), so interpolating
         # them into the template is as safe as the single-name case.
@@ -633,10 +633,10 @@ class JJ:
         """Reconcile this workspace's working copy if another workspace's rewrite staled it.
 
         Rewriting a commit that another workspace has checked out (e.g. the
-        default workspace, when a human's ``@`` sits on the repoactive branch a
+        default workspace, when a human's @ sits on the repoactive branch a
         job is rewriting in place; ADR 0020) marks that workspace stale, and jj
         then refuses further working-copy commands there, including
-        ``workspace add`` for the next job. ``update-stale`` fast-forwards the
+        workspace add for the next job. update-stale fast-forwards the
         working copy to the rewritten commit. A no-op when it is not stale.
         """
         self._run("workspace", "update-stale")
@@ -694,7 +694,7 @@ class JJ:
     def temp_workspace(
         self, name: str, colocation: Colocation = Colocation.COLOCATED
     ) -> Generator["JJ"]:
-        """Create a workspace named ``name`` in a temp directory, cleaning up on exit.
+        """Create a workspace named name in a temp directory, cleaning up on exit.
 
         Adds a jj workspace inside a fresh temp directory and yields a JJ bound
         to it. On exit the workspace is forgotten, the temp directory removed,

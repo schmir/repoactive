@@ -1,7 +1,7 @@
 """Shared constants for the repoactive contract between modules.
 
-Kept in a dependency-free leaf module so that both ``config`` (which builds
-trailers from a job) and ``jj`` (which matches them in revsets) can import it
+Kept in a dependency-free leaf module so that both config (which builds
+trailers from a job) and jj (which matches them in revsets) can import it
 without creating an import cycle.
 """
 

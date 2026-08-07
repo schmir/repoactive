@@ -1,7 +1,7 @@
 {
   "$defs": {
     "CreateMR": {
-      "description": "When a job creates its MR/PR.\n\n``always`` and ``never`` are written as ``true``/``false`` in TOML (the\noriginal boolean form, kept for backwards compatibility);\n``unless-superseded`` skips the MR when a dependent job produced an MR in\nthe same run (that MR is stacked on this job's branch, so it already\ncontains this job's changes).\nSee docs/adr/0009-unless-superseded-mr-creation.md.",
+      "description": "When a job creates its MR/PR.\n\nalways and never are written as true/false in TOML (the\noriginal boolean form, kept for backwards compatibility);\nunless-superseded skips the MR when a dependent job produced an MR in\nthe same run (that MR is stacked on this job's branch, so it already\ncontains this job's changes).\nSee docs/adr/0009-unless-superseded-mr-creation.md.",
       "enum": [
         "never",
         "always",

@@ -385,7 +385,7 @@ class TestRebaseRevision:
         to "a"'s new position; it is refilled onto "a"'s old parent
         ("trunk") instead, so it loses "a"'s contribution (fileA.txt). This is
         jj's own documented "-r" gap-fill behaviour, not a repoactive choice;
-        see ``rebase_source`` for the variant that keeps descendants stacked.
+        see rebase_source for the variant that keeps descendants stacked.
         """
         a_id = _setup_stack_and_destination(repo)
 

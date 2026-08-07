@@ -3,17 +3,17 @@
 A `repoactive run` mutates repository-global state: it forgets and recreates
 temporary workspaces, tracks bookmarks, pushes, and creates MRs. Two overlapping
 runs against the same repository race on that state — in particular
-``JJ.forget_stale_workspaces`` would forget a concurrent run's live
-``repoactive-tmp-*`` workspaces. ``run_lock`` serialises runs so only one holds
+JJ.forget_stale_workspaces would forget a concurrent run's live
+repoactive-tmp-* workspaces. run_lock serialises runs so only one holds
 the repository at a time.
 
-The lock is an advisory ``fcntl.flock`` on ``<repo>/.jj/repoactive.lock``. flock
+The lock is an advisory fcntl.flock on <repo>/.jj/repoactive.lock. flock
 releases automatically when the file descriptor is closed *and* when the holding
 process dies, so a killed run never leaves a stale lock behind — no PID-liveness
-probing is needed. The lock file lives in ``.jj`` (which jj keeps git-ignored),
+probing is needed. The lock file lives in .jj (which jj keeps git-ignored),
 so it is never tracked or pushed.
 
-Unix only: ``fcntl`` is not available on Windows, which repoactive does not
+Unix only: fcntl is not available on Windows, which repoactive does not
 target.
 """
 
@@ -76,7 +76,7 @@ def _write_holder(fd: int) -> None:
 def run_lock(repo_path: Path) -> Generator[None]:
     """Hold an exclusive per-repository run lock for the duration of the block.
 
-    Fail-fast: if another run holds the lock this raises ``RunLockHeldError``
+    Fail-fast: if another run holds the lock this raises RunLockHeldError
     immediately rather than waiting. The lock is released (and the descriptor
     closed) on exit, including on exceptions; the lock file itself is left in
     place so a waiter that has already opened it does not race a deletion.

@@ -1,4 +1,4 @@
-"""End-to-end tests driving the full ``run_all`` pipeline against a real jj repository."""
+"""End-to-end tests driving the full run_all pipeline against a real jj repository."""
 
 import subprocess
 from pathlib import Path
@@ -92,11 +92,11 @@ def repo(tmp_path: Path) -> JJ:
 
 @pytest.fixture
 def repo_with_remote(tmp_path: Path) -> JJ:
-    """Return a colocated repo with an ``origin`` remote and a pushed ``main`` trunk.
+    """Return a colocated repo with an origin remote and a pushed main trunk.
 
     The idempotency skip (ADR 0020) only fires in push mode against a real remote
-    (``run_idempotency_check`` compares the local tip to the remote-tracking
-    bookmark), so these tests must actually push (``RunMode.push``).
+    (run_idempotency_check compares the local tip to the remote-tracking
+    bookmark), so these tests must actually push (RunMode.push).
     """
     remote = tmp_path / "remote.git"
     subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True)
@@ -166,9 +166,9 @@ def test_new_dependent_stacks_on_previously_run_dependency(repo: JJ) -> None:
 def test_first_run_producing_a_diff_prints_committed(
     repo: JJ, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """A job's very first run that produces a diff must report ``committed``.
+    """A job's very first run that produces a diff must report committed.
 
-    This is the NoBranch/AlreadyMerged non-empty path in ``_run_job_build_result``:
+    This is the NoBranch/AlreadyMerged non-empty path in _run_job_build_result:
     every other outcome prints a status line, so a silent commit here leaves the
     user with no feedback that the job actually did anything.
     """
@@ -246,9 +246,9 @@ def _prereq_job_config(command: str) -> Config:
 
 
 def _add_prerequisite_below(repo: JJ, *, command_commit: str, base: str) -> str:
-    """Simulate a human placing a prerequisite below ``command_commit`` (ADR 0019).
+    """Simulate a human placing a prerequisite below command_commit (ADR 0019).
 
-    Commits a new change on ``base``, then rebases ``command_commit`` onto it,
+    Commits a new change on base, then rebases command_commit onto it,
     the native "rebase the branch onto your commit" workflow. Returns the
     prerequisite's change-id.
     """
@@ -339,13 +339,13 @@ def test_prerequisite_is_merged_with_moved_trunk_without_being_rebased(repo: JJ)
 def test_prerequisite_seeded_before_first_run_is_merged_with_trunk(repo: JJ) -> None:
     """A human-seeded prerequisite branch is picked up on the job's very first run.
 
-    The job has never run (no command commit, no ``Repoactive-Job`` trailer), and
+    The job has never run (no command commit, no Repoactive-Job trailer), and
     the human has seeded "release" with a lone prerequisite forked off trunk()'s
     parent (so "main" is *not* an ancestor of it).
 
-    ADR 0019's "No trailer match in a non-empty ``P..R``" degenerate case: all of
-    ``P..R`` is human commits, so it is all treated as prerequisites. The regenerated
-    command commit takes ``[R, *P]`` as parents, so "release" ends up parented on
+    ADR 0019's "No trailer match in a non-empty P..R" degenerate case: all of
+    P..R is human commits, so it is all treated as prerequisites. The regenerated
+    command commit takes [R, *P] as parents, so "release" ends up parented on
     both the prerequisite tip and trunk(), with repoactive's output on top.
     """
     # Build "main" with a parent: base <- main. The prerequisite will fork off
@@ -377,10 +377,10 @@ def test_prerequisite_seeded_before_first_run_is_merged_with_trunk(repo: JJ) -> 
 
 
 def _add_fixup_above(repo: JJ, *, bookmark: str, command_commit: str) -> str:
-    """Simulate a human committing a fixup on top of ``command_commit`` (ADR 0019).
+    """Simulate a human committing a fixup on top of command_commit (ADR 0019).
 
     A fixup reacts to the command's output and is simply committed on top. Moves
-    ``bookmark`` to the new commit, mimicking the human pushing it. Returns the
+    bookmark to the new commit, mimicking the human pushing it. Returns the
     fixup's change-id.
     """
     repo.new(command_commit)
@@ -651,11 +651,11 @@ def test_dependent_is_restacked_onto_dependencys_fixup_on_unchanged_rerun(repo: 
 
 
 def test_dependent_is_restacked_when_prerequisite_rebase_leaves_it_behind(repo: JJ) -> None:
-    """A prerequisite added to "bookmark_a" with a plain ``-r`` rebase strands "bookmark_b".
+    """A prerequisite added to "bookmark_a" with a plain -r rebase strands "bookmark_b".
 
     After a first run, the human inserts a prerequisite below "bookmark_a" the
-    native but wrong way, ``jj rebase --onto PREREQ -r bookmark_a``. In a stack,
-    ``-r`` moves only "bookmark_a", so jj gap-fills its orphaned child "bookmark_b"
+    native but wrong way, jj rebase --onto PREREQ -r bookmark_a. In a stack,
+    -r moves only "bookmark_a", so jj gap-fills its orphaned child "bookmark_b"
     back onto "bookmark_a"'s *old* parent (trunk), diverging it and losing
     "bookmark_a"'s output. The next run must repair this: keep the prerequisite
     beneath a regenerated "bookmark_a" and restack "bookmark_b" onto its tip, so it

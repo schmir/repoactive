@@ -1,8 +1,8 @@
-"""Process-level settings, read from ``REPOACTIVE_*`` environment variables.
+"""Process-level settings, read from REPOACTIVE_* environment variables.
 
 These tune how repoactive presents itself in the current environment (as opposed
-to ``config.py``, which describes the jobs to run). Instantiate settings via
-``load_settings()`` at the point of use so the environment is read at call time,
+to config.py, which describes the jobs to run). Instantiate settings via
+load_settings() at the point of use so the environment is read at call time,
 not import time. The CLI callback also calls it once at startup so a
 misconfigured environment fails immediately with a clean error instead of
 mid-run.
@@ -17,7 +17,7 @@ ENV_PREFIX = "REPOACTIVE_"
 
 
 class SettingsError(Exception):
-    """A ``REPOACTIVE_*`` environment variable failed validation."""
+    """A REPOACTIVE_* environment variable failed validation."""
 
 
 class Settings(BaseSettings):
@@ -58,10 +58,10 @@ class Settings(BaseSettings):
 
 
 def load_settings() -> Settings:
-    """Read ``Settings`` from the environment.
+    """Read Settings from the environment.
 
-    Raises ``SettingsError`` with a one-line message naming the offending
-    environment variable(s), instead of pydantic's multi-line ``ValidationError``.
+    Raises SettingsError with a one-line message naming the offending
+    environment variable(s), instead of pydantic's multi-line ValidationError.
     """
     try:
         return Settings()

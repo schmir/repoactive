@@ -105,7 +105,7 @@ def _setup_logging(debug: bool) -> None:
 
 
 class MergeStatus(StrEnum):
-    """Filter for ``recent-commits`` by whether a commit has landed in trunk."""
+    """Filter for recent-commits by whether a commit has landed in trunk."""
 
     all = "all"
     merged = "merged"
@@ -113,7 +113,7 @@ class MergeStatus(StrEnum):
 
 
 def _resolve_config(config_paths: list[Path] | None, repo: Path) -> list[Path]:
-    """Use the given config paths, or discover defaults inside ``repo``."""
+    """Use the given config paths, or discover defaults inside repo."""
     return config_paths or default_config_paths(repo)
 
 
@@ -132,7 +132,7 @@ def _load_config_or_exit(
 
 
 def _error(message: str) -> None:
-    """Print ``message`` to stderr as a bold red ``Error:`` line."""
+    """Print message to stderr as a bold red Error: line."""
     typer.secho(f"Error: {message}", err=True, fg=typer.colors.RED, bold=True)
 
 
@@ -146,10 +146,10 @@ def _check_jj() -> None:
 
 
 def _ensure_colocated_repo(repo: Path) -> None:
-    """Ensure ``repo`` is a colocated jj repository root, else exit with a clear error.
+    """Ensure repo is a colocated jj repository root, else exit with a clear error.
 
-    A plain git repository (``.git`` but no ``.jj``) is converted in place by
-    running ``jj git init --colocate``; other invalid states exit non-zero.
+    A plain git repository (.git but no .jj) is converted in place by
+    running jj git init --colocate; other invalid states exit non-zero.
     """
     try:
         require_colocated_repo(repo)
@@ -358,7 +358,7 @@ def dump_schema(
 
 
 def _print_commit_table(commits: list[JobCommit]) -> None:
-    """Print ``commits`` as columns padded to their widest value."""
+    """Print commits as columns padded to their widest value."""
     names_column = [",".join(sorted(c.job_names)) for c in commits]
     commit_width = max(len(c.commit_id) for c in commits)
     change_width = max(len(c.change_id) for c in commits)

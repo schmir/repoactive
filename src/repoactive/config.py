@@ -42,7 +42,7 @@ _BRANCH_PREFIX_RE = re.compile(r"^(?!/)(?!.*//)[a-zA-Z0-9_\-/]*$")
 _DURATION_UNITS = {"s": "seconds", "m": "minutes", "h": "hours", "d": "days", "w": "weeks"}
 
 # Reserved tags driving job selection. A plain job carries DEFAULT_TAG, which is
-# what the bare ``repoactive run`` selects; ``disabled = true`` is sugar for
+# what the bare repoactive run selects; disabled = true is sugar for
 # DISABLED_TAG. See docs/adr/0002-tag-based-job-selection.md.
 DEFAULT_TAG = "enabled"
 DISABLED_TAG = "disabled"
@@ -241,8 +241,8 @@ class DuplicatePlatformHostError(ValueError):
 class DuplicateBranchNameError(ValueError):
     """Raised when two jobs resolve to the same bookmark name.
 
-    A job's bookmark is ``branch_prefix + name``. Job names are unique, but
-    ``branch_prefix`` is per-job, so different (prefix, name) pairs can collide —
+    A job's bookmark is branch_prefix + name. Job names are unique, but
+    branch_prefix is per-job, so different (prefix, name) pairs can collide —
     both jobs would then read, set, delete, and push the same bookmark and target
     the same MR source branch, silently clobbering each other's result.
     """
@@ -278,7 +278,7 @@ class ConfigError(Exception):
 
 
 def parse_duration(value: str) -> timedelta:
-    """Parse a duration like ``"7d"`` or ``"12h"`` into a timedelta.
+    """Parse a duration like "7d" or "12h" into a timedelta.
 
     The unit is one of s (seconds), m (minutes), h (hours), d (days), w (weeks).
     Raises ValueError on anything else.
@@ -301,9 +301,9 @@ class PlatformConfig(BaseModel):
 class CreateMR(StrEnum):
     """When a job creates its MR/PR.
 
-    ``always`` and ``never`` are written as ``true``/``false`` in TOML (the
+    always and never are written as true/false in TOML (the
     original boolean form, kept for backwards compatibility);
-    ``unless-superseded`` skips the MR when a dependent job produced an MR in
+    unless-superseded skips the MR when a dependent job produced an MR in
     the same run (that MR is stacked on this job's branch, so it already
     contains this job's changes).
     See docs/adr/0009-unless-superseded-mr-creation.md.
@@ -497,7 +497,7 @@ class Job(BaseModel):
     def effective_tags(self) -> set[str]:
         """Tags driving selection: explicit tags, else DISABLED_TAG if disabled, else DEFAULT_TAG.
 
-        ``disabled`` and ``tags`` are mutually exclusive.
+        disabled and tags are mutually exclusive.
         """
         if self.disabled:
             return {DISABLED_TAG}
@@ -515,16 +515,16 @@ class Job(BaseModel):
     def timeout_seconds(self) -> float | None:
         """Return the command timeout in seconds, or None for no timeout.
 
-        A zero duration (e.g. ``"0s"``) also means no timeout: TOML cannot
+        A zero duration (e.g. "0s") also means no timeout: TOML cannot
         express null, so this is how a job opts out of a timeout set in
-        ``job-defaults``.
+        job-defaults.
         """
         if self.timeout is None:
             return None
         return parse_duration(self.timeout).total_seconds() or None
 
     def commit_trailers(self) -> list[str]:
-        """Return the ``Repoactive-Job`` trailer lines recorded on this job's commit.
+        """Return the Repoactive-Job trailer lines recorded on this job's commit.
 
         A job produced by a generator records a second trailer with the
         generator's name, giving the generator a cooldown over the whole
@@ -554,14 +554,14 @@ class Config(BaseModel):
     @field_validator("jobs", mode="before")
     @classmethod
     def _jobs_from_mapping(cls, value: object) -> object:
-        """Coerce the ``[job.<name>]`` table into the list pydantic expects.
+        """Coerce the [job.<name>] table into the list pydantic expects.
 
         TOML stores jobs as a table keyed by name; the name comes from the key
         and is injected into each job. A non-mapping value (e.g. an already-built
-        ``list[Job]`` passed programmatically) passes through unchanged.
+        list[Job] passed programmatically) passes through unchanged.
 
-        Each entry is assumed to be a table: ``load_config`` validates every
-        source against ``ConfigShape`` first, and programmatic callers must
+        Each entry is assumed to be a table: load_config validates every
+        source against ConfigShape first, and programmatic callers must
         pass tables as well.
         """
         if not isinstance(value, dict):
@@ -581,15 +581,15 @@ class Config(BaseModel):
     @field_validator("platforms", mode="before")
     @classmethod
     def _platforms_from_mapping(cls, value: object) -> object:
-        """Coerce the ``[platform.<name>]`` table into the list pydantic expects.
+        """Coerce the [platform.<name>] table into the list pydantic expects.
 
         TOML stores platforms as a table keyed by name; the name is only a label
-        (platforms are matched by ``url``), so it is dropped here. A non-mapping
-        value (e.g. an already-built ``list`` passed programmatically) passes
+        (platforms are matched by url), so it is dropped here. A non-mapping
+        value (e.g. an already-built list passed programmatically) passes
         through unchanged.
 
-        Each entry is assumed to be a table: ``load_config`` validates every
-        source against ``ConfigShape`` first, and programmatic callers must
+        Each entry is assumed to be a table: load_config validates every
+        source against ConfigShape first, and programmatic callers must
         pass tables as well.
         """
         if not isinstance(value, dict):
@@ -684,9 +684,9 @@ class Config(BaseModel):
     def bookmark_names(self) -> set[str]:
         """Return the branch/bookmark names repoactive manages, one per job.
 
-        Each is the job's resolved ``branch_prefix`` followed by its name (see
-        ``Job.branch_name``). When we start working on a repository these are the
-        bookmarks to track with ``jj bookmark track`` so that branches already
+        Each is the job's resolved branch_prefix followed by its name (see
+        Job.branch_name). When we start working on a repository these are the
+        bookmarks to track with jj bookmark track so that branches already
         pushed by an earlier run are recognised instead of being recreated.
         """
         return {job.branch_name() for job in self._resolved_jobs()}
@@ -694,8 +694,8 @@ class Config(BaseModel):
     def base_branches(self) -> set[str]:
         """Bookmark names a job uses as base_branch.
 
-        These are the branches to track with ``jj bookmark track``. Values that
-        look like a revset function call (``trunk()``, ``root()``, or a
+        These are the branches to track with jj bookmark track. Values that
+        look like a revset function call (trunk(), root(), or a
         user-defined revset alias) are excluded: they are valid base branches but
         not bookmarks, so tracking them would fail.
         """
@@ -717,9 +717,9 @@ class Config(BaseModel):
     def marked_secret_names(self) -> set[str]:
         """Names marked as managed secrets: every secret_env in the merged config.
 
-        The union of ``job-defaults`` and every job's ``secret_env``. A marked
+        The union of job-defaults and every job's secret_env. A marked
         name is stripped from every job command's base environment; a job reads
-        it back only by listing it in its own ``secret_env`` (see
+        it back only by listing it in its own secret_env (see
         runner._run_command and docs/adr/0017-secret-env-redaction.md).
         """
         names = set(self.job_defaults.secret_env)
@@ -731,11 +731,11 @@ class Config(BaseModel):
 class ConfigShape(BaseModel):
     """Structural shape of a raw config source, validated before merging.
 
-    Merging digs into the ``job`` and ``platform`` tables, so each must be a
-    table of tables, and ``job-defaults`` must be a table; an odd shape (e.g.
-    ``job.foo = "hello"``) would otherwise crash the merge with an unhelpful
+    Merging digs into the job and platform tables, so each must be a
+    table of tables, and job-defaults must be a table; an odd shape (e.g.
+    job.foo = "hello") would otherwise crash the merge with an unhelpful
     error. Only the shape is checked here — field contents and any other keys
-    are validated by ``Config`` after the merge.
+    are validated by Config after the merge.
     """
 
     model_config = ConfigDict(populate_by_name=True, extra="allow")
@@ -748,9 +748,9 @@ class ConfigShape(BaseModel):
 class FragmentShape(BaseModel):
     """Structural shape of a generator-emitted job fragment.
 
-    Generators may only emit ``[job.<name>]`` tables: the generator job itself
+    Generators may only emit [job.<name>] tables: the generator job itself
     acts as the scoped job-defaults for its emitted jobs (ADR 0004), so a
-    ``[job-defaults]`` or ``[platform]`` in a fragment would never apply and
+    [job-defaults] or [platform] in a fragment would never apply and
     is rejected instead of silently ignored.
     """
 
@@ -786,10 +786,10 @@ def _merge_named_tables(*, base: dict, override: dict) -> dict:
 
 
 def merge_jobs(*, base: dict, override: dict) -> dict:
-    """Merge two job tables keyed by name (see ``_merge_named_tables``).
+    """Merge two job tables keyed by name (see _merge_named_tables).
 
-    When the override sets ``disabled = true``, any ``tags`` carried over from
-    the base are removed, and when the override sets ``tags``, any ``disabled``
+    When the override sets disabled = true, any tags carried over from
+    the base are removed, and when the override sets tags, any disabled
     carried over from the base is removed.  This keeps the mutual-exclusion
     invariant intact across multi-source merges.
     """
@@ -804,7 +804,7 @@ def merge_jobs(*, base: dict, override: dict) -> dict:
 
 
 def merge_platforms(*, base: dict, override: dict) -> dict:
-    """Merge two platform tables keyed by name (see ``_merge_named_tables``)."""
+    """Merge two platform tables keyed by name (see _merge_named_tables)."""
     return _merge_named_tables(base=base, override=override)
 
 
@@ -822,8 +822,8 @@ class ConfigNotFoundError(Exception):
 def default_config_paths(repo: Path) -> list[Path]:
     """Config paths to use when none are passed on the command line.
 
-    Looks inside ``repo`` for the ``.repoactive.d`` directory and the
-    ``.repoactive.toml`` file; the file is applied last so it overrides the
+    Looks inside repo for the .repoactive.d directory and the
+    .repoactive.toml file; the file is applied last so it overrides the
     directory. Raises ConfigNotFoundError when neither exists.
     """
     config_dir = repo / _DEFAULT_CONFIG_DIR
@@ -839,7 +839,7 @@ def default_config_paths(repo: Path) -> list[Path]:
 
 
 def expand_config_paths(paths: list[Path]) -> list[Path]:
-    """Expand any directory into its sorted ``*.toml`` files; files pass through unchanged."""
+    """Expand any directory into its sorted *.toml files; files pass through unchanged."""
     expanded: list[Path] = []
     for path in paths:
         if path.is_dir():
@@ -881,10 +881,10 @@ token_env="GITLAB_TOKEN"
 
 
 def _parse_override(text: str) -> _ConfigSource:
-    """Parse one ``--set NAME=VALUE`` override into a _ConfigSource.
+    """Parse one --set NAME=VALUE override into a _ConfigSource.
 
-    ``text`` is a TOML assignment line, so dotted keys (``job.lint.disabled``)
-    and value expressions come straight from ``tomllib``.
+    text is a TOML assignment line, so dotted keys (job.lint.disabled)
+    and value expressions come straight from tomllib.
     """
     label = f"--set {text!r}"
     try:

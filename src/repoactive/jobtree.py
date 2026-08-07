@@ -18,7 +18,7 @@ class JobRow:
 
 @dataclass(frozen=True)
 class _ColumnRow:
-    """A ``JobRow`` rendered into fixed-width, print-ready columns."""
+    """A JobRow rendered into fixed-width, print-ready columns."""
 
     label: str
     title: str
@@ -26,10 +26,10 @@ class _ColumnRow:
 
 
 def format_job_forest(jobs: list[Job]) -> list[JobRow]:
-    """Render ``jobs`` as a dependency forest: one (tree label, job) row per line.
+    """Render jobs as a dependency forest: one (tree label, job) row per line.
 
-    ``jobs`` must be topologically sorted. A job is nested under each of its
-    dependencies present in ``jobs`` (so a job with several parents yields one
+    jobs must be topologically sorted. A job is nested under each of its
+    dependencies present in jobs (so a job with several parents yields one
     row per parent); a job none of whose dependencies are present is a root.
     """
     children: dict[str, list[Job]] = {j.name: [] for j in jobs}
@@ -61,9 +61,9 @@ def format_job_forest(jobs: list[Job]) -> list[JobRow]:
 def _format_job_columns(
     rows: list[JobRow], widths_from: list[JobRow] | None = None
 ) -> list[_ColumnRow]:
-    """Align forest ``rows`` into padded (tree label, title, effective tags) columns.
+    """Align forest rows into padded (tree label, title, effective tags) columns.
 
-    Column widths are computed over ``widths_from`` (default: ``rows``), so
+    Column widths are computed over widths_from (default: rows), so
     several tables can share one alignment. Kept as separate columns so callers
     can style them individually.
     """
@@ -88,12 +88,12 @@ def print_job_table(
     *,
     indent: str = "",
 ) -> None:
-    """Print forest ``rows`` as aligned, colorized lines on the stdout console.
+    """Print forest rows as aligned, colorized lines on the stdout console.
 
     One line per row: the tree label in cyan, the title plain, the effective
     tags dimmed. Rich drops the styling when stdout is not a terminal.
-    ``widths_from`` shares one alignment across several tables (see
-    ``_format_job_columns``).
+    widths_from shares one alignment across several tables (see
+    _format_job_columns).
     """
     for col in _format_job_columns(rows, widths_from):
         line = Text(indent)

@@ -40,9 +40,9 @@ class Platform(ABC):
 
     @abstractmethod
     def add_mr_labels(self, source_branch: str, labels: list[str]) -> str | None:
-        """Add ``labels`` to the open MR/PR for ``source_branch``, preserving its existing labels.
+        """Add labels to the open MR/PR for source_branch, preserving its existing labels.
 
-        Never creates an MR/PR: returns the MR/PR URL if one is open, or ``None``
+        Never creates an MR/PR: returns the MR/PR URL if one is open, or None
         if none is. Adding a label the MR/PR already carries is a no-op. Used to
         signal a frozen branch (ADR 0019) without touching the rest of the MR.
         """

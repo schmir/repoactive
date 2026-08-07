@@ -2,10 +2,10 @@
 
 A run is split into two phases: a *collect* phase that does only local jj work
 (running the command, setting the bookmark, writing the commit) and records the
-intended remote operations into an ``UpdatePlan``, and an *apply* phase that
-performs those operations (``jj git push`` and ``Platform.ensure_mr``). The
+intended remote operations into an UpdatePlan, and an *apply* phase that
+performs those operations (jj git push and Platform.ensure_mr). The
 plan models are pydantic so a plan can be serialized to disk and applied later;
-``MRLink`` is not part of the plan — it exists only at apply time, once the
+MRLink is not part of the plan — it exists only at apply time, once the
 dependency MR URLs it carries are known.
 """
 
@@ -25,7 +25,7 @@ NEEDS_REBASE_LABEL = "repoactive:needs-rebase"
 class BookmarkPush(BaseModel):
     """A bookmark to push to the remote.
 
-    ``delete=True`` pushes a locally-deleted bookmark, propagating the deletion;
+    delete=True pushes a locally-deleted bookmark, propagating the deletion;
     it is a no-op if the bookmark was never pushed.
     """
 
@@ -36,10 +36,10 @@ class BookmarkPush(BaseModel):
 class MRUpdate(BaseModel):
     """Everything needed to (re)create an MR/PR at apply time.
 
-    ``target_branch`` is ``None`` when the job did not set ``base_branch``; the
+    target_branch is None when the job did not set base_branch; the
     platform default branch is then resolved during apply, so building the plan
     needs no platform access. The description is assembled at apply time by
-    ``build_mr_description`` because the ``depends_on`` MR URLs are not known
+    build_mr_description because the depends_on MR URLs are not known
     until those MRs have been created.
     """
 
@@ -60,7 +60,7 @@ class MRLabelUpdate(BaseModel):
     """Add labels to an already-open MR without creating or otherwise changing it.
 
     A frozen branch (ADR 0019) is not pushed and its MR's content is left
-    untouched, but the ``repoactive:needs-rebase`` label is added to the open MR
+    untouched, but the repoactive:needs-rebase label is added to the open MR
     if there is one, so the signal reaches the human where they are looking. A
     no-op when no MR is open. Labels are added to whatever the MR already
     carries, never replacing them, and re-adding one already present is a no-op.
@@ -73,10 +73,10 @@ class MRLabelUpdate(BaseModel):
 class JobUpdate(BaseModel):
     """One job's pending remote operations.
 
-    ``title`` is the job's bare title (no prefix); it is the label used when this
+    title is the job's bare title (no prefix); it is the label used when this
     job appears as a dependency link in a dependent's MR description.
 
-    ``label_only`` is set instead of ``push``/``mr`` for a frozen branch: nothing
+    label_only is set instead of push/mr for a frozen branch: nothing
     is pushed and the MR is not recreated, only labelled.
     """
 
@@ -102,9 +102,9 @@ class MRLink:
 
 
 def _fenced(text: str) -> str:
-    """Wrap ``text`` in a markdown fenced code block.
+    """Wrap text in a markdown fenced code block.
 
-    The fence length is one longer than the longest backtick run inside ``text``
+    The fence length is one longer than the longest backtick run inside text
     (minimum three), so the fence is never closed prematurely.
     """
     longest = max((len(m.group()) for m in re.finditer(r"`+", text)), default=0)

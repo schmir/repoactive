@@ -75,9 +75,9 @@ def _selection(
 ) -> JobSelection:
     """Build a JobSelection for a _dispatch_job call.
 
-    ``_dispatch_job`` reads ``selection.jobs`` only for the names of jobs in the
-    run (generator collision check), plus ``refreshed``, ``successors``, and
-    ``explicit``.
+    _dispatch_job reads selection.jobs only for the names of jobs in the
+    run (generator collision check), plus refreshed, successors, and
+    explicit.
     """
     return JobSelection(
         jobs=list(jobs), refreshed=refreshed, successors=successors, explicit=explicit
@@ -94,7 +94,7 @@ def _ctx(
 ) -> RunContext:
     """Build a RunContext for a runner call.
 
-    ``summary`` is stored by reference, so a caller that passes its own
+    summary is stored by reference, so a caller that passes its own
     instance can assert on it after the call.
     """
     return RunContext(
@@ -830,7 +830,7 @@ class TestJobResolve:
 
 
 def _alive(pid: int) -> bool:
-    """Whether ``pid`` still names a live (non-reaped) process."""
+    """Whether pid still names a live (non-reaped) process."""
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -2386,7 +2386,7 @@ class TestRunAll:
         """Stub the JJ class run_all constructs (job_names_in_revset + cooldown query).
 
         Also bypass the real per-repository run lock (REPO is a fake path with no
-        ``.jj`` directory); lock behaviour is covered separately in test_lock.py.
+        .jj directory); lock behaviour is covered separately in test_lock.py.
         """
         with (
             patch("repoactive.runner.run_lock"),
@@ -2891,11 +2891,11 @@ class TestRunAll:
 
     @staticmethod
     def _successor_config(*, successor_cooldown: str | None = None) -> Config:
-        """Build a config: a (tagged ``weekly``) with a cooldown, b stacked on a.
+        """Build a config: a (tagged weekly) with a cooldown, b stacked on a.
 
-        ``a`` carries an explicit tag so a run can select it by tag. Unlike
+        a carries an explicit tag so a run can select it by tag. Unlike
         naming it, tag selection does not bypass its cooldown, which is what the
-        successor-skip-on-cooldown case needs. ``b`` optionally gets its own
+        successor-skip-on-cooldown case needs. b optionally gets its own
         cooldown.
         """
         b: dict[str, object] = {"name": "b", "command": "cmd", "title": "b", "depends_on": ["a"]}
@@ -2919,7 +2919,7 @@ class TestRunAll:
 
     @staticmethod
     def _stub_successors(mock_jj: MagicMock, names: set[str]) -> None:
-        """Make successor expansion (the descendants query) return ``names``."""
+        """Make successor expansion (the descendants query) return names."""
         mock_jj.return_value.job_names_in_revset.side_effect = lambda revset: (
             names if revset.startswith("descendants") else set()
         )
@@ -3069,8 +3069,8 @@ class TestRunAll:
         mock_run_job: MagicMock,
         mock_jj: MagicMock,
     ) -> None:
-        # The generator emits a child depending on an ordinary job ``z`` that has
-        # not run yet, so the re-sort must order the child after ``z``.
+        # The generator emits a child depending on an ordinary job z that has
+        # not run yet, so the re-sort must order the child after z.
         config = Config.model_validate(
             {
                 "platform": [{"url": "https://gitlab.com", "type": "gitlab", "token_env": "T"}],

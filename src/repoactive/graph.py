@@ -19,7 +19,7 @@ class CircularDependencyError(ValueError):
 def detect_dependency_cycle(jobs: Iterable[Job]) -> None:
     """Raise CircularDependencyError if the dependency graph contains a cycle.
 
-    A dependency naming a job outside ``jobs`` is ignored: it belongs to an
+    A dependency naming a job outside jobs is ignored: it belongs to an
     already-validated job set, which cannot depend back into this one (used
     when checking a generator's emitted jobs against the running set).
     """
@@ -44,10 +44,10 @@ def detect_dependency_cycle(jobs: Iterable[Job]) -> None:
 
 
 def topological_sort(jobs: list[Job]) -> list[Job]:
-    """Order ``jobs`` so every job comes after its dependencies.
+    """Order jobs so every job comes after its dependencies.
 
     Jobs without an ordering constraint keep their relative input order. All
-    ``depends_on`` targets must be present in ``jobs``.
+    depends_on targets must be present in jobs.
     """
     by_name = {j.name: j for j in jobs}
     visited: set[str] = set()
