@@ -21,6 +21,7 @@ from repoactive.runner import (
     RA_JOB_NAME_ENV,
     RA_JOBS_DIR_ENV,
     ApplyResult,
+    Disposition,
     JobResult,
     RunContext,
     RunMode,
@@ -38,6 +39,7 @@ from repoactive.runner import (
     _strip_boxquote_and_trailers,
     _suppress_superseded_mrs,
     apply_plan,
+    decide_disposition,
     run_all,
     run_job,
 )
@@ -609,6 +611,110 @@ class TestPushableBranchRevset:
                 human_commits.AllPrerequisites(bookmark_change_id="p", prereq_heads=["h"])
             )
             == "@"
+        )
+
+
+def _normal_layers(
+    *, prereq_heads: list[str], fixup_roots: list[str]
+) -> human_commits.NormalLayers:
+    return human_commits.NormalLayers(
+        bookmark_change_id="tip-id",
+        command_commit=JobCommit(
+            commit_id="cmd-commit",
+            change_id="cmd-id",
+            job_names={"job"},
+            subject="subject",
+            relative_age="1 hour ago",
+        ),
+        prereq_heads=prereq_heads,
+        fixup_roots=fixup_roots,
+    )
+
+
+class TestDecideDisposition:
+    """The pure ADR 0019/0020 fork, exercised as values without a live repo."""
+
+    def test_no_branch_empty_retires(self) -> None:
+        assert (
+            decide_disposition(human_commits.NoBranch(), commit_empty=True, idempotent_match=False)
+            is Disposition.retire
+        )
+
+    def test_no_branch_with_diff_commits_fresh(self) -> None:
+        assert (
+            decide_disposition(
+                human_commits.NoBranch(), commit_empty=False, idempotent_match=False
+            )
+            is Disposition.commit_fresh
+        )
+
+    def test_already_merged_empty_retires(self) -> None:
+        shape = human_commits.AlreadyMerged(bookmark_change_id="m")
+        assert (
+            decide_disposition(shape, commit_empty=True, idempotent_match=False)
+            is Disposition.retire
+        )
+
+    def test_already_merged_with_diff_commits_fresh(self) -> None:
+        shape = human_commits.AlreadyMerged(bookmark_change_id="m")
+        assert (
+            decide_disposition(shape, commit_empty=False, idempotent_match=False)
+            is Disposition.commit_fresh
+        )
+
+    def test_all_prerequisites_commits_fresh_even_when_empty(self) -> None:
+        # Only human prerequisites below: the empty command commit is kept so the
+        # prerequisites survive, so it commits rather than retiring.
+        shape = human_commits.AllPrerequisites(bookmark_change_id="p", prereq_heads=["h"])
+        assert (
+            decide_disposition(shape, commit_empty=True, idempotent_match=False)
+            is Disposition.commit_fresh
+        )
+
+    def test_normal_layers_empty_without_human_retires(self) -> None:
+        shape = _normal_layers(prereq_heads=[], fixup_roots=[])
+        assert (
+            decide_disposition(shape, commit_empty=True, idempotent_match=False)
+            is Disposition.retire
+        )
+
+    def test_normal_layers_empty_with_prereq_commits_in_place(self) -> None:
+        # An empty command commit anchoring human commits is kept, not retired:
+        # abandoning it would turn fixups into prerequisites next run.
+        shape = _normal_layers(prereq_heads=["h"], fixup_roots=[])
+        assert (
+            decide_disposition(shape, commit_empty=True, idempotent_match=False)
+            is Disposition.commit_in_place
+        )
+
+    def test_normal_layers_empty_with_fixup_commits_in_place(self) -> None:
+        shape = _normal_layers(prereq_heads=[], fixup_roots=["f"])
+        assert (
+            decide_disposition(shape, commit_empty=True, idempotent_match=False)
+            is Disposition.commit_in_place
+        )
+
+    def test_normal_layers_with_diff_commits_in_place(self) -> None:
+        shape = _normal_layers(prereq_heads=[], fixup_roots=[])
+        assert (
+            decide_disposition(shape, commit_empty=False, idempotent_match=False)
+            is Disposition.commit_in_place
+        )
+
+    def test_normal_layers_idempotent_match_rolls_back(self) -> None:
+        shape = _normal_layers(prereq_heads=[], fixup_roots=[])
+        assert (
+            decide_disposition(shape, commit_empty=False, idempotent_match=True)
+            is Disposition.idempotent_noop
+        )
+
+    def test_retire_wins_over_idempotent_match(self) -> None:
+        # Retire is decided first: an empty, human-less branch retires even if the
+        # caller ever passed idempotent_match=True.
+        shape = _normal_layers(prereq_heads=[], fixup_roots=[])
+        assert (
+            decide_disposition(shape, commit_empty=True, idempotent_match=True)
+            is Disposition.retire
         )
 
 

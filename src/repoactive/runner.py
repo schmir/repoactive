@@ -371,6 +371,64 @@ def _delete_local_bookmark(
         repo.bookmark_delete(job.branch_name())
 
 
+def _print_diff_stat(repo: JJ) -> None:
+    """Print the indented diff --stat of the working-copy commit, if any."""
+    if stat := repo.diff_stat():
+        print("\n".join(f"    {line}" for line in stat.splitlines()))
+        print()
+
+
+class Disposition(StrEnum):
+    """What to do with a job's rebuilt command commit (ADR 0019/0020).
+
+    decide_disposition picks one from the branch shape and two facts about the
+    regenerated commit; _run_job_build_result then carries it out (the jj
+    mutation, the status line, the JobResult).
+    """
+
+    # No diff and nothing human to anchor: abandon the command commit and retire
+    # the bookmark.
+    retire = "retire"
+    # A new branch, or one carrying only prerequisites: point the bookmark at the
+    # fresh command commit.
+    commit_fresh = "commit_fresh"
+    # Keep the rewritten command commit under its preserved change-id; the
+    # in-place rewrite already carried the bookmark along.
+    commit_in_place = "commit_in_place"
+    # The rewrite reproduced the pushed commit byte for byte: roll it back so the
+    # bookmark does not move and jj pushes nothing (avoids a needless CI retrigger).
+    idempotent_noop = "idempotent_noop"
+
+
+def decide_disposition(
+    shape: human_commits.BranchShape, *, commit_empty: bool, idempotent_match: bool
+) -> Disposition:
+    """Decide what to do with a job's rebuilt command commit (ADR 0019/0020).
+
+    Pure: the fork that is easy to get wrong is decided from plain values, so it
+    can be tested without a live jj repository. The caller gathers the two facts:
+    commit_empty (the regenerated command commit adds nothing) and
+    idempotent_match (a NormalLayers rewrite that reproduced the pushed commit,
+    tree and stripped message alike), then applies the returned disposition.
+    """
+    match shape:
+        case human_commits.NoBranch() | human_commits.AlreadyMerged():
+            return Disposition.retire if commit_empty else Disposition.commit_fresh
+        case human_commits.AllPrerequisites():
+            # Only human prerequisites below: keep the branch and its fresh
+            # command commit even when empty, so the prerequisites survive.
+            return Disposition.commit_fresh
+        case human_commits.NormalLayers():
+            # An empty command commit with human commits to anchor
+            # (prerequisites or fixups) is kept, not retired: abandoning it would
+            # restructure the branch, turning fixups into prerequisites next run.
+            if commit_empty and not shape.has_human:
+                return Disposition.retire
+            return Disposition.idempotent_noop if idempotent_match else Disposition.commit_in_place
+        case _:
+            raise NotImplementedError()
+
+
 def _run_job_build_result(  # noqa: PLR0913
     *,
     repo: JJ,
@@ -387,112 +445,67 @@ def _run_job_build_result(  # noqa: PLR0913
     message = _build_commit_message(job, command_result)
     repo.describe(message)
 
-    match prerun_branch_shape:
-        case human_commits.NoBranch() | human_commits.AlreadyMerged() if commit_empty:
-            print_status(job.name, ("no changes", "dim"), f" ({elapsed})")
+    # Idempotency check (ADR 0020): consulted only for a NormalLayers rewrite that
+    # classify_branch flagged as a no-op against what was pushed
+    # (run_idempotency_check) and that is not the retire case. When the
+    # regenerated tree and stripped message also match the pre-rewrite command
+    # commit, the rewrite is rolled back so the command commit keeps its original
+    # id (hidden, but its git object survives, so it stays diffable) instead of
+    # gaining a fresh committer timestamp that would retrigger CI.
+    idempotent_match = (
+        isinstance(prerun_branch_shape, human_commits.NormalLayers)
+        and prerun_branch_shape.run_idempotency_check
+        and not (commit_empty and not prerun_branch_shape.has_human)
+        and repo.same_content(prerun_branch_shape.command_commit.commit_id, "@")
+        and _strip_boxquote_and_trailers(
+            repo.get_description(prerun_branch_shape.command_commit.commit_id)
+        )
+        == _strip_boxquote_and_trailers(message)
+    )
+
+    disposition = decide_disposition(
+        prerun_branch_shape, commit_empty=commit_empty, idempotent_match=idempotent_match
+    )
+
+    def build_result(*, effective_revsets: list[str], produced_diff: bool) -> JobResult:
+        return JobResult(
+            job=job,
+            effective_revsets=effective_revsets,
+            produced_diff=produced_diff,
+            prerun_branch_shape=prerun_branch_shape,
+            command_output=command_result.output,
+        )
+
+    match disposition:
+        case Disposition.retire:
             _delete_local_bookmark(repo, job, prerun_branch_shape)
             repo.abandon()
-            return JobResult(
-                job=job,
-                effective_revsets=parents,
-                produced_diff=False,
-                prerun_branch_shape=prerun_branch_shape,
-                command_output=command_result.output,
-            )
-        case (
-            human_commits.NoBranch()
-            | human_commits.AlreadyMerged()
-            | human_commits.AllPrerequisites()
-        ):
+            # A rewritten (NormalLayers) branch had a bookmark to retire; a fresh
+            # one never did, so only the former mentions the deletion.
+            deleted = isinstance(prerun_branch_shape, human_commits.NormalLayers)
+            detail = f", bookmark deleted ({elapsed})" if deleted else f" ({elapsed})"
+            print_status(job.name, ("no changes", "dim"), detail)
+            return build_result(effective_revsets=parents, produced_diff=False)
+        case Disposition.commit_fresh:
             repo.bookmark_set(job.branch_name(), "@")
             new_change_id = repo.change_id(revision="@")
-            print_status(
-                job.name,
-                ("committed", "green"),
-                f" [{new_change_id}] ({elapsed})",
-            )
-            if stat := repo.diff_stat():
-                print("\n".join(f"    {line}" for line in stat.splitlines()))
-                print()
-            return JobResult(
-                job=job,
-                effective_revsets=[new_change_id],
-                produced_diff=True,
-                prerun_branch_shape=prerun_branch_shape,
-                command_output=command_result.output,
-            )
-
-        case human_commits.NormalLayers() if commit_empty and not prerun_branch_shape.has_human:
-            # No diff and no human commits to anchor: abandon the empty command
-            # commit and delete its bookmark, then report no-diff. The plan step
-            # records the matching remote deletion. A branch that *does* carry
-            # human commits (prerequisites or fixups) keeps its empty command
-            # commit instead: abandoning it would restructure the branch,
-            # turning fixups into prerequisites on the next run, so it falls
-            # through to the NormalLayers arm below.
-            _delete_local_bookmark(repo, job, prerun_branch_shape)
-            repo.abandon()
-            print_status(job.name, ("no changes", "dim"), f", bookmark deleted ({elapsed})")
-            return JobResult(
-                job=job,
-                effective_revsets=parents,
-                produced_diff=False,
-                prerun_branch_shape=prerun_branch_shape,
-                command_output=command_result.output,
-            )
-        case human_commits.NormalLayers():
-            # Non-empty, or empty but anchoring human commits (see the guarded
-            # case above): record the message on the rewritten command commit and
-            # keep it. The in-place rewrite already carried the bookmark tip along
-            # with the preserved change-id, so no bookmark set is needed here.
+            print_status(job.name, ("committed", "green"), f" [{new_change_id}] ({elapsed})")
+            _print_diff_stat(repo)
+            return build_result(effective_revsets=[new_change_id], produced_diff=True)
+        case Disposition.idempotent_noop:
             tip = _bookmark_change_id(prerun_branch_shape)
             assert tip is not None
-
-            # Idempotency skip (ADR 0020): when classify_branch found the rewrite
-            # would neither move the command commit nor diverge it from what was
-            # pushed (run_idempotency_check), and the regenerated tree and stripped
-            # message match the pre-rewrite command commit, roll back the rewrite.
-            # The command commit keeps its original id (so the bookmark does not
-            # move and jj pushes nothing) instead of being rewritten with a fresh
-            # committer timestamp that would retrigger CI. The old commit is hidden
-            # but its git object survives the rewrite, so it is still diffable.
-            if (
-                prerun_branch_shape.run_idempotency_check
-                and repo.same_content(prerun_branch_shape.command_commit.commit_id, "@")
-                and _strip_boxquote_and_trailers(
-                    repo.get_description(prerun_branch_shape.command_commit.commit_id)
-                )
-                == _strip_boxquote_and_trailers(message)
-            ):
-                short_id = repo.change_id()
-                restore()
-                print_status(job.name, ("unchanged", "dim"), f" [{short_id}] ({elapsed})")
-                return JobResult(
-                    job=job,
-                    effective_revsets=[tip],
-                    produced_diff=True,
-                    prerun_branch_shape=prerun_branch_shape,
-                    command_output=command_result.output,
-                )
-
-            print_status(
-                job.name,
-                ("committed", "green"),
-                f" [{repo.change_id()}] ({elapsed})",
-            )
-            if stat := repo.diff_stat():
-                print("\n".join(f"    {line}" for line in stat.splitlines()))
-                print()
-
-            return JobResult(
-                job=job,
-                effective_revsets=[tip],
-                produced_diff=True,
-                prerun_branch_shape=prerun_branch_shape,
-                command_output=command_result.output,
-            )
-        case _:
-            raise NotImplementedError()
+            # change_id before restore: the roll-back replaces the working copy.
+            short_id = repo.change_id()
+            restore()
+            print_status(job.name, ("unchanged", "dim"), f" [{short_id}] ({elapsed})")
+            return build_result(effective_revsets=[tip], produced_diff=True)
+        case Disposition.commit_in_place:
+            tip = _bookmark_change_id(prerun_branch_shape)
+            assert tip is not None
+            print_status(job.name, ("committed", "green"), f" [{repo.change_id()}] ({elapsed})")
+            _print_diff_stat(repo)
+            return build_result(effective_revsets=[tip], produced_diff=True)
 
 
 def run_job(
