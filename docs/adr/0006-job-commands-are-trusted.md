@@ -5,7 +5,7 @@ Status: Accepted
 ## Context
 
 A job's `command` is an arbitrary shell command that `repoactive` runs
-against the repository's working tree (`runner._run_command`, `shell=True`).
+against the repository's working tree (`command.run_command`, `shell=True`).
 Its whole purpose is to mutate the tree; repoactive captures the resulting
 diff, commits it with a `Repoactive-Job` trailer, and turns it into a
 branch/MR.

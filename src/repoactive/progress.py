@@ -1,6 +1,6 @@
 """A live tail of a running command's output.
 
-While a job command runs, _run_command streams its output line by line into a
+While a job command runs, run_command streams its output line by line into a
 ProgressView. The view keeps only the last few lines and renders them as a
 small, fixed-height block that scrolls in place — so a long command shows live
 progress without flooding the terminal. The header line shows the job name, a

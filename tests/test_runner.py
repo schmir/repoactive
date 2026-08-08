@@ -2,10 +2,7 @@
 
 import contextlib
 import io
-import os
-import shutil
 import signal
-import time
 from collections.abc import Callable, Generator, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
@@ -15,6 +12,7 @@ import pytest
 from pydantic import ValidationError
 
 from repoactive import human_commits
+from repoactive.command import CommandError, CommandResult, _resolve_granted_secrets
 from repoactive.config import Config, CreateMR, Job, JobDefaults
 from repoactive.jj import JJ, JobCommit
 from repoactive.runner import (
@@ -24,11 +22,8 @@ from repoactive.runner import (
     RA_JOB_NAME_ENV,
     RA_JOBS_DIR_ENV,
     ApplyResult,
-    CommandError,
-    CommandResult,
     GeneratedJobError,
     JobResult,
-    MissingSecretError,
     RunContext,
     RunMode,
     RunSummary,
@@ -43,10 +38,7 @@ from repoactive.runner import (
     _prepare_repo,
     _pushable_branch_revset,
     _record_job_plan,
-    _resolve_granted_secrets,
-    _run_command,
     _run_generator_job,
-    _spawn,
     _strip_boxquote_and_trailers,
     _suppress_superseded_mrs,
     apply_plan,
@@ -117,12 +109,12 @@ def _result(job: Job, *, revsets: list[str], produced: bool = True) -> JobResult
 def _mock_popen(mock_popen: MagicMock, *, output: str = "", returncode: int = 0) -> MagicMock:
     """Configure a patched subprocess.Popen to behave like a finished command.
 
-    _run_command streams proc.stdout line by line, so stdout is an iterator over
+    run_command streams proc.stdout line by line, so stdout is an iterator over
     the output lines (keeping their newlines, as a real text-mode pipe yields).
     """
     proc = mock_popen.return_value
     # A real text-mode pipe iterates line by line and supports close(); StringIO
-    # gives both, so _run_command's streaming read works against the mock.
+    # gives both, so run_command's streaming read works against the mock.
     proc.stdout = io.StringIO(output)
     proc.returncode = returncode
     proc.wait.return_value = returncode
@@ -132,7 +124,7 @@ def _mock_popen(mock_popen: MagicMock, *, output: str = "", returncode: int = 0)
 class _ImmediateTimer:
     """A threading.Timer stand-in that fires its callback the moment it starts.
 
-    Lets a unit test exercise _run_command's timeout watchdog synchronously
+    Lets a unit test exercise run_command's timeout watchdog synchronously
     instead of waiting for a real deadline.
     """
 
@@ -829,294 +821,6 @@ class TestJobResolve:
         assert resolved.base_branch is None
 
 
-def _alive(pid: int) -> bool:
-    """Whether pid still names a live (non-reaped) process."""
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    return True
-
-
-class TestRunCommand:
-    @pytest.mark.slow
-    def test_timeout_kills_whole_process_group(self, tmp_path: Path) -> None:
-        # The command backgrounds a long sleep, records its PID, then waits. The
-        # sleep shares the command's process group, so the timeout must kill it
-        # too - not just the top-level shell.
-        pidfile = tmp_path / "child.pid"
-        job = Job(
-            name="foo",
-            command=f"sleep 30 & echo $! > {pidfile}; wait",
-            title="t",
-            timeout="1s",
-            branch_prefix="repoactive/",
-            commit_title_prefix="",
-        )
-        with pytest.raises(CommandError, match="timed out after 1s"):
-            _run_command(job, tmp_path)
-
-        child_pid = int(pidfile.read_text())
-        deadline = time.monotonic() + 5
-        while _alive(child_pid) and time.monotonic() < deadline:
-            time.sleep(0.05)
-        assert not _alive(child_pid), "backgrounded child survived the timeout kill"
-
-    def test_spawn_kills_group_when_body_raises(self, tmp_path: Path) -> None:
-        # A body that raises for a reason other than a timeout must still leave no
-        # orphan: _spawn kills the whole process group (including a backgrounded
-        # child) on exit, not just the top-level shell.
-        pidfile = tmp_path / "child.pid"
-        job = Job(
-            name="foo",
-            command=f"sleep 30 & echo $! > {pidfile}; echo ready; wait",
-            title="t",
-            branch_prefix="repoactive/",
-            commit_title_prefix="",
-        )
-
-        class BoomError(Exception):
-            pass
-
-        def _spawn_then_raise() -> None:
-            with _spawn(job, tmp_path, dict(os.environ)) as proc:
-                assert proc.stdout is not None
-                proc.stdout.readline()  # block until the child pid is recorded
-                raise BoomError
-
-        with pytest.raises(BoomError):
-            _spawn_then_raise()
-
-        child_pid = int(pidfile.read_text())
-        deadline = time.monotonic() + 5
-        while _alive(child_pid) and time.monotonic() < deadline:
-            time.sleep(0.05)
-        assert not _alive(child_pid), "backgrounded child survived the kill on exception"
-
-    def test_non_utf8_output_does_not_crash(self, tmp_path: Path) -> None:
-        # A command may emit arbitrary bytes; an undecodable byte must be
-        # replaced rather than raising UnicodeDecodeError and crashing the run.
-        job = Job(
-            # \377 is octal for 0xff: POSIX printf supports octal escapes
-            # everywhere, but \xHH hex escapes are not portable (dash omits them).
-            name="foo",
-            command=r"printf '\377'",
-            title="t",
-            branch_prefix="repoactive/",
-            commit_title_prefix="",
-        )
-        result = _run_command(job, tmp_path)
-
-        assert result.output == "�"  # U+FFFD REPLACEMENT CHARACTER
-
-    def test_stdin_reading_command_fails_fast_at_eof(self, tmp_path: Path) -> None:
-        # stdin is detached (subprocess.DEVNULL), so a command that reads it gets
-        # EOF immediately and fails fast instead of blocking on the inherited
-        # terminal and burning the whole timeout window.
-        job = Job(
-            name="foo",
-            command="read line; echo got=[$line]",
-            title="t",
-            timeout="30s",
-            branch_prefix="repoactive/",
-            commit_title_prefix="",
-        )
-        # A timeout would raise CommandError; reaching here means it did not hang.
-        result = _run_command(job, tmp_path)
-
-        # `read` hits EOF immediately, so $line is empty in the echo that follows.
-        assert result.output.strip() == "got=[]"
-
-    def test_secret_env_stripped_from_command(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        # A platform token in the environment must not be visible to a job
-        # command (see docs/adr/0006). PATH and other vars still pass through.
-        monkeypatch.setenv("GITHUB_TOKEN", "supersecret")
-        job = Job(
-            name="foo",
-            command="echo token=[${GITHUB_TOKEN:-unset}] path=[${PATH:+present}]",
-            title="t",
-            branch_prefix="repoactive/",
-            commit_title_prefix="",
-        )
-        result = _run_command(job, tmp_path, stripped_env_names=frozenset({"GITHUB_TOKEN"}))
-
-        assert "token=[unset]" in result.output
-        assert "supersecret" not in result.output
-        assert "path=[present]" in result.output
-
-    def test_secret_env_default_passes_environment_through(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        # With no secrets to strip, the inherited environment is preserved.
-        monkeypatch.setenv("REPOACTIVE_TEST_VAR", "visible")
-        job = Job(
-            name="foo",
-            command="echo [${REPOACTIVE_TEST_VAR:-unset}]",
-            title="t",
-            branch_prefix="repoactive/",
-            commit_title_prefix="",
-        )
-        result = _run_command(job, tmp_path)
-
-        assert result.output == "[visible]"
-
-    def test_granted_secret_injected_into_command(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        # A secret the job grants (lists in its own secret_env) is stripped from
-        # the base environment as a marked name, then injected back for this
-        # command, so the command sees its value (ADR 0017).
-        monkeypatch.setenv("MY_SECRET", "s3cr3t")
-        job = Job(
-            name="foo",
-            command="echo [${MY_SECRET:-unset}]",
-            title="t",
-            branch_prefix="repoactive/",
-            commit_title_prefix="",
-            secret_env=["MY_SECRET"],
-        )
-        result = _run_command(job, tmp_path, stripped_env_names=frozenset({"MY_SECRET"}))
-
-        assert result.output == "[s3cr3t]"
-
-    def test_marked_secret_stripped_from_non_granting_job(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        # A marked secret this job does not grant stays stripped: it is in
-        # stripped_env_names but not in the job's own secret_env, so it is never
-        # injected back and the command sees it unset (ADR 0017).
-        monkeypatch.setenv("MY_SECRET", "s3cr3t")
-        job = Job(
-            name="foo",
-            command="echo [${MY_SECRET:-unset}]",
-            title="t",
-            branch_prefix="repoactive/",
-            commit_title_prefix="",
-        )
-        result = _run_command(job, tmp_path, stripped_env_names=frozenset({"MY_SECRET"}))
-
-        assert result.output == "[unset]"
-        assert "s3cr3t" not in result.output
-
-    def test_missing_granted_secret_raises_before_running(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        # A granted secret that is unset fails fast, before the command runs.
-        monkeypatch.delenv("MY_SECRET", raising=False)
-        job = Job(
-            name="foo",
-            command="echo should-not-run",
-            title="t",
-            branch_prefix="repoactive/",
-            commit_title_prefix="",
-            secret_env=["MY_SECRET"],
-        )
-        with pytest.raises(MissingSecretError, match="requires secret MY_SECRET, not set"):
-            _run_command(job, tmp_path, stripped_env_names=frozenset({"MY_SECRET"}))
-
-    def test_config_source_dir_visible_to_command(self, tmp_path: Path) -> None:
-        # A job with a config_source_dir sees it as RA_CONFIG_SOURCE_DIR.
-        job = Job(
-            name="foo",
-            command="echo [$RA_CONFIG_SOURCE_DIR]",
-            title="t",
-            branch_prefix="repoactive/",
-            commit_title_prefix="",
-            config_source_dir="/cfg/dir",
-        )
-        result = _run_command(job, tmp_path, extra_env=_job_extra_env(job))
-
-        assert result.output == "[/cfg/dir]"
-
-    def test_workspace_dir_visible_to_command(self, tmp_path: Path) -> None:
-        # The command sees its workspace (the cwd) as RA_WORKSPACE_DIR.
-        job = Job(
-            name="foo",
-            command="echo [$RA_WORKSPACE_DIR]",
-            title="t",
-            branch_prefix="repoactive/",
-            commit_title_prefix="",
-        )
-        result = _run_command(job, tmp_path)
-
-        assert result.output == f"[{tmp_path}]"
-
-    def test_branch_visible_to_command(self, tmp_path: Path) -> None:
-        # The command sees its target bookmark/branch as RA_JOB_BRANCH.
-        job = Job(
-            name="foo",
-            command="echo [$RA_JOB_BRANCH]",
-            title="t",
-            branch_prefix="repoactive/",
-            commit_title_prefix="",
-        )
-        result = _run_command(job, tmp_path, extra_env=_job_extra_env(job))
-
-        assert result.output == "[repoactive/foo]"
-
-    def test_job_name_visible_to_command(self, tmp_path: Path) -> None:
-        # The command sees its job's name as RA_JOB_NAME.
-        job = Job(
-            name="foo",
-            command="echo [$RA_JOB_NAME]",
-            title="t",
-            branch_prefix="repoactive/",
-            commit_title_prefix="",
-        )
-        result = _run_command(job, tmp_path, extra_env=_job_extra_env(job))
-
-        assert result.output == "[foo]"
-
-    def test_base_branch_visible_to_command(self, tmp_path: Path) -> None:
-        # The command sees the branch its MR targets as RA_JOB_BASE_BRANCH.
-        job = Job(
-            name="foo",
-            command="echo [$RA_JOB_BASE_BRANCH]",
-            title="t",
-            branch_prefix="repoactive/",
-            commit_title_prefix="",
-            base_branch="release",
-        )
-        result = _run_command(job, tmp_path, extra_env=_job_extra_env(job))
-
-        assert result.output == "[release]"
-
-    def test_default_shell_is_sh(self, tmp_path: Path) -> None:
-        # With shell unset the command runs under /bin/sh. subprocess sets the
-        # shell as argv[0], so $0 is the interpreter path (this holds regardless
-        # of what /bin/sh actually is - on macOS it is bash in sh mode).
-        job = Job(
-            name="foo",
-            command="echo [$0]",
-            title="t",
-            branch_prefix="repoactive/",
-            commit_title_prefix="",
-        )
-        result = _run_command(job, tmp_path)
-
-        assert result.output == "[/bin/sh]"
-
-    def test_shell_selects_interpreter(self, tmp_path: Path) -> None:
-        # A configured shell becomes argv[0], so $0 is that interpreter, proving
-        # the command runs under the chosen shell rather than /bin/sh.
-        bash = shutil.which("bash")
-        if bash is None:
-            pytest.skip("bash not available")
-        job = Job(
-            name="foo",
-            command="echo [$0]",
-            title="t",
-            branch_prefix="repoactive/",
-            commit_title_prefix="",
-            shell=bash,
-        )
-        result = _run_command(job, tmp_path)
-
-        assert result.output == f"[{bash}]"
-
-
 class TestJobExtraEnv:
     def test_always_adds_name_and_branches(self) -> None:
         # Every job command gets RA_JOB_NAME, RA_JOB_BRANCH, and RA_JOB_BASE_BRANCH,
@@ -1164,26 +868,6 @@ class TestJobExtraEnv:
         }
 
 
-class TestResolveGrantedSecrets:
-    def test_reads_granted_values_from_environment(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("A_SECRET", "one")
-        monkeypatch.setenv("B_SECRET", "two")
-        job = Job(name="foo", command="c", title="t", secret_env=["A_SECRET", "B_SECRET"])
-        assert _resolve_granted_secrets(job) == {"A_SECRET": "one", "B_SECRET": "two"}
-
-    def test_empty_without_secret_env(self) -> None:
-        assert _resolve_granted_secrets(Job(name="foo", command="c", title="t")) == {}
-
-    def test_raises_on_first_unset_granted_secret(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("A_SECRET", raising=False)
-        job = Job(name="foo", command="c", title="t", secret_env=["A_SECRET"])
-        with pytest.raises(
-            MissingSecretError, match="requires secret A_SECRET, not set"
-        ) as excinfo:
-            _resolve_granted_secrets(job)
-        assert excinfo.value.name == "A_SECRET"
-
-
 class TestStrippedEnvNames:
     def test_unions_platform_tokens_and_marked_secrets(self) -> None:
         cfg = Config.model_validate(
@@ -1224,7 +908,7 @@ class TestStrippedEnvNames:
 
 class TestRunJob:
     @patch("repoactive.runner.JJ")
-    @patch("repoactive.runner.subprocess.Popen")
+    @patch("repoactive.command.subprocess.Popen")
     def test_produces_output(self, mock_sub: MagicMock, mock_jj_cls: MagicMock) -> None:
         mock_jj = _mock_jj(mock_jj_cls)
         _mock_popen(mock_sub)
@@ -1243,7 +927,7 @@ class TestRunJob:
         # Dependents use the new change-id directly as their parent revset.
         assert result.effective_revsets == [mock_jj.change_id.return_value]
 
-    @patch("repoactive.runner._run_command", return_value=CommandResult(output="", elapsed=0.0))
+    @patch("repoactive.runner.run_command", return_value=CommandResult(output="", elapsed=0.0))
     @patch("repoactive.runner.JJ")
     def test_passes_config_source_dir_to_command(
         self, mock_jj_cls: MagicMock, mock_run_command: MagicMock
@@ -1262,7 +946,7 @@ class TestRunJob:
             RA_CONFIG_SOURCE_DIR_ENV: "/cfg/dir",
         }
 
-    @patch("repoactive.runner._run_command", return_value=CommandResult(output="", elapsed=0.0))
+    @patch("repoactive.runner.run_command", return_value=CommandResult(output="", elapsed=0.0))
     @patch("repoactive.runner.JJ")
     def test_omits_config_source_dir_when_unset(
         self, mock_jj_cls: MagicMock, mock_run_command: MagicMock
@@ -1281,7 +965,7 @@ class TestRunJob:
         }
 
     @patch("repoactive.runner.JJ")
-    @patch("repoactive.runner.subprocess.Popen")
+    @patch("repoactive.command.subprocess.Popen")
     def test_describe_includes_body(self, mock_sub: MagicMock, mock_jj_cls: MagicMock) -> None:
         mock_jj = _mock_jj(mock_jj_cls)
         _mock_popen(mock_sub)
@@ -1293,7 +977,7 @@ class TestRunJob:
         mock_jj.describe.assert_called_once_with("Change foo\n\nBody text.\n\nRepoactive-Job: foo")
 
     @patch("repoactive.runner.JJ")
-    @patch("repoactive.runner.subprocess.Popen")
+    @patch("repoactive.command.subprocess.Popen")
     def test_output_appended_to_commit_message(
         self, mock_sub: MagicMock, mock_jj_cls: MagicMock
     ) -> None:
@@ -1309,7 +993,7 @@ class TestRunJob:
         )
 
     @patch("repoactive.runner.JJ")
-    @patch("repoactive.runner.subprocess.Popen")
+    @patch("repoactive.command.subprocess.Popen")
     def test_output_in_commit_false_suppresses_output(
         self, mock_sub: MagicMock, mock_jj_cls: MagicMock
     ) -> None:
@@ -1330,7 +1014,7 @@ class TestRunJob:
         mock_jj.describe.assert_called_once_with("Change foo\n\nRepoactive-Job: foo")
 
     @patch("repoactive.runner.JJ")
-    @patch("repoactive.runner.subprocess.Popen")
+    @patch("repoactive.command.subprocess.Popen")
     def test_commit_title_prefix_applied(
         self, mock_sub: MagicMock, mock_jj_cls: MagicMock
     ) -> None:
@@ -1347,7 +1031,7 @@ class TestRunJob:
         mock_jj.describe.assert_called_once_with("[bot] Change foo\n\nRepoactive-Job: foo")
 
     @patch("repoactive.runner.JJ")
-    @patch("repoactive.runner.subprocess.Popen")
+    @patch("repoactive.command.subprocess.Popen")
     def test_no_output_no_existing_bookmark(
         self, mock_sub: MagicMock, mock_jj_cls: MagicMock
     ) -> None:
@@ -1370,7 +1054,7 @@ class TestRunJob:
         assert result.effective_revsets == ["trunk()"]
 
     @patch("repoactive.runner.JJ")
-    @patch("repoactive.runner.subprocess.Popen")
+    @patch("repoactive.command.subprocess.Popen")
     def test_no_output_existing_bookmark_deleted_during_run(
         self, mock_sub: MagicMock, mock_jj_cls: MagicMock
     ) -> None:
@@ -1396,7 +1080,7 @@ class TestRunJob:
         assert _bookmark_change_id(result.prerun_branch_shape) == "old-change-id"
 
     @patch("repoactive.runner.JJ")
-    @patch("repoactive.runner.subprocess.Popen")
+    @patch("repoactive.command.subprocess.Popen")
     def test_no_output_effective_revsets_are_parents(
         self, mock_sub: MagicMock, mock_jj_cls: MagicMock
     ) -> None:
@@ -1413,7 +1097,7 @@ class TestRunJob:
         assert result.effective_revsets == ["repoactive/a", "repoactive/b"]
 
     @patch("repoactive.runner.JJ")
-    @patch("repoactive.runner.subprocess.Popen")
+    @patch("repoactive.command.subprocess.Popen")
     def test_command_failure_restores_and_raises(
         self, mock_sub: MagicMock, mock_jj_cls: MagicMock
     ) -> None:
@@ -1432,7 +1116,7 @@ class TestRunJob:
         mock_jj.bookmark_set.assert_not_called()
 
     @patch("repoactive.runner.JJ")
-    @patch("repoactive.runner.subprocess.Popen")
+    @patch("repoactive.command.subprocess.Popen")
     def test_conflict_below_command_commit_freezes_without_running(
         self, mock_sub: MagicMock, mock_jj_cls: MagicMock
     ) -> None:
@@ -1457,7 +1141,7 @@ class TestRunJob:
         assert result.effective_revsets == ["old-change-id"]
 
     @patch("repoactive.runner.JJ")
-    @patch("repoactive.runner.subprocess.Popen")
+    @patch("repoactive.command.subprocess.Popen")
     def test_conflict_in_rebuilt_branch_freezes_after_running(
         self, mock_sub: MagicMock, mock_jj_cls: MagicMock
     ) -> None:
@@ -1526,9 +1210,9 @@ class TestRunJob:
 
         assert ctx.plan.updates == []
 
-    @patch("repoactive.runner.threading.Timer")
+    @patch("repoactive.command.threading.Timer")
     @patch("repoactive.runner.JJ")
-    @patch("repoactive.runner.subprocess.Popen")
+    @patch("repoactive.command.subprocess.Popen")
     def test_arms_timeout_watchdog(
         self, mock_sub: MagicMock, mock_jj_cls: MagicMock, mock_timer: MagicMock
     ) -> None:
@@ -1550,11 +1234,11 @@ class TestRunJob:
         # The watchdog is armed with the job's timeout in seconds.
         assert mock_timer.call_args.args[0] == 30 * 60
 
-    @patch("repoactive.runner.threading.Timer", _ImmediateTimer)
-    @patch("repoactive.runner.os.getpgid", return_value=4242)
-    @patch("repoactive.runner.os.killpg")
+    @patch("repoactive.command.threading.Timer", _ImmediateTimer)
+    @patch("repoactive.command.os.getpgid", return_value=4242)
+    @patch("repoactive.command.os.killpg")
     @patch("repoactive.runner.JJ")
-    @patch("repoactive.runner.subprocess.Popen")
+    @patch("repoactive.command.subprocess.Popen")
     def test_command_timeout_kills_group_restores_and_raises(
         self,
         mock_sub: MagicMock,
@@ -1586,11 +1270,11 @@ class TestRunJob:
         mock_jj.op_restore.assert_called_once_with(mock_jj.op_id.return_value)
         mock_jj.bookmark_set.assert_not_called()
 
-    @patch("repoactive.runner.threading.Timer", _ImmediateTimer)
-    @patch("repoactive.runner.os.getpgid", return_value=4242)
-    @patch("repoactive.runner.os.killpg")
+    @patch("repoactive.command.threading.Timer", _ImmediateTimer)
+    @patch("repoactive.command.os.getpgid", return_value=4242)
+    @patch("repoactive.command.os.killpg")
     @patch("repoactive.runner.JJ")
-    @patch("repoactive.runner.subprocess.Popen")
+    @patch("repoactive.command.subprocess.Popen")
     def test_watchdog_race_with_clean_exit_is_not_a_timeout(
         self,
         mock_sub: MagicMock,
@@ -1620,9 +1304,9 @@ class TestRunJob:
         assert result.command_output == "done"
         mock_jj.abandon.assert_not_called()
 
-    @patch("repoactive.runner.threading.Timer")
+    @patch("repoactive.command.threading.Timer")
     @patch("repoactive.runner.JJ")
-    @patch("repoactive.runner.subprocess.Popen")
+    @patch("repoactive.command.subprocess.Popen")
     def test_no_timeout_skips_watchdog(
         self, mock_sub: MagicMock, mock_jj_cls: MagicMock, mock_timer: MagicMock
     ) -> None:
@@ -1635,9 +1319,9 @@ class TestRunJob:
 
         mock_timer.assert_not_called()
 
-    @patch("repoactive.runner.threading.Timer")
+    @patch("repoactive.command.threading.Timer")
     @patch("repoactive.runner.JJ")
-    @patch("repoactive.runner.subprocess.Popen")
+    @patch("repoactive.command.subprocess.Popen")
     def test_zero_timeout_skips_watchdog(
         self, mock_sub: MagicMock, mock_jj_cls: MagicMock, mock_timer: MagicMock
     ) -> None:
@@ -1659,7 +1343,7 @@ class TestRunJob:
         mock_timer.assert_not_called()
 
     @patch("repoactive.runner.JJ")
-    @patch("repoactive.runner.subprocess.Popen")
+    @patch("repoactive.command.subprocess.Popen")
     def test_command_output_recorded_for_plan_recording(
         self, mock_sub: MagicMock, mock_jj_cls: MagicMock
     ) -> None:
@@ -1673,7 +1357,7 @@ class TestRunJob:
         assert result.command_output == "Copied file foo -> bar"
 
     @patch("repoactive.runner.JJ")
-    @patch("repoactive.runner.subprocess.Popen")
+    @patch("repoactive.command.subprocess.Popen")
     def test_produces_diff_no_mr_url_yet(
         self, mock_sub: MagicMock, mock_jj_cls: MagicMock
     ) -> None:
@@ -1688,7 +1372,7 @@ class TestRunJob:
         assert result.mr_url is None
 
     @patch("repoactive.runner.JJ")
-    @patch("repoactive.runner.subprocess.Popen")
+    @patch("repoactive.command.subprocess.Popen")
     def test_create_mr_never_still_produces_diff(
         self, mock_sub: MagicMock, mock_jj_cls: MagicMock
     ) -> None:
@@ -1710,7 +1394,7 @@ class TestRunJob:
         assert result.mr_url is None
 
     @patch("repoactive.runner.JJ")
-    @patch("repoactive.runner.subprocess.Popen")
+    @patch("repoactive.command.subprocess.Popen")
     def test_always_uses_new_regardless_of_existing_bookmark(
         self, mock_sub: MagicMock, mock_jj_cls: MagicMock
     ) -> None:
@@ -1730,7 +1414,7 @@ class TestRunJob:
         assert _bookmark_change_id(result.prerun_branch_shape) == "old-change-id"
 
     @patch("repoactive.runner.JJ")
-    @patch("repoactive.runner.subprocess.Popen")
+    @patch("repoactive.command.subprocess.Popen")
     def test_always_uses_new_multiple_parents(
         self, mock_sub: MagicMock, mock_jj_cls: MagicMock
     ) -> None:
@@ -1957,7 +1641,7 @@ class TestRunGeneratorJob:
         "repoactive.runner._load_job_specs",
         return_value={"child": {"command": "c", "title": "Child"}},
     )
-    @patch("repoactive.runner._run_command")
+    @patch("repoactive.runner.run_command")
     @patch("repoactive.runner.JJ")
     def test_runs_command_with_jobs_dir_and_abandons(
         self, mock_jj_cls: MagicMock, mock_run_command: MagicMock, mock_load: MagicMock
@@ -1983,7 +1667,7 @@ class TestRunGeneratorJob:
         "repoactive.runner._load_job_specs",
         return_value={"child": {"command": "c", "title": "Child"}},
     )
-    @patch("repoactive.runner._run_command")
+    @patch("repoactive.runner.run_command")
     @patch("repoactive.runner.JJ")
     def test_command_gets_both_jobs_dir_and_config_source_dir(
         self, mock_jj_cls: MagicMock, mock_run_command: MagicMock, mock_load: MagicMock
@@ -1997,7 +1681,7 @@ class TestRunGeneratorJob:
         assert RA_JOBS_DIR_ENV in extra_env
         assert extra_env[RA_CONFIG_SOURCE_DIR_ENV] == "/cfg"
 
-    @patch("repoactive.runner._run_command", side_effect=CommandError("boom", elapsed=1.0))
+    @patch("repoactive.runner.run_command", side_effect=CommandError("boom", elapsed=1.0))
     @patch("repoactive.runner.JJ")
     def test_command_failure_abandons_and_raises(
         self, mock_jj_cls: MagicMock, mock_run_command: MagicMock
@@ -2013,7 +1697,7 @@ class TestRunGeneratorJob:
 
 class TestDualTrailer:
     @patch("repoactive.runner.JJ")
-    @patch("repoactive.runner.subprocess.Popen")
+    @patch("repoactive.command.subprocess.Popen")
     def test_generated_job_records_both_trailers(
         self, mock_sub: MagicMock, mock_jj_cls: MagicMock
     ) -> None:
@@ -3033,7 +2717,7 @@ class TestRunAll:
         )
 
     @patch("repoactive.runner.run_job")
-    @patch("repoactive.runner._run_command")
+    @patch("repoactive.runner.run_command")
     @patch(
         "repoactive.runner._load_job_specs",
         return_value={"child": {"command": "c", "title": "Child"}},
@@ -3057,7 +2741,7 @@ class TestRunAll:
         assert summary.results["gen"].produced_diff is False
 
     @patch("repoactive.runner.run_job")
-    @patch("repoactive.runner._run_command")
+    @patch("repoactive.runner.run_command")
     @patch(
         "repoactive.runner._load_job_specs",
         return_value={"child": {"command": "c", "title": "Child", "depends_on": ["z"]}},
@@ -3088,7 +2772,7 @@ class TestRunAll:
         assert order.index("z") < order.index("child")
 
     @patch("repoactive.runner.run_job")
-    @patch("repoactive.runner._run_command")
+    @patch("repoactive.runner.run_command")
     @patch(
         "repoactive.runner._load_job_specs",
         return_value={"child": {"command": "c", "title": "Child"}},
@@ -3108,7 +2792,7 @@ class TestRunAll:
         assert ("repoactive/child",) in tracked
 
     @patch("repoactive.runner.run_job")
-    @patch("repoactive.runner._run_command")
+    @patch("repoactive.runner.run_command")
     def test_generator_on_cooldown_emits_nothing(
         self, mock_run_command: MagicMock, mock_run_job: MagicMock, mock_jj: MagicMock
     ) -> None:
@@ -3123,7 +2807,7 @@ class TestRunAll:
         mock_run_job.assert_not_called()
         assert summary.on_cooldown == {"gen"}
 
-    @patch("repoactive.runner._run_command", side_effect=RuntimeError("boom"))
+    @patch("repoactive.runner.run_command", side_effect=RuntimeError("boom"))
     def test_generator_failure_is_recorded(
         self, mock_run_command: MagicMock, mock_jj: MagicMock
     ) -> None:

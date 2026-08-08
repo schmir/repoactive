@@ -158,7 +158,7 @@ leak-into-git that scoping alone leaves: a granting job echoing its own
 secret.
 
 **Why it is cheap here.** Output already funnels through one line-oriented
-choke point in `runner._run_command`:
+choke point in `command.run_command`:
 
 ```python
 for line in proc.stdout:
@@ -173,7 +173,7 @@ secret values are single-line tokens, a secret split across read chunks does
 not arise, so no buffering is needed. The work is: a small redactor (sort
 values longest-first, `str.replace` each with `[redacted]`, skip values
 under ~5 characters so a trivial value does not blank the output), thread
-the granting job's secret _values_ into `_run_command` (it currently
+the granting job's secret _values_ into `run_command` (it currently
 receives only names), and the one call at the choke point. Using a bare
 `[redacted]` placeholder avoids needing a value→name map.
 

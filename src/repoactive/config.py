@@ -709,7 +709,7 @@ class Config(BaseModel):
         """Names of the env vars holding platform API tokens.
 
         These are stripped from the environment a job command runs in so a
-        command cannot read the platform credential (see runner._run_command and
+        command cannot read the platform credential (see command.run_command and
         docs/adr/0006-job-commands-are-trusted.md).
         """
         return {p.token_env for p in self.platforms}
@@ -720,7 +720,7 @@ class Config(BaseModel):
         The union of job-defaults and every job's secret_env. A marked
         name is stripped from every job command's base environment; a job reads
         it back only by listing it in its own secret_env (see
-        runner._run_command and docs/adr/0017-secret-env-redaction.md).
+        command.run_command and docs/adr/0017-secret-env-redaction.md).
         """
         names = set(self.job_defaults.secret_env)
         for job in self.jobs:
