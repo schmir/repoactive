@@ -745,20 +745,6 @@ class ConfigShape(BaseModel):
     job_defaults: dict = Field(alias="job-defaults", default_factory=dict)
 
 
-class FragmentShape(BaseModel):
-    """Structural shape of a generator-emitted job fragment.
-
-    Generators may only emit [job.<name>] tables: the generator job itself
-    acts as the scoped job-defaults for its emitted jobs (ADR 0004), so a
-    [job-defaults] or [platform] in a fragment would never apply and
-    is rejected instead of silently ignored.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    job: dict[str, dict] = Field(default_factory=dict)
-
-
 def _deep_merge(*, base: dict, override: dict) -> dict:
     result = dict(base)
     for key, value in override.items():

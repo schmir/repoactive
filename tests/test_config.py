@@ -13,7 +13,6 @@ from repoactive.config import (
     ConfigNotFoundError,
     ConfigShape,
     CreateMR,
-    FragmentShape,
     InvalidDurationError,
     Job,
     JobDefaults,
@@ -668,30 +667,6 @@ class TestConfigShape:
         with pytest.raises(pydantic.ValidationError) as exc_info:
             ConfigShape.model_validate({"platform": [{"url": "u"}]})
         assert exc_info.value.errors()[0]["loc"] == ("platform",)
-
-
-class TestFragmentShape:
-    def test_accepts_job_tables(self) -> None:
-        shape = FragmentShape.model_validate({"job": {"a": {"command": "cmd"}}})
-        assert shape.job == {"a": {"command": "cmd"}}
-
-    def test_empty_fragment_yields_no_jobs(self) -> None:
-        assert FragmentShape.model_validate({}).job == {}
-
-    @pytest.mark.parametrize("key", ["job-defaults", "platform", "unknown"])
-    def test_other_top_level_keys_rejected(self, key: str) -> None:
-        with pytest.raises(pydantic.ValidationError, match="Extra inputs are not permitted"):
-            FragmentShape.model_validate({key: {}, "job": {"a": {"command": "cmd"}}})
-
-    def test_error_names_each_unexpected_key(self) -> None:
-        with pytest.raises(pydantic.ValidationError) as exc_info:
-            FragmentShape.model_validate({"platform": {}, "job-defaults": {}})
-        assert {e["loc"] for e in exc_info.value.errors()} == {("platform",), ("job-defaults",)}
-
-    def test_non_table_job_entry_rejected(self) -> None:
-        with pytest.raises(pydantic.ValidationError) as exc_info:
-            FragmentShape.model_validate({"job": {"foo": "hello"}})
-        assert exc_info.value.errors()[0]["loc"] == ("job", "foo")
 
 
 class TestLoadConfig:

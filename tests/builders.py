@@ -1,6 +1,20 @@
 """Shared Job/Config builders for the runner and selection test modules."""
 
-from repoactive.config import Config, CreateMR, Job
+from repoactive.config import Config, CreateMR, Job, JobDefaults
+
+
+def _gen(
+    name: str = "gen", *, tags: list[str] | None = None, cooldown_period: str | None = None
+) -> Job:
+    """Return a resolved generator job (emits_jobs=True) for inheritance tests."""
+    return Job(
+        name=name,
+        command="discover",
+        title="Gen",
+        emits_jobs=True,
+        tags=tags or [],
+        cooldown_period=cooldown_period,
+    ).resolve(JobDefaults())
 
 
 def _job(  # noqa: PLR0913

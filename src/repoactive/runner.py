@@ -4,14 +4,11 @@ import contextlib
 import logging
 import tempfile
 import time
-import tomllib
 from collections.abc import Callable, Generator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-
-from pydantic import ValidationError
 
 from repoactive import human_commits
 from repoactive.boxquote import boxquote, strip_boxquotes
@@ -19,12 +16,10 @@ from repoactive.command import CommandError, CommandResult, run_command
 from repoactive.config import (
     Config,
     CreateMR,
-    FragmentShape,
     Job,
-    expand_config_paths,
-    merge_jobs,
 )
-from repoactive.graph import CircularDependencyError, detect_dependency_cycle, topological_sort
+from repoactive.generator import build_generated_jobs, load_job_specs
+from repoactive.graph import topological_sort
 from repoactive.jj import JJ, revset_heads, workspace_name
 from repoactive.jobtree import format_job_forest, print_job_table
 from repoactive.lock import run_lock
@@ -75,22 +70,6 @@ RA_JOB_NAME_ENV = "RA_JOB_NAME"
 # not this value.
 RA_JOB_BASE_BRANCH_ENV = "RA_JOB_BASE_BRANCH"
 
-# Fields an emitted job inherits from its generator when the emitted entry does
-# not set them itself (tags and depends_on are handled separately because
-# their defaults are not a plain copy). See docs/adr/0004-job-generators.md.
-_INHERITED_FIELDS = (
-    "cooldown_period",
-    "base_branch",
-    "timeout",
-    "labels",
-    "branch_prefix",
-    "mr_title_prefix",
-    "commit_title_prefix",
-    "draft",
-    "create_mr",
-    "auto_merge",
-)
-
 
 class RunMode(StrEnum):
     """How far a run publishes its results past the local jj repository.
@@ -104,16 +83,6 @@ class RunMode(StrEnum):
     local = "local"
     push = "push"
     publish = "publish"
-
-
-class GeneratedJobError(ValueError):
-    """Raised when a generator emits an invalid job set.
-
-    Invalid means collision, recursion, unknown dependency, or a job that fails validation.
-    """
-
-    def __init__(self, generator: str, message: str) -> None:
-        super().__init__(f"generator {generator!r}: {message}")
 
 
 @dataclass
@@ -592,123 +561,6 @@ def run_job(
         )
 
 
-def _load_job_specs(jobs_dir: Path) -> dict[str, dict]:
-    """Parse the *.toml fragments a generator wrote into jobs_dir.
-
-    Files are read in sorted order and their [job.<name>] tables merged by
-    name (later files win), the same machinery used for the .repoactive.d
-    directory. Fragments may only contain [job.<name>] tables (see
-    FragmentShape). Returns the raw job-spec table keyed by name, before
-    inheritance/validation.
-    """
-    specs: dict[str, dict] = {}
-    for path in expand_config_paths([jobs_dir]):
-        data = tomllib.loads(path.read_text())
-        specs = merge_jobs(base=specs, override=FragmentShape.model_validate(data).job)
-    return specs
-
-
-def _build_generated_job(  # noqa: PLR0913
-    *,
-    generator: Job,
-    name: str,
-    spec: dict,
-    run_names: set[str],
-    all_config_names: set[str],
-    marked_secret_names: frozenset[str],
-) -> Job:
-    """Build one emitted Job from its raw spec, applying inheritance.
-
-    name is the spec's table key. The job inherits the (resolved) generator's
-    tags, depends_on and the _INHERITED_FIELDS unless the spec overrides
-    them, and records the generator in generated_by. Raises GeneratedJobError
-    on a name colliding with an existing job, a nested generator, a job that
-    fails validation, or a secret_env naming a secret the static config did
-    not already mark (marked_secret_names).
-    """
-    if name in run_names or name in all_config_names:
-        raise GeneratedJobError(
-            generator.name, f"emitted job {name!r} collides with an existing job"
-        )
-    if spec.get("emits_jobs"):
-        raise GeneratedJobError(
-            generator.name, f"emitted job {name!r} may not itself be a generator (no recursion)"
-        )
-    merged = {**spec, "name": name}
-    if "tags" not in merged and "disabled" not in merged:
-        merged["tags"] = sorted(generator.effective_tags())
-    if "depends_on" not in merged:
-        merged["depends_on"] = [generator.name]
-    for f in _INHERITED_FIELDS:
-        merged.setdefault(f, getattr(generator, f))
-    merged["generated_by"] = generator.name
-    # The generator's fragments live in a throwaway temp dir, so an emitted job's
-    # meaningful config location is the generator's own config source.
-    merged["config_source_dir"] = generator.config_source_dir
-    try:
-        job = Job.model_validate(merged)
-    except ValidationError as e:
-        raise GeneratedJobError(generator.name, f"emitted job {name!r} is invalid: {e}") from e
-    # A generated job may only grant secrets the static config already marked. The
-    # env strip set is derived from the static config (RunContext.stripped_env_names),
-    # so a secret first introduced by an emitted job would not be stripped from the
-    # other jobs' environments; requiring it be marked up front (e.g. in
-    # [job-defaults].secret_env or on the generator) keeps a secret out of every job
-    # that did not grant it. See docs/adr/0017-secret-env-redaction.md.
-    unmarked = sorted(set(job.secret_env) - marked_secret_names)
-    if unmarked:
-        raise GeneratedJobError(
-            generator.name,
-            f"emitted job {name!r} grants secret(s) not marked in the static config: "
-            f"{unmarked}; add them to [job-defaults].secret_env or the generator's secret_env",
-        )
-    return job
-
-
-def _build_generated_jobs(
-    *,
-    generator: Job,
-    specs: dict[str, dict],
-    run_names: set[str],
-    all_config_names: set[str],
-    marked_secret_names: frozenset[str] = frozenset(),
-) -> list[Job]:
-    """Turn a generator's raw specs into validated Job objects.
-
-    Validates each spec (see _build_generated_job), that every
-    depends_on target is within this run (the existing jobs or a sibling
-    emitted job), and that the emitted jobs are acyclic — a cycle would
-    otherwise silently mis-order the topological sort and crash the run.
-    generator must be resolved (its inherited fields filled in).
-    """
-    emitted = [
-        _build_generated_job(
-            generator=generator,
-            name=name,
-            spec=spec,
-            run_names=run_names,
-            all_config_names=all_config_names,
-            marked_secret_names=marked_secret_names,
-        )
-        for name, spec in specs.items()
-    ]
-    allowed = run_names | {j.name for j in emitted}
-    for j in emitted:
-        unknown = set(j.depends_on) - allowed
-        if unknown:
-            raise GeneratedJobError(
-                generator.name,
-                f"emitted job {j.name!r} depends_on jobs not in this run: {sorted(unknown)}",
-            )
-    # A cycle can only run through emitted jobs: the existing jobs were
-    # validated acyclic and cannot depend on emitted names.
-    try:
-        detect_dependency_cycle(emitted)
-    except CircularDependencyError as e:
-        raise GeneratedJobError(generator.name, str(e)) from e
-    return emitted
-
-
 def _format_duration(seconds: float) -> str:
     """Format a duration in seconds as a human-readable string like '3d 2h' or '45m'."""
     seconds = int(seconds)
@@ -989,13 +841,13 @@ def _run_generator_job(ctx: RunContext, *, job: Job, parents: list[str]) -> JobR
                 stripped_env_names=ctx.stripped_env_names,
                 extra_env=_job_extra_env(job, {RA_JOBS_DIR_ENV: str(jobs_dir)}),
             )
-            specs = _load_job_specs(jobs_dir)
+            specs = load_job_specs(jobs_dir)
         finally:
             repo.abandon()
     logger.debug("[%s] generator emitted %d job spec(s)", job.name, len(specs))
     # selection.jobs is every job already in the run (collision guard); config.jobs
     # are the statically configured names.
-    emitted = _build_generated_jobs(
+    emitted = build_generated_jobs(
         generator=job,
         specs=specs,
         run_names={j.name for j in ctx.selection.jobs},
