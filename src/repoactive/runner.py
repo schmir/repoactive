@@ -673,15 +673,15 @@ def _apply_outcome(ctx: RunContext, job: Job, outcome: DispatchOutcome) -> None:
         summary.failed[job.name] = outcome.failed
 
 
-def _dispatch_job(ctx: RunContext, *, job: Job) -> list[Job]:
-    """Run a single job, recording its outcome in ctx.summary.
+def _dispatch_job(ctx: RunContext, *, job: Job) -> DispatchOutcome:
+    """Run a single job, recording its outcome in ctx.summary and returning it.
 
     A failed or dependency-skipped job lands in summary.failed/
     summary.dependency_failed, so _dispatch_blocked_deps blocks its dependents
-    in turn. Returns the jobs a generator (emits_jobs) produced, empty for an
-    ordinary job or one that emitted nothing. Which jobs bypass a skip gate is
-    driven by ctx.selection (see JobSelection); the plan is built by
-    _record_job_plan, not here.
+    in turn. The returned outcome carries the job's result (None when blocked or
+    failed) and its skip_reason, which _record_job_plan reads directly rather
+    than reaching back into ctx.summary. Which jobs bypass a skip gate is driven
+    by ctx.selection (see JobSelection).
     """
     outcome = _dispatch_blocked_deps(ctx, job)
     if outcome is None:
@@ -694,7 +694,7 @@ def _dispatch_job(ctx: RunContext, *, job: Job) -> list[Job]:
             or _dispatch_run(ctx, job, parents)
         )
     _apply_outcome(ctx, job, outcome)
-    return outcome.emitted
+    return outcome
 
 
 def _dispatch_blocked_deps(ctx: RunContext, job: Job) -> DispatchOutcome | None:
@@ -895,27 +895,29 @@ def _record_deleted_bookmark(result: JobResult, *, repo: JJ, plan: UpdatePlan) -
         )
 
 
-def _record_job_plan(ctx: RunContext, job: Job) -> None:
+def _record_job_plan(ctx: RunContext, outcome: DispatchOutcome) -> None:
     """Finalize a job's bookmark and record its push/MR in ctx.plan (ADR 0020).
 
-    run_job already rewrote the command commit in place (or wrote a fresh
-    commit and pointed the bookmark at it) and left result.effective_revsets
-    at the branch tip, so the bookmark is already positioned. This only:
-    - No diff produced: deletes the old bookmark if the command ran and found
-      nothing (cooldown/successor/gated skips are left untouched) and records a
-      remote deletion.
+    Decided entirely from the dispatch outcome, with no read-back into
+    ctx.summary. run_job already rewrote the command commit in place (or wrote a
+    fresh commit and pointed the bookmark at it) and left effective_revsets at
+    the branch tip, so the bookmark is already positioned. This only:
+    - No result: a dependency-blocked or failed job records no plan.
+    - No diff produced: retires the bookmark when the command actually ran and
+      found nothing; an intentional skip (outcome.skip_reason set: cooldown,
+      successor, or gated) is left untouched.
     - Diff produced: appends the bookmark push and MR descriptor.
     """
-    summary = ctx.summary
     plan = ctx.plan
     repo = ctx.repo
 
-    result = summary.results.get(job.name)
+    result = outcome.result
     if result is None:
-        logger.debug("plan: [%s] no result, skipping", job.name)
+        logger.debug("plan: no result, skipping")
         return
 
-    bookmark = result.job.branch_name()
+    job = result.job
+    bookmark = job.branch_name()
     logger.debug(
         "plan: [%s] produced_diff=%s prerun_branch_shape=%s",
         job.name,
@@ -930,14 +932,14 @@ def _record_job_plan(ctx: RunContext, job: Job) -> None:
     # the human sees the branch needs attention; a job that never opens MRs has
     # nothing to label.
     if result.frozen:
-        if result.job.create_mr is CreateMR.never:
+        if job.create_mr is CreateMR.never:
             logger.debug("plan: [%s] frozen, no MR to label", job.name)
             return
         logger.debug("plan: [%s] frozen, labelling MR needs-rebase", job.name)
         plan.updates.append(
             JobUpdate(
                 job_name=job.name,
-                title=result.job.title,
+                title=job.title,
                 label_only=MRLabelUpdate(
                     source_branch=bookmark,
                     add_labels=[NEEDS_REBASE_LABEL],
@@ -947,31 +949,32 @@ def _record_job_plan(ctx: RunContext, job: Job) -> None:
         return
 
     if not result.produced_diff:
-        if job.name not in (
-            summary.on_cooldown | summary.successor_skipped | summary.run_only_if_changed_skipped
-        ):
+        # A gate recorded a no-op result (skip_reason set) so dependents proceed;
+        # its bookmark must be left alone. Only a command that ran and produced
+        # nothing retires the bookmark.
+        if outcome.skip_reason is None:
             _record_deleted_bookmark(result, repo=repo, plan=plan)
         return
 
     mr: MRUpdate | None = None
-    if result.job.create_mr is not CreateMR.never:
+    if job.create_mr is not CreateMR.never:
         mr = MRUpdate(
             source_branch=bookmark,
-            target_branch=result.job.base_branch,
-            title=f"{result.job.mr_title_prefix}{result.job.title}",
-            description=result.job.description or "",
-            command=result.job.command,
+            target_branch=job.base_branch,
+            title=f"{job.mr_title_prefix}{job.title}",
+            description=job.description or "",
+            command=job.command,
             command_output=result.command_output,
-            labels=result.job.labels,
-            draft=result.job.draft,
-            auto_merge=result.job.auto_merge or False,
-            required_approvals=result.job.required_approvals,
-            depends_on=list(result.job.depends_on),
+            labels=job.labels,
+            draft=job.draft,
+            auto_merge=job.auto_merge or False,
+            required_approvals=job.required_approvals,
+            depends_on=list(job.depends_on),
         )
     plan.updates.append(
         JobUpdate(
             job_name=job.name,
-            title=result.job.title,
+            title=job.title,
             push=BookmarkPush(bookmark=bookmark),
             mr=mr,
         )
@@ -1028,12 +1031,12 @@ def _run_jobs(ctx: RunContext) -> None:
         if job is None:
             break
         started.add(job.name)
-        emitted = _dispatch_job(ctx, job=job)
+        outcome = _dispatch_job(ctx, job=job)
         # run_job's rewrite (ADR 0020) can leave this workspace stale; reconcile before commands.
         ctx.repo.update_stale_working_copy()
         # run_job rewrote this job's commit in place; finalize its bookmark and push/MR now.
-        _record_job_plan(ctx, job)
-        if emitted:
+        _record_job_plan(ctx, outcome)
+        if emitted := outcome.emitted:
             # Resolve before splicing in so _dispatch_job receives resolved jobs.
             resolved_emitted = [j.resolve(ctx.config.job_defaults) for j in emitted]
             # Track the new jobs' bookmarks so an already-pushed branch is reused, not recreated.

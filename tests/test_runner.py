@@ -21,11 +21,13 @@ from repoactive.runner import (
     RA_JOB_NAME_ENV,
     RA_JOBS_DIR_ENV,
     ApplyResult,
+    DispatchOutcome,
     Disposition,
     JobResult,
     RunContext,
     RunMode,
     RunSummary,
+    SkipReason,
     _bookmark_change_id,
     _build_commit_message,
     _compute_parents,
@@ -1270,8 +1272,7 @@ class TestRunJob:
         # push (ADR 0019 "push nothing"), but records a label-only update so the
         # open MR gets the needs-rebase label.
         job = _job("foo")
-        summary = RunSummary()
-        summary.results[job.name] = JobResult(
+        result = JobResult(
             job=job,
             effective_revsets=["old-change-id"],
             produced_diff=False,
@@ -1279,9 +1280,9 @@ class TestRunJob:
             prerun_branch_shape=human_commits.AlreadyMerged(bookmark_change_id="old-change-id"),
         )
         repo = MagicMock(spec=JJ)
-        ctx = _ctx(summary=summary, repo=repo)
+        ctx = _ctx(repo=repo)
 
-        _record_job_plan(ctx, job)
+        _record_job_plan(ctx, DispatchOutcome(result=result))
 
         assert len(ctx.plan.updates) == 1
         update = ctx.plan.updates[0]
@@ -1298,17 +1299,16 @@ class TestRunJob:
         # A frozen job that never opens MRs has nothing to label, so no update is
         # queued at all.
         job = _job("foo", create_mr=CreateMR.never)
-        summary = RunSummary()
-        summary.results[job.name] = JobResult(
+        result = JobResult(
             job=job,
             effective_revsets=["old-change-id"],
             produced_diff=False,
             frozen=True,
             prerun_branch_shape=human_commits.AlreadyMerged(bookmark_change_id="old-change-id"),
         )
-        ctx = _ctx(summary=summary, repo=MagicMock(spec=JJ))
+        ctx = _ctx(repo=MagicMock(spec=JJ))
 
-        _record_job_plan(ctx, job)
+        _record_job_plan(ctx, DispatchOutcome(result=result))
 
         assert ctx.plan.updates == []
 
@@ -1532,6 +1532,79 @@ class TestRunJob:
 
         mock_jj.new.assert_called_once_with("heads(repoactive/a | repoactive/b)")
         mock_jj.rebase.assert_not_called()
+
+
+class TestRecordJobPlan:
+    """_record_job_plan decides purely from the DispatchOutcome (candidate 3).
+
+    The retire-vs-leave-alone choice reads outcome.skip_reason directly instead
+    of reaching back into ctx.summary's skip sets.
+    """
+
+    def test_no_result_records_nothing(self) -> None:
+        # A dependency-blocked or failed job carries no result and no plan.
+        ctx = _ctx(repo=MagicMock(spec=JJ))
+        _record_job_plan(ctx, DispatchOutcome(skip_reason=SkipReason.dependency_failed))
+        assert ctx.plan.updates == []
+
+    def test_ran_no_diff_retires_existing_bookmark(self) -> None:
+        # The command ran (skip_reason is None) and produced nothing, so the
+        # bookmark that existed before the run is scheduled for deletion.
+        job = _job("foo")
+        result = JobResult(
+            job=job,
+            effective_revsets=["trunk()"],
+            produced_diff=False,
+            prerun_branch_shape=human_commits.AlreadyMerged(bookmark_change_id="old-id"),
+        )
+        ctx = _ctx(repo=MagicMock(spec=JJ))
+
+        _record_job_plan(ctx, DispatchOutcome(result=result))
+
+        assert ctx.plan.updates == [
+            JobUpdate(
+                job_name="foo",
+                title="Change foo",
+                push=BookmarkPush(bookmark="repoactive/foo", delete=True),
+            )
+        ]
+
+    def test_gated_skip_leaves_bookmark_untouched(self) -> None:
+        # Same no-diff result, but a gate recorded it (skip_reason set): the
+        # bookmark is left alone even though it existed before the run.
+        job = _job("foo")
+        result = JobResult(
+            job=job,
+            effective_revsets=["trunk()"],
+            produced_diff=False,
+            prerun_branch_shape=human_commits.AlreadyMerged(bookmark_change_id="old-id"),
+        )
+        ctx = _ctx(repo=MagicMock(spec=JJ))
+
+        _record_job_plan(
+            ctx,
+            DispatchOutcome(result=result, skip_reason=SkipReason.run_only_if_changed_skipped),
+        )
+
+        assert ctx.plan.updates == []
+
+    def test_diff_records_push_and_mr(self) -> None:
+        job = _job("foo")
+        result = JobResult(
+            job=job,
+            effective_revsets=["repoactive/foo"],
+            produced_diff=True,
+            prerun_branch_shape=human_commits.NoBranch(),
+        )
+        ctx = _ctx(repo=MagicMock(spec=JJ))
+
+        _record_job_plan(ctx, DispatchOutcome(result=result))
+
+        assert len(ctx.plan.updates) == 1
+        update = ctx.plan.updates[0]
+        assert update.push == BookmarkPush(bookmark="repoactive/foo")
+        assert update.mr is not None
+        assert update.mr.source_branch == "repoactive/foo"
 
 
 class TestRunGeneratorJob:
