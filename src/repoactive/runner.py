@@ -194,6 +194,8 @@ class RunContext:
         """Open a fresh temp jj workspace for a job, cleaned up on exit."""
         with JJ(self.repo_path).temp_workspace(workspace_name(job.name)) as repo:
             yield repo
+        # A job's rewrite (ADR 0020) can leave the main working copy stale; reconcile it now.
+        self.repo.update_stale_working_copy()
 
     @contextlib.contextmanager
     def generated_jobs_dir(self, generator: Job) -> "Generator[GeneratedJobsDir]":
@@ -1060,8 +1062,6 @@ def _run_jobs(ctx: RunContext) -> None:
             break
         started.add(job.name)
         outcome = _dispatch_job(ctx, job=job)
-        # run_job's rewrite (ADR 0020) can leave this workspace stale; reconcile before commands.
-        ctx.repo.update_stale_working_copy()
         # run_job rewrote this job's commit in place; finalize its bookmark and push/MR now.
         _record_job_plan(ctx, outcome)
         # Only a generator that actually ran emits jobs.

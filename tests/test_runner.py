@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from repoactive import human_commits
+from repoactive import human_commits, runner
 from repoactive.command import CommandError, CommandResult
 from repoactive.config import Config, CreateMR, Job, JobDefaults
 from repoactive.constants import (
@@ -91,11 +91,15 @@ def _ctx(
 
     summary is stored by reference, so a caller that passes its own
     instance can assert on it after the call.
+
+    The default repo is resolved through runner.JJ so a test patching
+    repoactive.runner.JJ also drives ctx.repo (which job_workspace reconciles),
+    keeping a single mock standing in for the main and temp workspaces.
     """
     return RunContext(
         config=config if config is not None else _config(),
         repo_path=repo_path,
-        repo=repo if repo is not None else JJ(repo_path),
+        repo=repo if repo is not None else runner.JJ(repo_path),
         summary=summary if summary is not None else RunSummary(),
         selection=selection or JobSelection(jobs=[], refreshed=frozenset()),
     )
