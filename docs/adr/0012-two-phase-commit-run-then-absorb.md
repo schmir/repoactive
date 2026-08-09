@@ -67,7 +67,7 @@ unaffected.
 
 Each successful job records its result as before but additionally stores the
 new commit's change-id alongside the old commit's change-id (if a bookmark
-existed) and the parent revsets it ran on (`JobResult.new_change_id`,
+existed) and the parent revsets it ran on (`JobRun.new_change_id`,
 `old_change_id`, `parents`). The `UpdatePlan` is not built during this
 phase; the absorb phase builds it once the canonical commits are known.
 

@@ -21,12 +21,14 @@ from repoactive.runner import (
     RA_JOB_NAME_ENV,
     RA_JOBS_DIR_ENV,
     ApplyResult,
-    DispatchOutcome,
+    Blocked,
     Disposition,
-    JobResult,
+    JobRun,
+    Ran,
     RunContext,
     RunMode,
     RunSummary,
+    Skipped,
     SkipReason,
     _bookmark_change_id,
     _build_commit_message,
@@ -98,8 +100,8 @@ def _ctx(
     )
 
 
-def _result(job: Job, *, revsets: list[str], produced: bool = True) -> JobResult:
-    return JobResult(
+def _result(job: Job, *, revsets: list[str], produced: bool = True) -> JobRun:
+    return JobRun(
         job=job,
         effective_revsets=revsets,
         produced_diff=produced,
@@ -223,7 +225,7 @@ class TestRunOneJob:
         # while the local bookmark commit is no longer a trunk ancestor.
         config = _config(_job("a"))
         job_a = config.jobs[0]
-        result = JobResult(job=job_a, effective_revsets=["repoactive/a"], produced_diff=True)
+        result = JobRun(job=job_a, effective_revsets=["repoactive/a"], produced_diff=True)
         summary = RunSummary()
         with (
             patch(
@@ -250,7 +252,7 @@ class TestRunOneJob:
         # naming it is a request to run it, so _last_run_if_on_cooldown is never consulted.
         config = _config(_job("a"))
         job_a = config.jobs[0]
-        result = JobResult(job=job_a, effective_revsets=["repoactive/a"], produced_diff=True)
+        result = JobRun(job=job_a, effective_revsets=["repoactive/a"], produced_diff=True)
         summary = RunSummary()
         with (
             patch("repoactive.runner._last_run_if_on_cooldown") as mock_cooldown,
@@ -278,7 +280,7 @@ class TestRunOneJob:
         config = _config(job_a, job_b)
         summary = RunSummary()
         summary.on_cooldown.add("a")
-        summary.results["a"] = JobResult(
+        summary.results["a"] = JobRun(
             job=job_a, effective_revsets=["trunk()"], produced_diff=False
         )
         with patch("repoactive.runner.run_job") as mock_run_job:
@@ -301,7 +303,7 @@ class TestRunOneJob:
         config = _config(job_b, job_c)
         summary = RunSummary()
         summary.successor_skipped.add("b")
-        summary.results["b"] = JobResult(
+        summary.results["b"] = JobRun(
             job=job_b, effective_revsets=["trunk()"], produced_diff=False
         )
         with patch("repoactive.runner.run_job") as mock_run_job:
@@ -322,9 +324,9 @@ class TestRunOneJob:
         job_a = _job("a")
         job_b = _job("b", depends_on=["a"])
         config = _config(job_a, job_b)
-        result_b = JobResult(job=job_b, effective_revsets=["repoactive/b"], produced_diff=True)
+        result_b = JobRun(job=job_b, effective_revsets=["repoactive/b"], produced_diff=True)
         summary = RunSummary()
-        summary.results["a"] = JobResult(
+        summary.results["a"] = JobRun(
             job=job_a, effective_revsets=["repoactive/a"], produced_diff=True
         )
         with (
@@ -352,10 +354,10 @@ class TestRunOneJob:
         job_a = _job("a")
         job_b = _job("b", depends_on=["a"])
         config = _config(job_a, job_b)
-        result_b = JobResult(job=job_b, effective_revsets=["repoactive/b"], produced_diff=True)
+        result_b = JobRun(job=job_b, effective_revsets=["repoactive/b"], produced_diff=True)
         summary = RunSummary()
         # a is in results but not on_cooldown: it ran, producing no diff.
-        summary.results["a"] = JobResult(
+        summary.results["a"] = JobRun(
             job=job_a, effective_revsets=["trunk()"], produced_diff=False
         )
         with patch("repoactive.runner.run_job", return_value=result_b) as mock_run_job:
@@ -375,7 +377,7 @@ class TestRunOneJob:
         # the safe direction when trailer and config disagree.
         job_b = _job("b")
         config = _config(job_b)
-        result_b = JobResult(job=job_b, effective_revsets=["repoactive/b"], produced_diff=True)
+        result_b = JobRun(job=job_b, effective_revsets=["repoactive/b"], produced_diff=True)
         summary = RunSummary()
         with patch("repoactive.runner.run_job", return_value=result_b) as mock_run_job:
             _dispatch_job(
@@ -391,7 +393,7 @@ class TestRunOneJob:
     def test_success_records_result(self) -> None:
         config = _config(_job("a"))
         job_a = config.jobs[0]
-        result = JobResult(job=job_a, effective_revsets=["repoactive/a"], produced_diff=True)
+        result = JobRun(job=job_a, effective_revsets=["repoactive/a"], produced_diff=True)
         summary = RunSummary()
         with (
             patch("repoactive.runner._last_run_if_on_cooldown", return_value=False),
@@ -453,7 +455,7 @@ class TestRunOneJob:
         job_b = _job("b", depends_on=["a"], run_only_if_changed=["a"])
         config = _config(job_a, job_b)
         summary = RunSummary()
-        summary.results["a"] = JobResult(
+        summary.results["a"] = JobRun(
             job=job_a, effective_revsets=["trunk()"], produced_diff=False
         )
         with patch("repoactive.runner.run_job") as mock_run_job:
@@ -470,9 +472,9 @@ class TestRunOneJob:
         job_a = _job("a")
         job_b = _job("b", depends_on=["a"], run_only_if_changed=["a"])
         config = _config(job_a, job_b)
-        result_b = JobResult(job=job_b, effective_revsets=["repoactive/b"], produced_diff=True)
+        result_b = JobRun(job=job_b, effective_revsets=["repoactive/b"], produced_diff=True)
         summary = RunSummary()
-        summary.results["a"] = JobResult(
+        summary.results["a"] = JobRun(
             job=job_a, effective_revsets=["repoactive/a"], produced_diff=True
         )
         with (
@@ -508,7 +510,7 @@ class TestRunOneJob:
         job_b = _job("b", depends_on=["a"], run_only_if_changed=["a"])
         config = _config(job_a, job_b)
         summary = RunSummary()
-        summary.results["a"] = JobResult(
+        summary.results["a"] = JobRun(
             job=job_a, effective_revsets=["trunk()"], produced_diff=False
         )
         _dispatch_job(
@@ -525,9 +527,9 @@ class TestRunOneJob:
         job_a = _job("a")
         job_b = _job("b", depends_on=["a"], run_only_if_changed=["a"])
         config = _config(job_a, job_b)
-        result_b = JobResult(job=job_b, effective_revsets=["repoactive/b"], produced_diff=True)
+        result_b = JobRun(job=job_b, effective_revsets=["repoactive/b"], produced_diff=True)
         summary = RunSummary()
-        summary.results["a"] = JobResult(
+        summary.results["a"] = JobRun(
             job=job_a, effective_revsets=["trunk()"], produced_diff=False
         )
         with (
@@ -1272,7 +1274,7 @@ class TestRunJob:
         # push (ADR 0019 "push nothing"), but records a label-only update so the
         # open MR gets the needs-rebase label.
         job = _job("foo")
-        result = JobResult(
+        result = JobRun(
             job=job,
             effective_revsets=["old-change-id"],
             produced_diff=False,
@@ -1282,7 +1284,7 @@ class TestRunJob:
         repo = MagicMock(spec=JJ)
         ctx = _ctx(repo=repo)
 
-        _record_job_plan(ctx, DispatchOutcome(result=result))
+        _record_job_plan(ctx, Ran(result))
 
         assert len(ctx.plan.updates) == 1
         update = ctx.plan.updates[0]
@@ -1299,7 +1301,7 @@ class TestRunJob:
         # A frozen job that never opens MRs has nothing to label, so no update is
         # queued at all.
         job = _job("foo", create_mr=CreateMR.never)
-        result = JobResult(
+        result = JobRun(
             job=job,
             effective_revsets=["old-change-id"],
             produced_diff=False,
@@ -1308,7 +1310,7 @@ class TestRunJob:
         )
         ctx = _ctx(repo=MagicMock(spec=JJ))
 
-        _record_job_plan(ctx, DispatchOutcome(result=result))
+        _record_job_plan(ctx, Ran(result))
 
         assert ctx.plan.updates == []
 
@@ -1535,23 +1537,23 @@ class TestRunJob:
 
 
 class TestRecordJobPlan:
-    """_record_job_plan decides purely from the DispatchOutcome (candidate 3).
+    """_record_job_plan decides purely from the JobOutcome (candidate 3).
 
-    The retire-vs-leave-alone choice reads outcome.skip_reason directly instead
-    of reaching back into ctx.summary's skip sets.
+    The retire-vs-leave-alone choice reads the outcome's arm (Ran vs Skipped)
+    directly instead of reaching back into ctx.summary's skip sets.
     """
 
     def test_no_result_records_nothing(self) -> None:
         # A dependency-blocked or failed job carries no result and no plan.
         ctx = _ctx(repo=MagicMock(spec=JJ))
-        _record_job_plan(ctx, DispatchOutcome(skip_reason=SkipReason.dependency_failed))
+        _record_job_plan(ctx, Blocked())
         assert ctx.plan.updates == []
 
     def test_ran_no_diff_retires_existing_bookmark(self) -> None:
-        # The command ran (skip_reason is None) and produced nothing, so the
-        # bookmark that existed before the run is scheduled for deletion.
+        # The command ran (Ran) and produced nothing, so the bookmark that
+        # existed before the run is scheduled for deletion.
         job = _job("foo")
-        result = JobResult(
+        result = JobRun(
             job=job,
             effective_revsets=["trunk()"],
             produced_diff=False,
@@ -1559,7 +1561,7 @@ class TestRecordJobPlan:
         )
         ctx = _ctx(repo=MagicMock(spec=JJ))
 
-        _record_job_plan(ctx, DispatchOutcome(result=result))
+        _record_job_plan(ctx, Ran(result))
 
         assert ctx.plan.updates == [
             JobUpdate(
@@ -1570,10 +1572,10 @@ class TestRecordJobPlan:
         ]
 
     def test_gated_skip_leaves_bookmark_untouched(self) -> None:
-        # Same no-diff result, but a gate recorded it (skip_reason set): the
-        # bookmark is left alone even though it existed before the run.
+        # Same no-diff result, but a gate recorded it (Skipped): the bookmark is
+        # left alone even though it existed before the run.
         job = _job("foo")
-        result = JobResult(
+        result = JobRun(
             job=job,
             effective_revsets=["trunk()"],
             produced_diff=False,
@@ -1581,16 +1583,13 @@ class TestRecordJobPlan:
         )
         ctx = _ctx(repo=MagicMock(spec=JJ))
 
-        _record_job_plan(
-            ctx,
-            DispatchOutcome(result=result, skip_reason=SkipReason.run_only_if_changed_skipped),
-        )
+        _record_job_plan(ctx, Skipped(result, SkipReason.run_only_if_changed_skipped))
 
         assert ctx.plan.updates == []
 
     def test_diff_records_push_and_mr(self) -> None:
         job = _job("foo")
-        result = JobResult(
+        result = JobRun(
             job=job,
             effective_revsets=["repoactive/foo"],
             produced_diff=True,
@@ -1598,7 +1597,7 @@ class TestRecordJobPlan:
         )
         ctx = _ctx(repo=MagicMock(spec=JJ))
 
-        _record_job_plan(ctx, DispatchOutcome(result=result))
+        _record_job_plan(ctx, Ran(result))
 
         assert len(ctx.plan.updates) == 1
         update = ctx.plan.updates[0]
@@ -1884,7 +1883,7 @@ class TestSuppressSupersededMRs:
     """Resolving create_mr = "unless-superseded" against the run's plan."""
 
     @staticmethod
-    def _results(*results: JobResult) -> dict[str, JobResult]:
+    def _results(*results: JobRun) -> dict[str, JobRun]:
         """Key results by job name, preserving (topological) run order."""
         return {r.job.name: r for r in results}
 

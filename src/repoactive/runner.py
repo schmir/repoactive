@@ -86,7 +86,7 @@ class RunMode(StrEnum):
 
 
 @dataclass
-class JobResult:
+class JobRun:
     job: Job
     # Revsets a dependent should use as parents. Set directly to the branch
     # tip when the job runs: the fresh commit's change-id (produced_diff=True)
@@ -110,7 +110,7 @@ class JobResult:
 
 @dataclass
 class RunSummary:
-    results: dict[str, JobResult] = field(default_factory=dict)
+    results: dict[str, JobRun] = field(default_factory=dict)
     failed: dict[str, Exception] = field(default_factory=dict)
     dependency_failed: set[str] = field(default_factory=set)
     on_cooldown: set[str] = field(default_factory=set)
@@ -193,7 +193,7 @@ class RunContext:
         return frozenset(self.config.token_env_names() | self.config.marked_secret_names())
 
 
-def _compute_parents(job: Job, results: dict[str, JobResult]) -> list[str]:
+def _compute_parents(job: Job, results: dict[str, JobRun]) -> list[str]:
     if not job.depends_on:
         return [job.base_branch or "trunk()"]
 
@@ -324,7 +324,7 @@ def _run_job_frozen(
     parents: list[str],
     prerun_branch_shape: human_commits.BranchShape,
     detail: str,
-) -> JobResult:
+) -> JobRun:
     """Freeze the branch: push nothing and leave the conflict for a human (ADR 0019).
 
     jj refuses to push a commit that contains a conflict, so a rebuild that would
@@ -348,7 +348,7 @@ def _run_job_frozen(
     """
     frozen_tip = _bookmark_change_id(prerun_branch_shape)
     print_status(job.name, ("frozen", "yellow"), f" ({detail})")
-    return JobResult(
+    return JobRun(
         job=job,
         effective_revsets=[frozen_tip] if frozen_tip else parents,
         produced_diff=False,
@@ -383,7 +383,7 @@ class Disposition(StrEnum):
 
     decide_disposition picks one from the branch shape and two facts about the
     regenerated commit; _run_job_build_result then carries it out (the jj
-    mutation, the status line, the JobResult).
+    mutation, the status line, the JobRun).
     """
 
     # No diff and nothing human to anchor: abandon the command commit and retire
@@ -437,7 +437,7 @@ def _run_job_build_result(  # noqa: PLR0913
     command_result: CommandResult,
     prerun_branch_shape: human_commits.BranchShape,
     restore: Callable[[], None],
-) -> JobResult:
+) -> JobRun:
     commit_empty = repo.is_empty()
     if commit_empty:
         logger.debug("[%s] working copy is empty, no diff produced", job.name)
@@ -467,8 +467,8 @@ def _run_job_build_result(  # noqa: PLR0913
         prerun_branch_shape, commit_empty=commit_empty, idempotent_match=idempotent_match
     )
 
-    def build_result(*, effective_revsets: list[str], produced_diff: bool) -> JobResult:
-        return JobResult(
+    def build_result(*, effective_revsets: list[str], produced_diff: bool) -> JobRun:
+        return JobRun(
             job=job,
             effective_revsets=effective_revsets,
             produced_diff=produced_diff,
@@ -513,7 +513,7 @@ def run_job(
     *,
     job: Job,
     parents: list[str],
-) -> JobResult:
+) -> JobRun:
     """Run a job's command, rewriting its command commit in place (ADR 0020).
 
     An existing branch's command commit (and its fixup descendants) is rebased
@@ -617,71 +617,92 @@ def _last_run_if_on_cooldown(job: Job, repo_path: Path) -> datetime | None:
 
 
 class SkipReason(StrEnum):
-    """Which RunSummary set a skipped job's name is recorded in.
+    """Which RunSummary set a gated (Skipped) job's name is recorded in.
 
-    _apply_outcome matches each member to the set it names.
+    _apply_outcome matches each member to the set it names. Blocked and Failed
+    outcomes name their own sets and are not SkipReasons.
     """
 
-    dependency_failed = "dependency_failed"
     run_only_if_changed_skipped = "run_only_if_changed_skipped"
     successor_skipped = "successor_skipped"
     on_cooldown = "on_cooldown"
 
 
 @dataclass
-class DispatchOutcome:
-    """What a dispatch step decided for a job; applied to ctx in one place.
+class Ran:
+    """A job that ran for real; result carries its diff/emitted/frozen state."""
 
-    skip_reason names the RunSummary set the job's name is recorded in
-    — None when the job actually ran. Each gate/run step builds one of
-    these instead of touching ctx.summary directly, so _dispatch_job
-    has a single place that applies them. A plain DispatchOutcome instance
-    is always truthy (unlike the list[Job] it ultimately yields), so gates
-    can chain with or and still let an empty emitted list through.
+    result: JobRun
+
+
+@dataclass
+class Skipped:
+    """A gate declined to run the job but recorded a no-op result.
+
+    The no-op result lets dependents proceed on the base branch; reason names
+    the RunSummary set the job's name is recorded in.
     """
 
-    result: JobResult | None = None
-    skip_reason: SkipReason | None = None
-    failed: Exception | None = None
-
-    @property
-    def emitted(self) -> list[Job]:
-        return self.result.emitted if self.result is not None else []
+    result: JobRun
+    reason: SkipReason
 
 
-def _apply_outcome(ctx: RunContext, job: Job, outcome: DispatchOutcome) -> None:
-    """Record a job's dispatch outcome in ctx; the only function that does."""
+@dataclass
+class Blocked:
+    """A dependency failed or was itself blocked, so the job never ran.
+
+    Records no result, so its dependents block in turn (summary.dependency_failed).
+    """
+
+
+@dataclass
+class Failed:
+    """The job raised; the exception lands in summary.failed."""
+
+    error: Exception
+
+
+# What a dispatch step decided for a job, applied to ctx in one place (ADR 0020).
+# The four arms make the "carries a result vs doesn't" invariant explicit: Ran
+# and Skipped hold a JobRun that flows to dependents and the plan; Blocked and
+# Failed hold none. Each gate/run step builds one instead of touching ctx.summary
+# directly, so _dispatch_job has a single place that applies them.
+type JobOutcome = Ran | Skipped | Blocked | Failed
+
+
+def _apply_outcome(ctx: RunContext, job: Job, outcome: JobOutcome) -> None:
+    """Record a job's outcome in ctx.summary; the only function that does."""
     summary = ctx.summary
-    if outcome.result is not None:
-        summary.results[job.name] = outcome.result
-        # A frozen job ran far enough to classify and prepare but not to push;
-        # it is not a skip_reason (the gates did not fire) and not a failure.
-        if outcome.result.frozen:
-            summary.frozen.add(job.name)
-    match outcome.skip_reason:
-        case SkipReason.dependency_failed:
+    match outcome:
+        case Ran(result):
+            summary.results[job.name] = result
+            # A frozen job ran far enough to classify and prepare but not to
+            # push; it is not a skip (no gate fired) and not a failure.
+            if result.frozen:
+                summary.frozen.add(job.name)
+        case Skipped(result, reason):
+            summary.results[job.name] = result
+            match reason:
+                case SkipReason.run_only_if_changed_skipped:
+                    summary.run_only_if_changed_skipped.add(job.name)
+                case SkipReason.successor_skipped:
+                    summary.successor_skipped.add(job.name)
+                case SkipReason.on_cooldown:
+                    summary.on_cooldown.add(job.name)
+        case Blocked():
             summary.dependency_failed.add(job.name)
-        case SkipReason.run_only_if_changed_skipped:
-            summary.run_only_if_changed_skipped.add(job.name)
-        case SkipReason.successor_skipped:
-            summary.successor_skipped.add(job.name)
-        case SkipReason.on_cooldown:
-            summary.on_cooldown.add(job.name)
-        case None:
-            pass
-    if outcome.failed is not None:
-        summary.failed[job.name] = outcome.failed
+        case Failed(error):
+            summary.failed[job.name] = error
 
 
-def _dispatch_job(ctx: RunContext, *, job: Job) -> DispatchOutcome:
+def _dispatch_job(ctx: RunContext, *, job: Job) -> JobOutcome:
     """Run a single job, recording its outcome in ctx.summary and returning it.
 
     A failed or dependency-skipped job lands in summary.failed/
     summary.dependency_failed, so _dispatch_blocked_deps blocks its dependents
-    in turn. The returned outcome carries the job's result (None when blocked or
-    failed) and its skip_reason, which _record_job_plan reads directly rather
-    than reaching back into ctx.summary. Which jobs bypass a skip gate is driven
-    by ctx.selection (see JobSelection).
+    in turn. The returned outcome's arm (Ran/Skipped/Blocked/Failed) is what
+    _record_job_plan reads directly rather than reaching back into ctx.summary.
+    Which jobs bypass a skip gate is driven by ctx.selection (see JobSelection).
     """
     outcome = _dispatch_blocked_deps(ctx, job)
     if outcome is None:
@@ -697,7 +718,7 @@ def _dispatch_job(ctx: RunContext, *, job: Job) -> DispatchOutcome:
     return outcome
 
 
-def _dispatch_blocked_deps(ctx: RunContext, job: Job) -> DispatchOutcome | None:
+def _dispatch_blocked_deps(ctx: RunContext, job: Job) -> JobOutcome | None:
     """Skip job if any of its dependencies already failed or were skipped."""
     summary = ctx.summary
     blocking_deps = [
@@ -708,12 +729,12 @@ def _dispatch_blocked_deps(ctx: RunContext, job: Job) -> DispatchOutcome | None:
     print_status(
         job.name, ("skipped", "yellow"), f" (dependency failed: {', '.join(blocking_deps)})"
     )
-    return DispatchOutcome(skip_reason=SkipReason.dependency_failed)
+    return Blocked()
 
 
 def _dispatch_run_only_if_changed_gate(
     ctx: RunContext, job: Job, parents: list[str]
-) -> DispatchOutcome | None:
+) -> JobOutcome | None:
     """Skip job when none of its run_only_if_changed deps produced a diff.
 
     run_only_if_changed gates jobs whose effect is conditional on upstream
@@ -736,13 +757,11 @@ def _dispatch_run_only_if_changed_gate(
         ("skipped", "yellow"),
         f" (run_only_if_changed: none of {job.run_only_if_changed} produced changes)",
     )
-    result = JobResult(job=job, effective_revsets=parents, produced_diff=False)
-    return DispatchOutcome(result=result, skip_reason=SkipReason.run_only_if_changed_skipped)
+    result = JobRun(job=job, effective_revsets=parents, produced_diff=False)
+    return Skipped(result, SkipReason.run_only_if_changed_skipped)
 
 
-def _dispatch_successor_gate(
-    ctx: RunContext, job: Job, parents: list[str]
-) -> DispatchOutcome | None:
+def _dispatch_successor_gate(ctx: RunContext, job: Job, parents: list[str]) -> JobOutcome | None:
     """Skip a successor job when nothing below it in the stack ran.
 
     A successor exists to be rebuilt when the stack below it moves. If every
@@ -762,13 +781,11 @@ def _dispatch_successor_gate(
     ):
         return None
     print_status(job.name, ("skipped", "yellow"), " (successor: no dependency ran)")
-    result = JobResult(job=job, effective_revsets=parents, produced_diff=False)
-    return DispatchOutcome(result=result, skip_reason=SkipReason.successor_skipped)
+    result = JobRun(job=job, effective_revsets=parents, produced_diff=False)
+    return Skipped(result, SkipReason.successor_skipped)
 
 
-def _dispatch_cooldown_gate(
-    ctx: RunContext, job: Job, parents: list[str]
-) -> DispatchOutcome | None:
+def _dispatch_cooldown_gate(ctx: RunContext, job: Job, parents: list[str]) -> JobOutcome | None:
     """Skip job if it is still within its cooldown period.
 
     Cooldown only throttles *starting fresh work*. A job that already has an
@@ -802,11 +819,11 @@ def _dispatch_cooldown_gate(
         f" ({job.cooldown_period}), last run {elapsed_str} ago, skipped",
     )
     # Treat like a no-op run so dependents proceed on the base branch.
-    result = JobResult(job=job, effective_revsets=parents, produced_diff=False)
-    return DispatchOutcome(result=result, skip_reason=SkipReason.on_cooldown)
+    result = JobRun(job=job, effective_revsets=parents, produced_diff=False)
+    return Skipped(result, SkipReason.on_cooldown)
 
 
-def _dispatch_run(ctx: RunContext, job: Job, parents: list[str]) -> DispatchOutcome:
+def _dispatch_run(ctx: RunContext, job: Job, parents: list[str]) -> JobOutcome:
     """Run job for real (ordinary command or generator), recording the outcome."""
     start = time.monotonic()
     try:
@@ -815,24 +832,24 @@ def _dispatch_run(ctx: RunContext, job: Job, parents: list[str]) -> DispatchOutc
             if job.emits_jobs
             else run_job(ctx, job=job, parents=parents)
         )
-        return DispatchOutcome(result=result)
+        return Ran(result)
     except Exception as e:
         # A command failure reports the command's own time (matching the
         # success prints); other failures have no command time, so fall back
         # to the wall time spent in run_job.
         elapsed = e.elapsed if isinstance(e, CommandError) else time.monotonic() - start
         print_status(job.name, ("failed", "red"), f": {e} ({format_elapsed(elapsed)})")
-        return DispatchOutcome(failed=e)
+        return Failed(e)
 
 
-def _run_generator_job(ctx: RunContext, *, job: Job, parents: list[str]) -> JobResult:
+def _run_generator_job(ctx: RunContext, *, job: Job, parents: list[str]) -> JobRun:
     """Run a generator and return a result carrying its emitted jobs (resolved job required).
 
     The command runs in a fresh workspace on top of parents with
     RA_JOBS_DIR pointing at an empty directory; it writes *.toml
     fragments there which are parsed once it exits. The generator itself produces
     no diff: any working-copy change it leaves is discarded (ADR 0004), and a
-    no-op JobResult is recorded so its emitted jobs (which depend on it)
+    no-op JobRun is recorded so its emitted jobs (which depend on it)
     compute their parents through it. A failure to run or to build the emitted
     set blocks the generator's dependents, exactly like an ordinary job failure.
     """
@@ -871,10 +888,10 @@ def _run_generator_job(ctx: RunContext, *, job: Job, parents: list[str]) -> JobR
     names = ", ".join(j.name for j in emitted) if emitted else "none"
     print_status(job.name, f"generated {len(emitted)} job(s): {names}")
 
-    return JobResult(job=job, effective_revsets=parents, produced_diff=False, emitted=emitted)
+    return JobRun(job=job, effective_revsets=parents, produced_diff=False, emitted=emitted)
 
 
-def _record_deleted_bookmark(result: JobResult, *, repo: JJ, plan: UpdatePlan) -> None:
+def _record_deleted_bookmark(result: JobRun, *, repo: JJ, plan: UpdatePlan) -> None:
     """Schedule a remote delete push for a bookmark run_job retired.
 
     run_job already deleted the local bookmark after the command produced no
@@ -895,26 +912,27 @@ def _record_deleted_bookmark(result: JobResult, *, repo: JJ, plan: UpdatePlan) -
         )
 
 
-def _record_job_plan(ctx: RunContext, outcome: DispatchOutcome) -> None:
+def _record_job_plan(ctx: RunContext, outcome: JobOutcome) -> None:
     """Finalize a job's bookmark and record its push/MR in ctx.plan (ADR 0020).
 
     Decided entirely from the dispatch outcome, with no read-back into
     ctx.summary. run_job already rewrote the command commit in place (or wrote a
     fresh commit and pointed the bookmark at it) and left effective_revsets at
     the branch tip, so the bookmark is already positioned. This only:
-    - No result: a dependency-blocked or failed job records no plan.
-    - No diff produced: retires the bookmark when the command actually ran and
-      found nothing; an intentional skip (outcome.skip_reason set: cooldown,
-      successor, or gated) is left untouched.
+    - Blocked/Failed: a dependency-blocked or failed job records no plan.
+    - No diff produced: retires the bookmark when the command actually ran (Ran)
+      and found nothing; a gate's no-op (Skipped: cooldown, successor, or gated)
+      is left untouched.
     - Diff produced: appends the bookmark push and MR descriptor.
     """
     plan = ctx.plan
     repo = ctx.repo
 
-    result = outcome.result
-    if result is None:
+    if isinstance(outcome, Blocked | Failed):
         logger.debug("plan: no result, skipping")
         return
+    # Only Ran and Skipped carry a result (the union is closed).
+    result = outcome.result
 
     job = result.job
     bookmark = job.branch_name()
@@ -949,10 +967,10 @@ def _record_job_plan(ctx: RunContext, outcome: DispatchOutcome) -> None:
         return
 
     if not result.produced_diff:
-        # A gate recorded a no-op result (skip_reason set) so dependents proceed;
-        # its bookmark must be left alone. Only a command that ran and produced
+        # A gate recorded a no-op result (Skipped) so dependents proceed; its
+        # bookmark must be left alone. Only a command that ran (Ran) and produced
         # nothing retires the bookmark.
-        if outcome.skip_reason is None:
+        if not isinstance(outcome, Skipped):
             _record_deleted_bookmark(result, repo=repo, plan=plan)
         return
 
@@ -1036,7 +1054,8 @@ def _run_jobs(ctx: RunContext) -> None:
         ctx.repo.update_stale_working_copy()
         # run_job rewrote this job's commit in place; finalize its bookmark and push/MR now.
         _record_job_plan(ctx, outcome)
-        if emitted := outcome.emitted:
+        # Only a generator that actually ran emits jobs.
+        if isinstance(outcome, Ran) and (emitted := outcome.result.emitted):
             # Resolve before splicing in so _dispatch_job receives resolved jobs.
             resolved_emitted = [j.resolve(ctx.config.job_defaults) for j in emitted]
             # Track the new jobs' bookmarks so an already-pushed branch is reused, not recreated.
@@ -1045,7 +1064,7 @@ def _run_jobs(ctx: RunContext) -> None:
             print_job_table(format_job_forest(ctx.selection.jobs), indent="  ")
 
 
-def _suppress_superseded_mrs(*, plan: UpdatePlan, results: dict[str, JobResult]) -> None:
+def _suppress_superseded_mrs(*, plan: UpdatePlan, results: dict[str, JobRun]) -> None:
     """Drop the MR of every create_mr = "unless-superseded" job whose changes a dependent's MR already contains.
 
     A dependent's change is stacked on its dependencies' branches

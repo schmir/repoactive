@@ -33,7 +33,7 @@ fast.
 
 - A named job absent from `summary.results` (because it failed or was itself
   skipped) is treated as having produced no diff.
-- When skipped, a no-op `JobResult` (`produced_diff=False`) is recorded in
+- When skipped, a no-op `JobRun` (`produced_diff=False`) is recorded in
   `summary.results` — exactly as cooldown does — so dependents still compute
   their parents through this job and are not themselves blocked.
 - The job name is NOT added to `blocked`, so dependents run unimpeded.
