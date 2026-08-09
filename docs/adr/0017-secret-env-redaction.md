@@ -172,10 +172,12 @@ redacting `line` once, before those two calls, covers everything downstream
 secret values are single-line tokens, a secret split across read chunks does
 not arise, so no buffering is needed. The work is: a small redactor (sort
 values longest-first, `str.replace` each with `[redacted]`, skip values
-under ~5 characters so a trivial value does not blank the output), thread
-the granting job's secret _values_ into `run_command` (it currently
-receives only names), and the one call at the choke point. Using a bare
-`[redacted]` placeholder avoids needing a value→name map.
+under ~5 characters so a trivial value does not blank the output) and the
+one call at the choke point. The granting job's secret _values_ are already
+available there: `run_command` receives them in the composed `env`
+(`job.resolve_granted_secrets` returns the same dict), so no extra threading
+is needed. Using a bare `[redacted]` placeholder avoids needing a value→name
+map.
 
 **What redaction will not cover** (state it so it is not mistaken for
 containment): it operates only on strings repoactive itself displays and

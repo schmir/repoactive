@@ -11,15 +11,17 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from repoactive import human_commits
-from repoactive.command import CommandError, CommandResult, _resolve_granted_secrets
+from repoactive.command import CommandError, CommandResult
 from repoactive.config import Config, CreateMR, Job, JobDefaults
-from repoactive.jj import JJ, JobCommit
-from repoactive.runner import (
+from repoactive.constants import (
     RA_CONFIG_SOURCE_DIR_ENV,
     RA_JOB_BASE_BRANCH_ENV,
     RA_JOB_BRANCH_ENV,
     RA_JOB_NAME_ENV,
     RA_JOBS_DIR_ENV,
+)
+from repoactive.jj import JJ, JobCommit
+from repoactive.runner import (
     ApplyResult,
     Blocked,
     Disposition,
@@ -35,7 +37,6 @@ from repoactive.runner import (
     _compute_parents,
     _dispatch_job,
     _format_duration,
-    _job_extra_env,
     _prepare_repo,
     _pushable_branch_revset,
     _record_job_plan,
@@ -927,53 +928,6 @@ class TestJobResolve:
         assert resolved.base_branch is None
 
 
-class TestJobExtraEnv:
-    def test_always_adds_name_and_branches(self) -> None:
-        # Every job command gets RA_JOB_NAME, RA_JOB_BRANCH, and RA_JOB_BASE_BRANCH,
-        # even with nothing else to add. base_branch is unset, so it defaults to
-        # trunk().
-        assert _job_extra_env(_job("foo")) == {
-            RA_JOB_NAME_ENV: "foo",
-            RA_JOB_BRANCH_ENV: "repoactive/foo",
-            RA_JOB_BASE_BRANCH_ENV: "trunk()",
-        }
-
-    def test_base_branch_uses_job_override(self) -> None:
-        # A configured base_branch is exposed verbatim instead of trunk().
-        assert (
-            _job_extra_env(_job("foo", base_branch="release"))[RA_JOB_BASE_BRANCH_ENV] == "release"
-        )
-
-    def test_adds_config_source_dir(self) -> None:
-        job = _job("foo").model_copy(update={"config_source_dir": "/cfg"})
-        assert _job_extra_env(job) == {
-            RA_JOB_NAME_ENV: "foo",
-            RA_JOB_BRANCH_ENV: "repoactive/foo",
-            RA_JOB_BASE_BRANCH_ENV: "trunk()",
-            RA_CONFIG_SOURCE_DIR_ENV: "/cfg",
-        }
-
-    def test_merges_with_extra_without_dropping_it(self) -> None:
-        job = _job("foo").model_copy(update={"config_source_dir": "/cfg"})
-        env = _job_extra_env(job, {RA_JOBS_DIR_ENV: "/jobs"})
-        assert env == {
-            RA_JOBS_DIR_ENV: "/jobs",
-            RA_JOB_NAME_ENV: "foo",
-            RA_JOB_BRANCH_ENV: "repoactive/foo",
-            RA_JOB_BASE_BRANCH_ENV: "trunk()",
-            RA_CONFIG_SOURCE_DIR_ENV: "/cfg",
-        }
-
-    def test_passes_extra_through_when_no_config_source_dir(self) -> None:
-        env = _job_extra_env(_job("foo"), {RA_JOBS_DIR_ENV: "/jobs"})
-        assert env == {
-            RA_JOBS_DIR_ENV: "/jobs",
-            RA_JOB_NAME_ENV: "foo",
-            RA_JOB_BRANCH_ENV: "repoactive/foo",
-            RA_JOB_BASE_BRANCH_ENV: "trunk()",
-        }
-
-
 class TestStrippedEnvNames:
     def test_unions_platform_tokens_and_marked_secrets(self) -> None:
         cfg = Config.model_validate(
@@ -1009,7 +963,7 @@ class TestStrippedEnvNames:
         )
         ctx = _ctx(config=cfg, selection=JobSelection(jobs=[], refreshed=frozenset()))
         assert "GITLAB_TOKEN" in ctx.stripped_env_names
-        assert _resolve_granted_secrets(cfg.jobs[0]) == {"GITLAB_TOKEN": "push-cred"}
+        assert cfg.jobs[0].resolve_granted_secrets() == {"GITLAB_TOKEN": "push-cred"}
 
 
 class TestRunJob:
@@ -1044,13 +998,11 @@ class TestRunJob:
 
         run_job(_ctx(), job=job, parents=["trunk()"])
 
-        extra_env = mock_run_command.call_args.kwargs["extra_env"]
-        assert extra_env == {
-            RA_JOB_NAME_ENV: "foo",
-            RA_JOB_BRANCH_ENV: "repoactive/foo",
-            RA_JOB_BASE_BRANCH_ENV: "trunk()",
-            RA_CONFIG_SOURCE_DIR_ENV: "/cfg/dir",
-        }
+        env = mock_run_command.call_args.kwargs["env"]
+        assert env[RA_JOB_NAME_ENV] == "foo"
+        assert env[RA_JOB_BRANCH_ENV] == "repoactive/foo"
+        assert env[RA_JOB_BASE_BRANCH_ENV] == "trunk()"
+        assert env[RA_CONFIG_SOURCE_DIR_ENV] == "/cfg/dir"
 
     @patch("repoactive.runner.run_command", return_value=CommandResult(output="", elapsed=0.0))
     @patch("repoactive.runner.JJ")
@@ -1064,11 +1016,11 @@ class TestRunJob:
 
         # RA_JOB_NAME, RA_JOB_BRANCH, and RA_JOB_BASE_BRANCH are always present;
         # RA_CONFIG_SOURCE_DIR is not, since unset.
-        assert mock_run_command.call_args.kwargs["extra_env"] == {
-            RA_JOB_NAME_ENV: "foo",
-            RA_JOB_BRANCH_ENV: "repoactive/foo",
-            RA_JOB_BASE_BRANCH_ENV: "trunk()",
-        }
+        env = mock_run_command.call_args.kwargs["env"]
+        assert env[RA_JOB_NAME_ENV] == "foo"
+        assert env[RA_JOB_BRANCH_ENV] == "repoactive/foo"
+        assert env[RA_JOB_BASE_BRANCH_ENV] == "trunk()"
+        assert RA_CONFIG_SOURCE_DIR_ENV not in env
 
     @patch("repoactive.runner.JJ")
     @patch("repoactive.command.subprocess.Popen")
@@ -1627,9 +1579,9 @@ class TestRunGeneratorJob:
         mock_jj.new.assert_called_once_with("trunk()")
         # The working copy is abandoned: a generator never produces a diff.
         mock_jj.abandon.assert_called_once_with()
-        extra_env = mock_run_command.call_args.kwargs["extra_env"]
-        assert RA_JOBS_DIR_ENV in extra_env
-        assert RA_JOB_BRANCH_ENV in extra_env
+        env = mock_run_command.call_args.kwargs["env"]
+        assert RA_JOBS_DIR_ENV in env
+        assert RA_JOB_BRANCH_ENV in env
         assert [j.name for j in result.emitted] == ["child"]
         assert result.produced_diff is False
 
@@ -1647,9 +1599,9 @@ class TestRunGeneratorJob:
 
         _run_generator_job(_ctx(selection=_selection(gen)), job=gen, parents=["trunk()"])
 
-        extra_env = mock_run_command.call_args.kwargs["extra_env"]
-        assert RA_JOBS_DIR_ENV in extra_env
-        assert extra_env[RA_CONFIG_SOURCE_DIR_ENV] == "/cfg"
+        env = mock_run_command.call_args.kwargs["env"]
+        assert RA_JOBS_DIR_ENV in env
+        assert env[RA_CONFIG_SOURCE_DIR_ENV] == "/cfg"
 
     @patch("repoactive.runner.run_command", side_effect=CommandError("boom", elapsed=1.0))
     @patch("repoactive.runner.JJ")

@@ -55,9 +55,10 @@ security boundary:
 
 Despite the trust assumption, repoactive **removes the platform API token(s)
 from the environment a job command runs in** (`Config.token_env_names` →
-`runner._command_env`). The token named by `platform.token_env` and every
-other configured platform's token variable are stripped; the rest of the
-environment (PATH, etc.) is passed through unchanged.
+`RunContext.stripped_env_names` → `RunContext.base_env`). The token named by
+`platform.token_env` and every other configured platform's token variable
+are stripped; the rest of the environment (PATH, etc.) is passed through
+unchanged.
 
 This is cheap defence-in-depth, not a contradiction of the trust model. The
 distinction it draws:

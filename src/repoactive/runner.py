@@ -2,6 +2,7 @@
 
 import contextlib
 import logging
+import os
 import tempfile
 import time
 from collections.abc import Callable, Generator
@@ -18,6 +19,7 @@ from repoactive.config import (
     CreateMR,
     Job,
 )
+from repoactive.constants import RA_JOBS_DIR_ENV, RA_WORKSPACE_DIR_ENV
 from repoactive.generator import build_generated_jobs, load_job_specs
 from repoactive.graph import topological_sort
 from repoactive.jj import JJ, revset_heads, workspace_name
@@ -40,35 +42,6 @@ from repoactive.updates import (
 )
 
 logger = logging.getLogger(__name__)
-
-# Environment variable naming the directory a generator (emits_jobs) command
-# writes its *.toml job fragments into. See docs/adr/0004-job-generators.md.
-RA_JOBS_DIR_ENV = "RA_JOBS_DIR"
-
-# Environment variable exposing to a job command the directory of the config
-# source that defined the command (Job.config_source_dir), so the command can
-# reach files kept beside its config. See docs/adr/0016-injected-env-var-prefix.md.
-RA_CONFIG_SOURCE_DIR_ENV = "RA_CONFIG_SOURCE_DIR"
-
-# Environment variable exposing to a job command the bookmark/branch repoactive
-# uses for the job's output (Job.branch_name). The command runs on a fresh commit
-# while this bookmark still points at the previous run's commit, so the command
-# can inspect what it produced last time (e.g. `git diff $RA_JOB_BRANCH`). The
-# bookmark may not exist yet: a first run, a run that produced no diff, or a
-# generator never creates it.
-RA_JOB_BRANCH_ENV = "RA_JOB_BRANCH"
-
-# Environment variable exposing to a job command the name of the job it belongs
-# to (Job.name), so a command shared by several jobs can tell which one is
-# running (e.g. to label its output).
-RA_JOB_NAME_ENV = "RA_JOB_NAME"
-
-# Environment variable exposing to a job command the branch the job's MR targets
-# (Job.base_branch, or "trunk()" by default), so a command can diff against its
-# target (e.g. `git diff $RA_JOB_BASE_BRANCH`). This is the *configured* base; for a
-# stacked job (depends_on) the immediate parent commit is another job's output,
-# not this value.
-RA_JOB_BASE_BRANCH_ENV = "RA_JOB_BASE_BRANCH"
 
 
 class RunMode(StrEnum):
@@ -189,8 +162,32 @@ class RunContext:
         # Names removed from every job command's base environment: the platform
         # tokens (ADR 0006) plus every marked secret (ADR 0017). A job reads a
         # marked secret back only by granting it in its own secret_env; see
-        # _resolve_granted_secrets.
+        # Job.resolve_granted_secrets.
         return frozenset(self.config.token_env_names() | self.config.marked_secret_names())
+
+    def base_env(self) -> dict[str, str]:
+        """Return the process environment with every secret-bearing variable removed.
+
+        Drops the names in stripped_env_names (the platform tokens of ADR 0006
+        and every marked secret of ADR 0017), so what remains is safe to hand a
+        job command as its base environment.
+        """
+        stripped = self.stripped_env_names
+        return {k: v for k, v in os.environ.items() if k not in stripped}
+
+    def command_env(self, job: Job, cwd: Path) -> dict[str, str]:
+        """Compose the full environment for a job's command in workspace cwd.
+
+        Layers the injected RA_* variables and the job's granted secrets over
+        the secret-stripped process environment, then pins RA_WORKSPACE_DIR to
+        cwd (ADR 0006/0017). A generator adds RA_JOBS_DIR on top of this.
+        """
+        return (
+            self.base_env()
+            | job.injected_env()
+            | job.resolve_granted_secrets()
+            | {RA_WORKSPACE_DIR_ENV: str(cwd)}
+        )
 
     @contextlib.contextmanager
     def job_workspace(self, job: Job) -> Generator[JJ]:
@@ -249,25 +246,6 @@ def _compute_parents(job: Job, results: dict[str, JobRun]) -> list[str]:
                 seen.add(revset)
                 parents.append(revset)
     return parents
-
-
-def _job_extra_env(job: Job, extra: dict[str, str] | None = None) -> dict[str, str]:
-    """Extra environment for job's command: its name, branches, config dir, extra.
-
-    Always adds RA_JOB_NAME (the job's name), RA_JOB_BRANCH (the bookmark
-    repoactive uses for the job's output), and RA_JOB_BASE_BRANCH (the branch the
-    job's MR targets). Adds RA_CONFIG_SOURCE_DIR when the job has a
-    config_source_dir (the directory of the config source that defined its
-    command), on top of any caller-supplied entries (e.g. RA_JOBS_DIR for a
-    generator).
-    """
-    env = dict(extra or {})
-    env[RA_JOB_NAME_ENV] = job.name
-    env[RA_JOB_BRANCH_ENV] = job.branch_name()
-    env[RA_JOB_BASE_BRANCH_ENV] = job.base_branch or "trunk()"
-    if job.config_source_dir is not None:
-        env[RA_CONFIG_SOURCE_DIR_ENV] = job.config_source_dir
-    return env
 
 
 def _bookmark_change_id(shape: human_commits.BranchShape | None) -> str | None:
@@ -593,8 +571,7 @@ def run_job(
         command_result = run_command(
             job,
             repo.cwd,
-            stripped_env_names=ctx.stripped_env_names,
-            extra_env=_job_extra_env(job),
+            env=ctx.command_env(job, repo.cwd),
         )
         # A conflict materialized by the rebuild itself - the command commit's
         # merge with the run's parents (a prerequisite/trunk merge lands here, in
@@ -909,8 +886,7 @@ def _run_generator_job(ctx: RunContext, *, job: Job, parents: list[str]) -> JobR
             run_command(
                 job,
                 repo.cwd,
-                stripped_env_names=ctx.stripped_env_names,
-                extra_env=_job_extra_env(job, {RA_JOBS_DIR_ENV: str(jobs_dir.path)}),
+                env=ctx.command_env(job, repo.cwd) | {RA_JOBS_DIR_ENV: str(jobs_dir.path)},
             )
             emitted = jobs_dir.load()
         finally:

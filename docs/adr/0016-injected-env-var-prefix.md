@@ -17,8 +17,8 @@ until now both used the same `REPOACTIVE_` prefix:
   runs in a throwaway workspace
   ([ADR 0007](0007-colocate-job-workspaces-for-git-aware-commands.md)), and
   repoactive injects context into that command's environment via
-  `runner._command_env`. The first such variable was `REPOACTIVE_JOBS_DIR`,
-  the directory a generator writes its `*.toml` fragments into
+  `Job.injected_env`. The first such variable was `REPOACTIVE_JOBS_DIR`, the
+  directory a generator writes its `*.toml` fragments into
   ([ADR 0004](0004-job-generators.md)).
 
 Sharing one prefix conflates "config repoactive reads" with "context

@@ -9,13 +9,27 @@ import pytest
 
 from repoactive.command import (
     CommandError,
-    MissingSecretError,
-    _resolve_granted_secrets,
+    CommandResult,
     _spawn,
     run_command,
 )
-from repoactive.config import Job
-from repoactive.runner import _job_extra_env
+from repoactive.config import Job, MissingSecretError
+from repoactive.constants import RA_WORKSPACE_DIR_ENV
+
+
+def _run(
+    job: Job,
+    cwd: Path,
+    *,
+    stripped_env_names: frozenset[str] = frozenset(),
+    extra_env: dict[str, str] | None = None,
+) -> CommandResult:
+    """Run job, composing its env the way the runner does."""
+    base = {k: v for k, v in os.environ.items() if k not in stripped_env_names}
+    env = (
+        base | (extra_env or {}) | job.resolve_granted_secrets() | {RA_WORKSPACE_DIR_ENV: str(cwd)}
+    )
+    return run_command(job, cwd, env=env)
 
 
 def _alive(pid: int) -> bool:
@@ -43,7 +57,7 @@ class TestRunCommand:
             commit_title_prefix="",
         )
         with pytest.raises(CommandError, match="timed out after 1s"):
-            run_command(job, tmp_path)
+            _run(job, tmp_path)
 
         child_pid = int(pidfile.read_text())
         deadline = time.monotonic() + 5
@@ -94,7 +108,7 @@ class TestRunCommand:
             branch_prefix="repoactive/",
             commit_title_prefix="",
         )
-        result = run_command(job, tmp_path)
+        result = _run(job, tmp_path)
 
         assert result.output == "�"  # U+FFFD REPLACEMENT CHARACTER
 
@@ -111,7 +125,7 @@ class TestRunCommand:
             commit_title_prefix="",
         )
         # A timeout would raise CommandError; reaching here means it did not hang.
-        result = run_command(job, tmp_path)
+        result = _run(job, tmp_path)
 
         # `read` hits EOF immediately, so $line is empty in the echo that follows.
         assert result.output.strip() == "got=[]"
@@ -129,7 +143,7 @@ class TestRunCommand:
             branch_prefix="repoactive/",
             commit_title_prefix="",
         )
-        result = run_command(job, tmp_path, stripped_env_names=frozenset({"GITHUB_TOKEN"}))
+        result = _run(job, tmp_path, stripped_env_names=frozenset({"GITHUB_TOKEN"}))
 
         assert "token=[unset]" in result.output
         assert "supersecret" not in result.output
@@ -147,7 +161,7 @@ class TestRunCommand:
             branch_prefix="repoactive/",
             commit_title_prefix="",
         )
-        result = run_command(job, tmp_path)
+        result = _run(job, tmp_path)
 
         assert result.output == "[visible]"
 
@@ -166,7 +180,7 @@ class TestRunCommand:
             commit_title_prefix="",
             secret_env=["MY_SECRET"],
         )
-        result = run_command(job, tmp_path, stripped_env_names=frozenset({"MY_SECRET"}))
+        result = _run(job, tmp_path, stripped_env_names=frozenset({"MY_SECRET"}))
 
         assert result.output == "[s3cr3t]"
 
@@ -184,7 +198,7 @@ class TestRunCommand:
             branch_prefix="repoactive/",
             commit_title_prefix="",
         )
-        result = run_command(job, tmp_path, stripped_env_names=frozenset({"MY_SECRET"}))
+        result = _run(job, tmp_path, stripped_env_names=frozenset({"MY_SECRET"}))
 
         assert result.output == "[unset]"
         assert "s3cr3t" not in result.output
@@ -203,7 +217,7 @@ class TestRunCommand:
             secret_env=["MY_SECRET"],
         )
         with pytest.raises(MissingSecretError, match="requires secret MY_SECRET, not set"):
-            run_command(job, tmp_path, stripped_env_names=frozenset({"MY_SECRET"}))
+            _run(job, tmp_path, stripped_env_names=frozenset({"MY_SECRET"}))
 
     def test_config_source_dir_visible_to_command(self, tmp_path: Path) -> None:
         # A job with a config_source_dir sees it as RA_CONFIG_SOURCE_DIR.
@@ -215,7 +229,7 @@ class TestRunCommand:
             commit_title_prefix="",
             config_source_dir="/cfg/dir",
         )
-        result = run_command(job, tmp_path, extra_env=_job_extra_env(job))
+        result = _run(job, tmp_path, extra_env=job.injected_env())
 
         assert result.output == "[/cfg/dir]"
 
@@ -228,7 +242,7 @@ class TestRunCommand:
             branch_prefix="repoactive/",
             commit_title_prefix="",
         )
-        result = run_command(job, tmp_path)
+        result = _run(job, tmp_path)
 
         assert result.output == f"[{tmp_path}]"
 
@@ -241,7 +255,7 @@ class TestRunCommand:
             branch_prefix="repoactive/",
             commit_title_prefix="",
         )
-        result = run_command(job, tmp_path, extra_env=_job_extra_env(job))
+        result = _run(job, tmp_path, extra_env=job.injected_env())
 
         assert result.output == "[repoactive/foo]"
 
@@ -254,7 +268,7 @@ class TestRunCommand:
             branch_prefix="repoactive/",
             commit_title_prefix="",
         )
-        result = run_command(job, tmp_path, extra_env=_job_extra_env(job))
+        result = _run(job, tmp_path, extra_env=job.injected_env())
 
         assert result.output == "[foo]"
 
@@ -268,7 +282,7 @@ class TestRunCommand:
             commit_title_prefix="",
             base_branch="release",
         )
-        result = run_command(job, tmp_path, extra_env=_job_extra_env(job))
+        result = _run(job, tmp_path, extra_env=job.injected_env())
 
         assert result.output == "[release]"
 
@@ -283,7 +297,7 @@ class TestRunCommand:
             branch_prefix="repoactive/",
             commit_title_prefix="",
         )
-        result = run_command(job, tmp_path)
+        result = _run(job, tmp_path)
 
         assert result.output == "[/bin/sh]"
 
@@ -301,26 +315,6 @@ class TestRunCommand:
             commit_title_prefix="",
             shell=bash,
         )
-        result = run_command(job, tmp_path)
+        result = _run(job, tmp_path)
 
         assert result.output == f"[{bash}]"
-
-
-class TestResolveGrantedSecrets:
-    def test_reads_granted_values_from_environment(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("A_SECRET", "one")
-        monkeypatch.setenv("B_SECRET", "two")
-        job = Job(name="foo", command="c", title="t", secret_env=["A_SECRET", "B_SECRET"])
-        assert _resolve_granted_secrets(job) == {"A_SECRET": "one", "B_SECRET": "two"}
-
-    def test_empty_without_secret_env(self) -> None:
-        assert _resolve_granted_secrets(Job(name="foo", command="c", title="t")) == {}
-
-    def test_raises_on_first_unset_granted_secret(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("A_SECRET", raising=False)
-        job = Job(name="foo", command="c", title="t", secret_env=["A_SECRET"])
-        with pytest.raises(
-            MissingSecretError, match="requires secret A_SECRET, not set"
-        ) as excinfo:
-            _resolve_granted_secrets(job)
-        assert excinfo.value.name == "A_SECRET"

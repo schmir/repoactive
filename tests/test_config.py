@@ -16,11 +16,18 @@ from repoactive.config import (
     InvalidDurationError,
     Job,
     JobDefaults,
+    MissingSecretError,
     default_config_paths,
     load_config,
     parse_duration,
 )
-from repoactive.constants import JOB_TRAILER_KEY
+from repoactive.constants import (
+    JOB_TRAILER_KEY,
+    RA_CONFIG_SOURCE_DIR_ENV,
+    RA_JOB_BASE_BRANCH_ENV,
+    RA_JOB_BRANCH_ENV,
+    RA_JOB_NAME_ENV,
+)
 
 
 def _platform(**kwargs: object) -> dict[str, object]:
@@ -1237,3 +1244,58 @@ class TestTags:
     def test_explicit_enabled_keeps_job_in_default_run(self) -> None:
         job = Job(name="j", command="cmd", title="T", tags=["enabled", "weekly"])
         assert job.effective_tags() == {"enabled", "weekly"}
+
+
+class TestJobInjectedEnv:
+    def test_always_adds_name_and_branches(self) -> None:
+        # Every job command gets RA_JOB_NAME, RA_JOB_BRANCH, and RA_JOB_BASE_BRANCH,
+        # even with nothing else to add. base_branch is unset, so it defaults to
+        # trunk().
+        job = Job(name="foo", command="c", title="t", branch_prefix="repoactive/")
+        assert job.injected_env() == {
+            RA_JOB_NAME_ENV: "foo",
+            RA_JOB_BRANCH_ENV: "repoactive/foo",
+            RA_JOB_BASE_BRANCH_ENV: "trunk()",
+        }
+
+    def test_base_branch_uses_job_override(self) -> None:
+        # A configured base_branch is exposed verbatim instead of trunk().
+        job = Job(
+            name="foo", command="c", title="t", branch_prefix="repoactive/", base_branch="release"
+        )
+        assert job.injected_env()[RA_JOB_BASE_BRANCH_ENV] == "release"
+
+    def test_adds_config_source_dir(self) -> None:
+        job = Job(
+            name="foo",
+            command="c",
+            title="t",
+            branch_prefix="repoactive/",
+            config_source_dir="/cfg",
+        )
+        assert job.injected_env() == {
+            RA_JOB_NAME_ENV: "foo",
+            RA_JOB_BRANCH_ENV: "repoactive/foo",
+            RA_JOB_BASE_BRANCH_ENV: "trunk()",
+            RA_CONFIG_SOURCE_DIR_ENV: "/cfg",
+        }
+
+
+class TestResolveGrantedSecrets:
+    def test_reads_granted_values_from_environment(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("A_SECRET", "one")
+        monkeypatch.setenv("B_SECRET", "two")
+        job = Job(name="foo", command="c", title="t", secret_env=["A_SECRET", "B_SECRET"])
+        assert job.resolve_granted_secrets() == {"A_SECRET": "one", "B_SECRET": "two"}
+
+    def test_empty_without_secret_env(self) -> None:
+        assert Job(name="foo", command="c", title="t").resolve_granted_secrets() == {}
+
+    def test_raises_on_first_unset_granted_secret(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("A_SECRET", raising=False)
+        job = Job(name="foo", command="c", title="t", secret_env=["A_SECRET"])
+        with pytest.raises(
+            MissingSecretError, match="requires secret A_SECRET, not set"
+        ) as excinfo:
+            job.resolve_granted_secrets()
+        assert excinfo.value.name == "A_SECRET"

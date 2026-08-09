@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import itertools
 import logging
+import os
 import re
 import tomllib
 from collections.abc import Iterable
@@ -25,7 +26,13 @@ from pydantic import (
     model_validator,
 )
 
-from repoactive.constants import JOB_TRAILER_KEY
+from repoactive.constants import (
+    JOB_TRAILER_KEY,
+    RA_CONFIG_SOURCE_DIR_ENV,
+    RA_JOB_BASE_BRANCH_ENV,
+    RA_JOB_BRANCH_ENV,
+    RA_JOB_NAME_ENV,
+)
 from repoactive.graph import detect_dependency_cycle, topological_sort
 
 logger = logging.getLogger(__name__)
@@ -114,6 +121,18 @@ class ReservedSecretEnvNameError(ValueError):
             f"{' and '.join(_RESERVED_ENV_PREFIXES)} prefixes are reserved for repoactive "
             "(see docs/adr/0016-injected-env-var-prefix.md)"
         )
+
+
+class MissingSecretError(RuntimeError):
+    """A job granted a secret_env variable that is unset in repoactive's environment.
+
+    Raised before the command runs so the failure is legible (ADR 0017) instead
+    of surfacing as an obscure command error later.
+    """
+
+    def __init__(self, name: str) -> None:
+        super().__init__(f"requires secret {name}, not set")
+        self.name = name
 
 
 class NewlineInTitleError(ValueError):
@@ -534,6 +553,39 @@ class Job(BaseModel):
         if self.generated_by:
             lines.append(f"{JOB_TRAILER_KEY}: {self.generated_by}")
         return lines
+
+    def injected_env(self) -> dict[str, str]:
+        """Return the RA_* variables repoactive injects for this job's command.
+
+        Adds RA_JOB_NAME (the job's name), RA_JOB_BRANCH (the bookmark repoactive
+        uses for the job's output), RA_JOB_BASE_BRANCH (the branch the job's MR
+        targets), and RA_CONFIG_SOURCE_DIR when the job has a config_source_dir.
+        See docs/adr/0016-injected-env-var-prefix.md.
+        """
+        env = {
+            RA_JOB_NAME_ENV: self.name,
+            RA_JOB_BRANCH_ENV: self.branch_name(),
+            RA_JOB_BASE_BRANCH_ENV: self.base_branch or "trunk()",
+        }
+        if self.config_source_dir is not None:
+            env[RA_CONFIG_SOURCE_DIR_ENV] = self.config_source_dir
+        return env
+
+    def resolve_granted_secrets(self) -> dict[str, str]:
+        """Return values for the secrets this job grants, read from the environment.
+
+        Only the names in the job's own secret_env are granted; job-defaults
+        marks names but grants to no job (ADR 0017). Raises MissingSecretError on
+        the first granted name that is unset, so a misconfigured job fails
+        legibly before its command runs rather than deep inside it.
+        """
+        granted: dict[str, str] = {}
+        for name in self.secret_env:
+            try:
+                granted[name] = os.environ[name]
+            except KeyError:
+                raise MissingSecretError(name) from None
+        return granted
 
     def resolve(self, defaults: JobDefaults) -> Job:
         update: dict[str, object] = {
