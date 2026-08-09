@@ -192,6 +192,50 @@ class RunContext:
         # _resolve_granted_secrets.
         return frozenset(self.config.token_env_names() | self.config.marked_secret_names())
 
+    @contextlib.contextmanager
+    def job_workspace(self, job: Job) -> Generator[JJ]:
+        """Open a fresh temp jj workspace for a job, cleaned up on exit."""
+        with JJ(self.repo_path).temp_workspace(workspace_name(job.name)) as repo:
+            yield repo
+
+    @contextlib.contextmanager
+    def generated_jobs_dir(self, generator: Job) -> "Generator[GeneratedJobsDir]":
+        """Create the temp directory a generator writes its job fragments into.
+
+        The directory lives outside the job workspace, so the fragments written
+        there never show up as a working-copy diff (ADR 0004). Yields a handle
+        exposing the directory (for RA_JOBS_DIR) that loads the emitted jobs
+        once the generator command has run.
+        """
+        with tempfile.TemporaryDirectory(prefix="repoactive-jobs-") as tmp:
+            yield GeneratedJobsDir(self, generator, Path(tmp))
+
+
+@dataclass(frozen=True)
+class GeneratedJobsDir:
+    """Handle to the temp directory a generator writes its *.toml fragments into.
+
+    Exposes the directory (for the RA_JOBS_DIR env var) and, once the generator
+    command has run, loads and validates the emitted jobs from it (ADR 0004).
+    """
+
+    _ctx: RunContext
+    _generator: Job
+    path: Path
+
+    def load(self) -> list[Job]:
+        """Parse the fragments the generator wrote and build the emitted jobs."""
+        specs = load_job_specs(self.path)
+        # selection.jobs is every job already in the run (collision guard);
+        # config.jobs are the statically configured names.
+        return build_generated_jobs(
+            generator=self._generator,
+            specs=specs,
+            run_names={j.name for j in self._ctx.selection.jobs},
+            all_config_names={j.name for j in self._ctx.config.jobs},
+            marked_secret_names=frozenset(self._ctx.config.marked_secret_names()),
+        )
+
 
 def _compute_parents(job: Job, results: dict[str, JobRun]) -> list[str]:
     if not job.depends_on:
@@ -531,7 +575,7 @@ def run_job(
     logger.debug("parents: %s", parents)
 
     with (
-        JJ(ctx.repo_path).temp_workspace(workspace_name(job.name)) as repo,
+        ctx.job_workspace(job) as repo,
         repo.op_checkpoint() as restore,
     ):
         shape = _run_job_prepare_command_commit(repo=repo, job=job, parents=parents)
@@ -855,35 +899,23 @@ def _run_generator_job(ctx: RunContext, *, job: Job, parents: list[str]) -> JobR
     """
     logger.debug("starting generator: %s", job.name)
     with (
-        JJ(ctx.repo_path).temp_workspace(workspace_name(job.name)) as repo,
-        # The output directory lives outside the workspace, so the files written there never
-        # show up as a diff in the working copy.
-        tempfile.TemporaryDirectory(prefix="repoactive-jobs-") as tmp,
+        ctx.job_workspace(job) as repo,
+        ctx.generated_jobs_dir(job) as jobs_dir,
     ):
         repo.new(*parents)
         try:
             repo.git_sync_head()
-            jobs_dir = Path(tmp)
-            logger.debug("[%s] running generator command (jobs dir %s)", job.name, jobs_dir)
+            logger.debug("[%s] running generator command (jobs dir %s)", job.name, jobs_dir.path)
             run_command(
                 job,
                 repo.cwd,
                 stripped_env_names=ctx.stripped_env_names,
-                extra_env=_job_extra_env(job, {RA_JOBS_DIR_ENV: str(jobs_dir)}),
+                extra_env=_job_extra_env(job, {RA_JOBS_DIR_ENV: str(jobs_dir.path)}),
             )
-            specs = load_job_specs(jobs_dir)
+            emitted = jobs_dir.load()
         finally:
             repo.abandon()
-    logger.debug("[%s] generator emitted %d job spec(s)", job.name, len(specs))
-    # selection.jobs is every job already in the run (collision guard); config.jobs
-    # are the statically configured names.
-    emitted = build_generated_jobs(
-        generator=job,
-        specs=specs,
-        run_names={j.name for j in ctx.selection.jobs},
-        all_config_names={j.name for j in ctx.config.jobs},
-        marked_secret_names=frozenset(ctx.config.marked_secret_names()),
-    )
+    logger.debug("[%s] generator emitted %d job(s)", job.name, len(emitted))
 
     names = ", ".join(j.name for j in emitted) if emitted else "none"
     print_status(job.name, f"generated {len(emitted)} job(s): {names}")
