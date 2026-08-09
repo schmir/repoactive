@@ -142,8 +142,8 @@ class RunContext:
     _dispatch_job to run_job / _run_generator_job so every stage has a
     single handle to the run's config, target repo, accumulating results,
     selection, and the plan _record_job_plan fills in.
-    selection is the live selection object (_run_jobs splices
-    generator-emitted jobs into selection.jobs in place), so selection.jobs
+    selection is the live selection object (splice_generator_jobs adds
+    generator-emitted jobs to selection.jobs in place), so selection.jobs
     is always every job in the run.
     repo is the prepared, colocated JJ bound to repo_path.
     """
@@ -208,6 +208,45 @@ class RunContext:
         """
         with tempfile.TemporaryDirectory(prefix="repoactive-jobs-") as tmp:
             yield GeneratedJobsDir(self, generator, Path(tmp))
+
+    def apply_outcome(self, job: Job, outcome: "JobOutcome") -> None:
+        """Record a job's outcome in summary (and splice in any emitted jobs)."""
+        match outcome:
+            case Ran(result):
+                self.summary.results[job.name] = result
+                # A frozen job ran far enough to classify and prepare but not to
+                # push; it is not a skip (no gate fired) and not a failure.
+                if result.frozen:
+                    self.summary.frozen.add(job.name)
+                # Only a generator that actually ran emits jobs.
+                if result.emitted:
+                    self.splice_generator_jobs(result.emitted)
+            case Skipped(result, reason):
+                self.summary.results[job.name] = result
+                match reason:
+                    case SkipReason.run_only_if_changed_skipped:
+                        self.summary.run_only_if_changed_skipped.add(job.name)
+                    case SkipReason.successor_skipped:
+                        self.summary.successor_skipped.add(job.name)
+                    case SkipReason.on_cooldown:
+                        self.summary.on_cooldown.add(job.name)
+            case Blocked():
+                self.summary.dependency_failed.add(job.name)
+            case Failed(error):
+                self.summary.failed[job.name] = error
+
+    def splice_generator_jobs(self, emitted: list[Job]) -> None:
+        """Splice a generator's emitted jobs into the run's selection (ADR 0004).
+
+        Re-sorts selection.jobs so each emitted job runs after its dependencies
+        (the generator included).
+        """
+        # Resolve before splicing in so _dispatch_job receives resolved jobs.
+        resolved = [j.resolve(self.config.job_defaults) for j in emitted]
+        # Track the new jobs' bookmarks so an already-pushed branch is reused, not recreated.
+        self.repo.bookmark_track(*sorted(j.branch_name() for j in resolved))
+        self.selection.jobs = topological_sort(self.selection.jobs + resolved)
+        print_job_table(format_job_forest(self.selection.jobs), indent="  ")
 
 
 @dataclass(frozen=True)
@@ -642,7 +681,7 @@ def _last_run_if_on_cooldown(job: Job, repo_path: Path) -> datetime | None:
 class SkipReason(StrEnum):
     """Which RunSummary set a gated (Skipped) job's name is recorded in.
 
-    _apply_outcome matches each member to the set it names. Blocked and Failed
+    RunContext.apply_outcome matches each member to the set it names. Blocked and Failed
     outcomes name their own sets and are not SkipReasons.
     """
 
@@ -689,43 +728,19 @@ class Failed:
 # The four arms make the "carries a result vs doesn't" invariant explicit: Ran
 # and Skipped hold a JobRun that flows to dependents and the plan; Blocked and
 # Failed hold none. Each gate/run step builds one instead of touching ctx.summary
-# directly, so _dispatch_job has a single place that applies them.
+# directly, so RunContext.apply_outcome is the single place that applies them.
 type JobOutcome = Ran | Skipped | Blocked | Failed
 
 
-def _apply_outcome(ctx: RunContext, job: Job, outcome: JobOutcome) -> None:
-    """Record a job's outcome in ctx.summary; the only function that does."""
-    summary = ctx.summary
-    match outcome:
-        case Ran(result):
-            summary.results[job.name] = result
-            # A frozen job ran far enough to classify and prepare but not to
-            # push; it is not a skip (no gate fired) and not a failure.
-            if result.frozen:
-                summary.frozen.add(job.name)
-        case Skipped(result, reason):
-            summary.results[job.name] = result
-            match reason:
-                case SkipReason.run_only_if_changed_skipped:
-                    summary.run_only_if_changed_skipped.add(job.name)
-                case SkipReason.successor_skipped:
-                    summary.successor_skipped.add(job.name)
-                case SkipReason.on_cooldown:
-                    summary.on_cooldown.add(job.name)
-        case Blocked():
-            summary.dependency_failed.add(job.name)
-        case Failed(error):
-            summary.failed[job.name] = error
-
-
 def _dispatch_job(ctx: RunContext, *, job: Job) -> JobOutcome:
-    """Run a single job, recording its outcome in ctx.summary and returning it.
+    """Run a single job and return its outcome; the caller records it (see _run_jobs).
 
-    A failed or dependency-skipped job lands in summary.failed/
-    summary.dependency_failed, so _dispatch_blocked_deps blocks its dependents
-    in turn. The returned outcome's arm (Ran/Skipped/Blocked/Failed) is what
-    _record_job_plan reads directly rather than reaching back into ctx.summary.
-    Which jobs bypass a skip gate is driven by ctx.selection (see JobSelection).
+    A failed or dependency-skipped job's outcome must be applied to ctx.summary
+    before the next job dispatches, so _dispatch_blocked_deps can block its
+    dependents in turn. The returned outcome's arm (Ran/Skipped/Blocked/Failed)
+    is what RunContext.apply_outcome and _record_job_plan read directly rather
+    than reaching back into ctx.summary. Which jobs bypass a skip gate is driven by
+    ctx.selection (see JobSelection).
     """
     outcome = _dispatch_blocked_deps(ctx, job=job)
     if outcome is None:
@@ -737,7 +752,6 @@ def _dispatch_job(ctx: RunContext, *, job: Job) -> JobOutcome:
             or _dispatch_cooldown_gate(ctx, job=job, parents=parents)
             or _dispatch_run(ctx, job=job, parents=parents)
         )
-    _apply_outcome(ctx, job, outcome)
     return outcome
 
 
@@ -1064,16 +1078,9 @@ def _run_jobs(ctx: RunContext) -> None:
             break
         started.add(job.name)
         outcome = _dispatch_job(ctx, job=job)
+        ctx.apply_outcome(job, outcome)
         # run_job rewrote this job's commit in place; finalize its bookmark and push/MR now.
         _record_job_plan(ctx, outcome)
-        # Only a generator that actually ran emits jobs.
-        if isinstance(outcome, Ran) and (emitted := outcome.result.emitted):
-            # Resolve before splicing in so _dispatch_job receives resolved jobs.
-            resolved_emitted = [j.resolve(ctx.config.job_defaults) for j in emitted]
-            # Track the new jobs' bookmarks so an already-pushed branch is reused, not recreated.
-            ctx.repo.bookmark_track(*sorted(j.branch_name() for j in resolved_emitted))
-            ctx.selection.jobs = topological_sort(ctx.selection.jobs + resolved_emitted)
-            print_job_table(format_job_forest(ctx.selection.jobs), indent="  ")
 
 
 def _suppress_superseded_mrs(*, plan: UpdatePlan, results: dict[str, JobRun]) -> None:

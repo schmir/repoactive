@@ -25,6 +25,7 @@ from repoactive.runner import (
     ApplyResult,
     Blocked,
     Disposition,
+    JobOutcome,
     JobRun,
     Ran,
     RunContext,
@@ -77,6 +78,17 @@ def _selection(
     return JobSelection(
         jobs=list(jobs), refreshed=refreshed, successors=successors, explicit=explicit
     )
+
+
+def _dispatch_and_record(ctx: RunContext, *, job: Job) -> JobOutcome:
+    """Dispatch a job and record its outcome, mirroring one _run_jobs iteration.
+
+    _dispatch_job returns the outcome; _run_jobs applies it to ctx.summary.
+    These tests assert on ctx.summary, so they run both steps.
+    """
+    outcome = _dispatch_job(ctx, job=job)
+    ctx.apply_outcome(job, outcome)
+    return outcome
 
 
 def _ctx(
@@ -187,7 +199,7 @@ class TestRunOneJob:
         summary = RunSummary()
         summary.dependency_failed.add("a")
         with patch("repoactive.runner.run_job") as mock_run_job:
-            _dispatch_job(
+            _dispatch_and_record(
                 _ctx(
                     config=config,
                     summary=summary,
@@ -210,7 +222,7 @@ class TestRunOneJob:
             ),
             patch("repoactive.runner.run_job") as mock_run_job,
         ):
-            _dispatch_job(
+            _dispatch_and_record(
                 _ctx(config=config, summary=summary, selection=_selection(*config.jobs)),
                 job=job_a,
             )
@@ -239,7 +251,7 @@ class TestRunOneJob:
             ),
             patch("repoactive.runner.run_job", return_value=result) as mock_run_job,
         ):
-            _dispatch_job(
+            _dispatch_and_record(
                 _ctx(
                     config=config,
                     summary=summary,
@@ -263,7 +275,7 @@ class TestRunOneJob:
             patch("repoactive.runner._last_run_if_on_cooldown") as mock_cooldown,
             patch("repoactive.runner.run_job", return_value=result) as mock_run_job,
         ):
-            _dispatch_job(
+            _dispatch_and_record(
                 _ctx(
                     config=config,
                     summary=summary,
@@ -289,7 +301,7 @@ class TestRunOneJob:
             job=job_a, effective_revsets=["trunk()"], produced_diff=False
         )
         with patch("repoactive.runner.run_job") as mock_run_job:
-            _dispatch_job(
+            _dispatch_and_record(
                 _ctx(
                     config=config,
                     summary=summary,
@@ -312,7 +324,7 @@ class TestRunOneJob:
             job=job_b, effective_revsets=["trunk()"], produced_diff=False
         )
         with patch("repoactive.runner.run_job") as mock_run_job:
-            _dispatch_job(
+            _dispatch_and_record(
                 _ctx(
                     config=config,
                     summary=summary,
@@ -341,7 +353,7 @@ class TestRunOneJob:
             ) as mock_cooldown,
             patch("repoactive.runner.run_job", return_value=result_b) as mock_run_job,
         ):
-            _dispatch_job(
+            _dispatch_and_record(
                 _ctx(
                     config=config,
                     summary=summary,
@@ -366,7 +378,7 @@ class TestRunOneJob:
             job=job_a, effective_revsets=["trunk()"], produced_diff=False
         )
         with patch("repoactive.runner.run_job", return_value=result_b) as mock_run_job:
-            _dispatch_job(
+            _dispatch_and_record(
                 _ctx(
                     config=config,
                     summary=summary,
@@ -385,7 +397,7 @@ class TestRunOneJob:
         result_b = JobRun(job=job_b, effective_revsets=["repoactive/b"], produced_diff=True)
         summary = RunSummary()
         with patch("repoactive.runner.run_job", return_value=result_b) as mock_run_job:
-            _dispatch_job(
+            _dispatch_and_record(
                 _ctx(
                     config=config,
                     summary=summary,
@@ -404,7 +416,7 @@ class TestRunOneJob:
             patch("repoactive.runner._last_run_if_on_cooldown", return_value=False),
             patch("repoactive.runner.run_job", return_value=result) as mock_run_job,
         ):
-            _dispatch_job(
+            _dispatch_and_record(
                 _ctx(config=config, summary=summary, selection=_selection(*config.jobs)),
                 job=job_a,
             )
@@ -424,7 +436,7 @@ class TestRunOneJob:
             patch("repoactive.runner._last_run_if_on_cooldown", return_value=False),
             patch("repoactive.runner.run_job", side_effect=err),
         ):
-            _dispatch_job(
+            _dispatch_and_record(
                 _ctx(
                     config=config,
                     summary=summary,
@@ -444,7 +456,7 @@ class TestRunOneJob:
             patch("repoactive.runner._last_run_if_on_cooldown", return_value=False),
             patch("repoactive.runner.run_job", side_effect=err),
         ):
-            _dispatch_job(
+            _dispatch_and_record(
                 _ctx(
                     config=config,
                     summary=summary,
@@ -464,7 +476,7 @@ class TestRunOneJob:
             job=job_a, effective_revsets=["trunk()"], produced_diff=False
         )
         with patch("repoactive.runner.run_job") as mock_run_job:
-            _dispatch_job(
+            _dispatch_and_record(
                 _ctx(config=config, summary=summary, selection=_selection(*config.jobs)),
                 job=config.jobs[1],
             )
@@ -486,7 +498,7 @@ class TestRunOneJob:
             patch("repoactive.runner._last_run_if_on_cooldown", return_value=False),
             patch("repoactive.runner.run_job", return_value=result_b) as mock_run_job,
         ):
-            _dispatch_job(
+            _dispatch_and_record(
                 _ctx(config=config, summary=summary, selection=_selection(*config.jobs)),
                 job=config.jobs[1],
             )
@@ -500,7 +512,7 @@ class TestRunOneJob:
         config = _config(job_a, job_b)
         summary = RunSummary()
         with patch("repoactive.runner.run_job") as mock_run_job:
-            _dispatch_job(
+            _dispatch_and_record(
                 _ctx(config=config, summary=summary, selection=_selection(*config.jobs)),
                 job=config.jobs[1],
             )
@@ -518,7 +530,7 @@ class TestRunOneJob:
         summary.results["a"] = JobRun(
             job=job_a, effective_revsets=["trunk()"], produced_diff=False
         )
-        _dispatch_job(
+        _dispatch_and_record(
             _ctx(config=config, summary=summary, selection=_selection(*config.jobs)),
             job=config.jobs[1],
         )
@@ -541,7 +553,7 @@ class TestRunOneJob:
             patch("repoactive.runner._last_run_if_on_cooldown", return_value=False),
             patch("repoactive.runner.run_job", return_value=result_b) as mock_run_job,
         ):
-            _dispatch_job(
+            _dispatch_and_record(
                 _ctx(
                     config=config,
                     summary=summary,
