@@ -16,7 +16,7 @@ just test tests/test_runner.py     # run a single test file
 just test -k some_test             # run tests matching an expression
 just test -m "not slow"            # skip slow/integration tests
 just ci                            # treefmt + ty check + fast tests + validate_config + check_schema
-uv run nox -s tests                # run tests across Python 3.11-3.15
+uv run nox -s tests                # run tests across Python 3.12-3.15
 uv run ruff check                  # lint
 uv run ty check                    # type check
 ```

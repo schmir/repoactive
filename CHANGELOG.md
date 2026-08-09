@@ -22,6 +22,8 @@
   command that reads stdin fails fast at end-of-file instead of blocking
   until its timeout.
 - The Docker image's default jj version is now 0.44.0.
+- **Breaking:** repoactive now requires Python 3.12 or later. Python 3.11 is
+  no longer supported.
 
 ## 0.3.1 - 2026-07-27
 

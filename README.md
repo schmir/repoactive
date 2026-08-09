@@ -1274,7 +1274,7 @@ design.
 
 ## Requirements
 
-- Python 3.11 or later
+- Python 3.12 or later
 - [jj (Jujutsu)](https://github.com/jj-vcs/jj) - `repoactive` uses jj to
   manage branches and commits in the target repository
 - A configured jj user name and email - jj records them as the commit

@@ -69,7 +69,7 @@ class UnexpectedLayers:
     command_commits: list[JobCommit]
 
 
-BranchShape = NoBranch | AlreadyMerged | AllPrerequisites | NormalLayers | UnexpectedLayers
+type BranchShape = NoBranch | AlreadyMerged | AllPrerequisites | NormalLayers | UnexpectedLayers
 
 
 def classify_branch(*, repo: JJ, bookmark: str, parents: list[str], job_name: str) -> BranchShape:
