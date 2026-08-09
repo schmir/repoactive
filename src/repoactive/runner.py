@@ -851,20 +851,22 @@ def _dispatch_cooldown_gate(ctx: RunContext, *, job: Job, parents: list[str]) ->
 def _dispatch_run(ctx: RunContext, *, job: Job, parents: list[str]) -> JobOutcome:
     """Run job for real (ordinary command or generator), recording the outcome."""
     start = time.monotonic()
+
+    def fail(e: Exception, elapsed: float) -> Failed:
+        print_status(job.name, ("failed", "red"), f": {e} ({format_elapsed(elapsed)})")
+        return Failed(e)
+
     try:
-        result = (
+        return Ran(
             _run_generator_job(ctx, job=job, parents=parents)
             if job.emits_jobs
             else run_job(ctx, job=job, parents=parents)
         )
-        return Ran(result)
+    except CommandError as e:
+        # Command's own time, so the failure line matches the success prints.
+        return fail(e, e.elapsed)
     except Exception as e:
-        # A command failure reports the command's own time (matching the
-        # success prints); other failures have no command time, so fall back
-        # to the wall time spent in run_job.
-        elapsed = e.elapsed if isinstance(e, CommandError) else time.monotonic() - start
-        print_status(job.name, ("failed", "red"), f": {e} ({format_elapsed(elapsed)})")
-        return Failed(e)
+        return fail(e, time.monotonic() - start)
 
 
 def _run_generator_job(ctx: RunContext, *, job: Job, parents: list[str]) -> JobRun:
