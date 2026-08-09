@@ -725,21 +725,21 @@ def _dispatch_job(ctx: RunContext, *, job: Job) -> JobOutcome:
     _record_job_plan reads directly rather than reaching back into ctx.summary.
     Which jobs bypass a skip gate is driven by ctx.selection (see JobSelection).
     """
-    outcome = _dispatch_blocked_deps(ctx, job)
+    outcome = _dispatch_blocked_deps(ctx, job=job)
     if outcome is None:
         parents = _compute_parents(job, ctx.summary.results)
         logger.debug("[%s] computed parents: %s", job.name, parents)
         outcome = (
-            _dispatch_run_only_if_changed_gate(ctx, job, parents)
-            or _dispatch_successor_gate(ctx, job, parents)
-            or _dispatch_cooldown_gate(ctx, job, parents)
-            or _dispatch_run(ctx, job, parents)
+            _dispatch_run_only_if_changed_gate(ctx, job=job, parents=parents)
+            or _dispatch_successor_gate(ctx, job=job, parents=parents)
+            or _dispatch_cooldown_gate(ctx, job=job, parents=parents)
+            or _dispatch_run(ctx, job=job, parents=parents)
         )
     _apply_outcome(ctx, job, outcome)
     return outcome
 
 
-def _dispatch_blocked_deps(ctx: RunContext, job: Job) -> JobOutcome | None:
+def _dispatch_blocked_deps(ctx: RunContext, *, job: Job) -> JobOutcome | None:
     """Skip job if any of its dependencies already failed or were skipped."""
     summary = ctx.summary
     blocking_deps = [
@@ -754,7 +754,7 @@ def _dispatch_blocked_deps(ctx: RunContext, job: Job) -> JobOutcome | None:
 
 
 def _dispatch_run_only_if_changed_gate(
-    ctx: RunContext, job: Job, parents: list[str]
+    ctx: RunContext, *, job: Job, parents: list[str]
 ) -> JobOutcome | None:
     """Skip job when none of its run_only_if_changed deps produced a diff.
 
@@ -782,7 +782,9 @@ def _dispatch_run_only_if_changed_gate(
     return Skipped(result, SkipReason.run_only_if_changed_skipped)
 
 
-def _dispatch_successor_gate(ctx: RunContext, job: Job, parents: list[str]) -> JobOutcome | None:
+def _dispatch_successor_gate(
+    ctx: RunContext, *, job: Job, parents: list[str]
+) -> JobOutcome | None:
     """Skip a successor job when nothing below it in the stack ran.
 
     A successor exists to be rebuilt when the stack below it moves. If every
@@ -806,7 +808,7 @@ def _dispatch_successor_gate(ctx: RunContext, job: Job, parents: list[str]) -> J
     return Skipped(result, SkipReason.successor_skipped)
 
 
-def _dispatch_cooldown_gate(ctx: RunContext, job: Job, parents: list[str]) -> JobOutcome | None:
+def _dispatch_cooldown_gate(ctx: RunContext, *, job: Job, parents: list[str]) -> JobOutcome | None:
     """Skip job if it is still within its cooldown period.
 
     Cooldown only throttles *starting fresh work*. A job that already has an
@@ -844,7 +846,7 @@ def _dispatch_cooldown_gate(ctx: RunContext, job: Job, parents: list[str]) -> Jo
     return Skipped(result, SkipReason.on_cooldown)
 
 
-def _dispatch_run(ctx: RunContext, job: Job, parents: list[str]) -> JobOutcome:
+def _dispatch_run(ctx: RunContext, *, job: Job, parents: list[str]) -> JobOutcome:
     """Run job for real (ordinary command or generator), recording the outcome."""
     start = time.monotonic()
     try:
