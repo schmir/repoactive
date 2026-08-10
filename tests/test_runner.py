@@ -12,7 +12,7 @@ import pytest
 
 from repoactive import human_commits, runner
 from repoactive.command import CommandError, CommandResult
-from repoactive.config import Config, CreateMR, Job, JobDefaults
+from repoactive.config import Config, CreateMR, Job, JobDefaults, MissingSecretError
 from repoactive.constants import (
     RA_CONFIG_SOURCE_DIR_ENV,
     RA_JOB_BASE_BRANCH_ENV,
@@ -38,6 +38,7 @@ from repoactive.runner import (
     _compute_parents,
     _dispatch_job,
     _format_duration,
+    _preflight_secrets,
     _prepare_repo,
     _pushable_branch_revset,
     _record_job_plan,
@@ -980,6 +981,29 @@ class TestStrippedEnvNames:
         ctx = _ctx(config=cfg, selection=JobSelection(jobs=[], refreshed=frozenset()))
         assert "GITLAB_TOKEN" in ctx.stripped_env_names
         assert cfg.jobs[0].resolve_granted_secrets() == {"GITLAB_TOKEN": "push-cred"}
+
+
+class TestPreflightSecrets:
+    def test_raises_on_first_job_granting_an_unset_secret(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("MISSING", raising=False)
+        jobs = [
+            Job(name="a", command="c", title="t"),
+            Job(name="b", command="c", title="t", secret_env=["MISSING"]),
+        ]
+        with pytest.raises(MissingSecretError, match="requires secret MISSING, not set"):
+            _preflight_secrets(jobs)
+
+    def test_passes_when_every_granted_secret_is_set(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("PRESENT", "v")
+        jobs = [
+            Job(name="a", command="c", title="t"),
+            Job(name="b", command="c", title="t", secret_env=["PRESENT"]),
+        ]
+        _preflight_secrets(jobs)
 
 
 class TestRunJob:

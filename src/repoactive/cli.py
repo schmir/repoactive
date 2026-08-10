@@ -16,6 +16,7 @@ from repoactive.config import (
     ConfigError,
     ConfigNotFoundError,
     Job,
+    MissingSecretError,
     default_config_paths,
     expand_config_paths,
     load_config,
@@ -251,13 +252,14 @@ def run(  # noqa: PLR0913, PLR0917
         UnknownJobsError,
         UnknownTagsError,
         JJError,
+        MissingSecretError,
         NoPlatformConfiguredError,
         PlatformTokenNotSetError,
         PlatformError,
     ) as e:
-        # Anticipated failures (a mistyped job name or tag, no matching
-        # platform, an unset or rejected token, a failing jj/git invocation)
-        # get a clean error line, not a traceback.
+        # Anticipated failures (a mistyped job name or tag, a job granting an
+        # unset secret, no matching platform, an unset or rejected token, a
+        # failing jj/git invocation) get a clean error line, not a traceback.
         _error(str(e))
         raise typer.Exit(code=1) from e
     if not summary.ok:

@@ -1057,6 +1057,19 @@ def _prepare_repo(*, config: Config, repo_path: Path) -> Generator[JJ]:
         )
 
 
+def _preflight_secrets(jobs: list[Job]) -> None:
+    """Resolve every selected job's granted secrets before any job runs.
+
+    A missing secret is a configuration error, not a per-job command failure:
+    raising here aborts the whole run cleanly (ADR 0017) before any command
+    commit is rewritten, instead of failing partway with earlier jobs' work
+    already done. Generator-emitted jobs are not known yet; their secrets are
+    resolved when they dispatch (command_env) and fail that job legibly.
+    """
+    for job in jobs:
+        job.resolve_granted_secrets()
+
+
 def _run_jobs(ctx: RunContext) -> None:
     """Run each job in topological order and record its plan before the next dispatches.
 
@@ -1150,6 +1163,10 @@ def run_all(  # noqa: PLR0913
             summary=RunSummary(),
             selection=selector.select_run_jobs(repo),
         )
+
+        # Abort up front on any misconfigured secret, before printing the
+        # overview or rewriting any commit.
+        _preflight_secrets(ctx.selection.jobs)
 
         # Print 'info jobs'-like overview of selected jobs.
         print(f"Running {len(ctx.selection.jobs)} job(s):")

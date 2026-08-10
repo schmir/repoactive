@@ -21,6 +21,10 @@
 - repoactive now detaches the command's standard input from the terminal. A
   command that reads stdin fails fast at end-of-file instead of blocking
   until its timeout.
+- A job that grants a `secret_env` variable which is unset now aborts the
+  whole run up front, before any job runs, with a single clean error line
+  instead of failing that one job partway through the run. See
+  [ADR 0017](docs/adr/0017-secret-env-redaction.md).
 - The Docker image's default jj version is now 0.44.0.
 - **Breaking:** repoactive now requires Python 3.12 or later. Python 3.11 is
   no longer supported.
