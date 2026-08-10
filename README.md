@@ -28,10 +28,12 @@ request (MR) throughout; on GitHub, read that as pull request (PR).
   - [`repoactive run`](#repoactive-run)
   - [`repoactive recent-commits`](#repoactive-recent-commits)
   - [`repoactive validate-config`](#repoactive-validate-config)
+  - [`repoactive dump-schema`](#repoactive-dump-schema)
   - [`repoactive info jobs`](#repoactive-info-jobs)
   - [`repoactive info tags`](#repoactive-info-tags)
   - [Environment variables](#environment-variables)
 - [Configuration](#configuration)
+  - [Editor support](#editor-support)
   - [`[job-defaults]`](#job-defaults)
   - [`[job.<name>]`](#jobname)
   - [Stacking MRs](#stacking-mrs)
@@ -392,6 +394,28 @@ code 1.
 Validation checks include unknown keys, missing required fields, invalid
 `depends_on` references, and circular job dependencies.
 
+### `repoactive dump-schema`
+
+```
+repoactive dump-schema --output PATH
+```
+
+Write the JSON schema of the TOML config to a file. Use it to pin the schema
+your editor validates against to the version you have installed, rather than
+the published one:
+
+```bash
+repoactive dump-schema -o config-schema.json
+```
+
+See [Editor support](#editor-support) for wiring it up. Unlike the other
+commands this one only reads the installed models, so it takes neither
+`--repo` nor `--debug`.
+
+| Option          | Short | Description                            |
+| --------------- | ----- | -------------------------------------- |
+| `--output PATH` | `-o`  | File to write the schema to (required) |
+
 ### `repoactive info jobs`
 
 ```
@@ -515,6 +539,28 @@ title = "build: upgrade dependencies"
 Every key in `[job-defaults]` supplies the default for the matching per-job
 key; any job may override it by setting the same key in its `[job.<name>]`
 block.
+
+### Editor support
+
+`repoactive` publishes a JSON schema for the config format, so an editor
+with TOML schema support (Even Better TOML in VS Code, Taplo, the JetBrains
+TOML plugin) can complete field names, show what each one does, and flag
+typos as you type - useful given how many optional keys a job accepts. Point
+the `"$schema"` key at the published schema:
+
+```toml
+"$schema" = "https://raw.githubusercontent.com/schmir/repoactive/refs/heads/main/config-schema.json"
+
+[job.uv-lock-upgrade]
+command = "uv lock --upgrade"
+title = "build: upgrade dependencies"
+```
+
+`"$schema"` is part of the config format: `repoactive` accepts it and
+ignores it. The URL above tracks `main`; to validate against the version you
+actually have installed, write the schema out with
+[`repoactive dump-schema`](#repoactive-dump-schema) and point `"$schema"` at
+that file instead.
 
 ### `[job-defaults]`
 
