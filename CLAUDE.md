@@ -1,29 +1,26 @@
 # CLAUDE.md
 
-## What this is
-
-See `README.md`.
-
 ## Version control
 
-This repo uses jj (Jujutsu), not plain git. Don't create commits unless asked.
+This repo uses jj (Jujutsu): inspect state with `jj st`, `jj diff`, `jj log`.
+Describing, splitting, and creating commits are the user's call — do them only
+when asked.
 
 ## Commands
 
 ```bash
-just test                          # run the full test suite
-just test tests/test_runner.py     # run a single test file
-just test -k some_test             # run tests matching an expression
+just test                          # full suite; extra args pass through to pytest
+just test tests/test_runner.py     # a single file
+just test -k some_test             # tests matching an expression
 just test -m "not slow"            # skip slow/integration tests
-just ci                            # treefmt + ty check + fast tests + validate_config + check_schema
-uv run nox -s tests                # run tests across Python 3.12-3.15
-uv run ruff check                  # lint
-uv run ty check                    # type check
+uv run ty check                    # type check on its own
+uv run nox -s tests                # the suite across Python 3.12-3.15
 ```
 
-After changing files, run treefmt to format them. IMPORTANT: invoke it as
-exactly `treefmt` with NO arguments and NO file paths — it discovers the changed
-files itself. Never pass it a filename (e.g. `treefmt path/to/file.py` is wrong).
+Work is finished when `just ci` passes: it runs treefmt, then the type check,
+the fast tests, and the config + schema checks. Invoke `treefmt` on its own —
+no arguments, no paths — and it formats and ruff-fixes the changed files
+itself.
 
 ## Comments and docstrings
 
@@ -34,6 +31,8 @@ files itself. Never pass it a filename (e.g. `treefmt path/to/file.py` is wrong)
    already shows. Don't restate the signature, narrate the implementation
    line-by-line, or repeat a rule that already lives at the call site or on the
    thing being called.
+ - Keep each docstring self-contained. Spell out what this function does rather
+   than pointing at a sibling ("same as above", "see `foo`").
  - Keep the non-obvious rationale: subtle invariants, race conditions, ordering
    constraints, and the reason behind a choice. Reference the relevant ADR by
    number (e.g. `ADR 0019`) instead of re-explaining it.
@@ -56,10 +55,10 @@ drift:
  - `CHANGELOG.md` is maintained by hand. Add user-facing changes under the top
    `## X.Y.Z - unreleased` section; mark breaking changes with `**Breaking:**`
    and link the relevant ADR.
- - Meaningful architectural decisions get a new numbered ADR in `docs/adr/`, and
-   CHANGELOG entries reference it where relevant.
 
 ## Architecture
 
-Architecture decision records live in `docs/adr/` (see `docs/adr/README.md` for
-the index).
+`docs/adr/` holds the architecture decision records, indexed in
+`docs/adr/README.md`. Read the relevant record before changing behaviour it
+covers. When a change settles a decision that outlives it, add a new numbered
+record and reference it from the CHANGELOG entry.
