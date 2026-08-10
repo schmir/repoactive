@@ -1348,6 +1348,11 @@ design.
 
 ## Requirements
 
+- A Unix-like operating system (Linux, macOS, BSD). `repoactive` uses POSIX
+  process groups to enforce [`timeout`](#limiting-job-runtime-with-timeout)
+  and `flock` for the
+  [per-repository run lock](#one-run-at-a-time-per-repository); Windows is
+  not supported.
 - Python 3.12 or later
 - [jj (Jujutsu)](https://github.com/jj-vcs/jj) - `repoactive` uses jj to
   manage branches and commits in the target repository
