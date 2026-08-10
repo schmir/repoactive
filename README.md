@@ -282,11 +282,14 @@ panel itself points out.
 repoactive --version
 ```
 
-Every command accepts `--repo`/`-r` and `--debug`/`-d`. The commands that
-read configuration - `run`, `validate-config`, `info jobs`, and
-`info tags` - also accept the same `--config`/`-c` and `--set`/`-s` options,
-described in the [`repoactive run`](#repoactive-run) table below.
-`recent-commits` works from the repository alone and reads no configuration.
+Every command that works against a repository accepts `--repo`/`-r` and
+`--debug`/`-d`. The commands that read configuration - `run`,
+`validate-config`, `info jobs`, and `info tags` - also accept the same
+`--config`/`-c` and `--set`/`-s` options, described in the
+[`repoactive run`](#repoactive-run) table below. `recent-commits` works from
+the repository alone and reads no configuration;
+[`dump-schema`](#repoactive-dump-schema) touches no repository at all and
+takes only `--output`.
 
 All commands exit with these status codes:
 
