@@ -132,7 +132,19 @@ needs a GitHub or GitLab API token in the environment. See
    repoactive run
    ```
 
-5. **Publish it.** Put the API token your platform uses in the environment
+5. **Look at what it produced.** The change lives on the job's branch, so
+   your own working copy still looks untouched:
+
+   ```bash
+   repoactive recent-commits              # every repoactive commit, newest first
+   jj diff -r repoactive/uv-lock-upgrade  # the diff the script produced
+   git show repoactive/uv-lock-upgrade    # the same, through colocated git
+   ```
+
+   The appendix has [jj revset aliases](#jj-revset-aliases) for querying
+   repoactive's commits directly.
+
+6. **Publish it.** Put the API token your platform uses in the environment
    (`GITHUB_TOKEN` for GitHub.com, `GITLAB_TOKEN` for GitLab.com by
    default), fetch the latest base branch, then let repoactive push the
    branch and open - or update - the merge request:
