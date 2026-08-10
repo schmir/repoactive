@@ -149,9 +149,9 @@ needs a GitHub or GitLab API token in the environment. See
 ## How it works
 
 You configure one or more **jobs**, each with a script (any shell command or
-executable) that modifies the repository's working tree. `repoactive` runs
-each script, captures the resulting diff, and records the change locally.
-With `--mode publish` it also:
+executable) that modifies the repository's files. `repoactive` runs each
+script, captures the resulting diff, and records the change locally. With
+`--mode publish` it also:
 
 - opens a new merge request if one does not already exist for that job, or
 - updates the existing merge request branch if the diff has changed.
@@ -160,8 +160,17 @@ Branches and MR descriptions are managed automatically - the only code you
 need to write is the script that produces the change.
 
 1. `repoactive` creates a new commit on top of the base branch or on top of
-   other repoactive managed branches.
-2. It runs the job's script against the working tree.
+   other repoactive managed branches, and checks that commit out into a
+   temporary jj workspace.
+2. It runs the job's script in that workspace, which is also the script's
+   working directory. **Your own working copy is never touched** - a run is
+   safe with uncommitted changes in your checkout, and the script sees a
+   clean tree at the base branch rather than whatever you have lying around.
+   The workspace is a full checkout, so paths relative to the repository
+   root resolve normally; [`RA_WORKSPACE_DIR`](#ra_workspace_dir) names it
+   for scripts that change directory, and
+   [`RA_CONFIG_SOURCE_DIR`](#ra_config_source_dir) reaches helper files kept
+   beside the config. The workspace is discarded when the job finishes.
 3. If the script produced a diff, it records the change. With `--mode push`
    or `--mode publish`, it pushes the branch; with `--mode publish`, it also
    creates or updates the merge request. On a re-run, if the diff matches
@@ -176,12 +185,12 @@ need to write is the script that produces the change.
    is now stale, so it is deleted; with `--mode push` or `--mode publish`,
    the deletion is pushed to the remote.
 
-> **jj commits the whole working tree.** Because `repoactive` uses jj, every
-> new file your script creates inside the working directory is added to the
-> commit unless it is git-ignored. There is no way to select which
-> working-tree changes become part of the commit - they all will. Keep
-> `.gitignore` up to date so build artifacts, caches, and other stray files
-> your script produces do not end up in the diff.
+> **jj commits the whole workspace.** Because `repoactive` uses jj, every
+> new file your script creates inside the workspace is added to the commit
+> unless it is git-ignored. There is no way to select which of the script's
+> changes become part of the commit - they all will. Keep `.gitignore` up to
+> date so build artifacts, caches, and other stray files your script
+> produces do not end up in the diff.
 
 ### What a run produces
 
@@ -226,10 +235,13 @@ Repoactive-Job: uv-lock-upgrade
 ### Keeping the local clone current
 
 `repoactive` works entirely from the **local** repository view and never
-fetches from the remote on its own. Rebasing onto `trunk()`, cooldown
-throttling, and the unmerged-branch refresh all read the local `trunk()` /
-base branches, so a merge that happened on the remote is invisible until the
-local clone advances past it.
+fetches from the remote on its own. Jobs target `trunk()` unless they set a
+`base_branch` - that is jj's built-in revset for the tip of the repository's
+main branch (`main@origin`, `master@origin`, and friends), as the local
+clone last saw it. Rebasing onto `trunk()`, cooldown throttling, and the
+unmerged-branch refresh all read the local `trunk()` / base branches, so a
+merge that happened on the remote is invisible until the local clone
+advances past it.
 
 **Fetch before each run.** Run `jj git fetch` (or `git fetch --prune`) in
 the same cron job or CI pipeline that invokes `repoactive`, before it. If
@@ -518,9 +530,10 @@ block.
   every MR title. Set to `""` to disable.
 - **`commit_title_prefix`** (default: `"[repoactive] "`) - Prefix prepended
   to every commit title. Set to `""` to disable.
-- **`base_branch`** (default: repo default) - Target branch for all jobs
-  that do not set their own. May also be a jj revset expression such as
-  `trunk()`, `root()`, or a user-defined revset alias.
+- **`base_branch`** (default: `trunk()`, the repository's main branch as the
+  local clone last saw it) - Target branch for all jobs that do not set
+  their own. May also be a jj revset expression such as `trunk()`, `root()`,
+  or a user-defined revset alias.
 
 **Run control:**
 
@@ -552,8 +565,9 @@ underscores.
 
 **Required:**
 
-- **`command`** - Shell command (or executable path) run in the repository
-  working directory. A non-zero exit is a failure.
+- **`command`** - Shell command (or executable path) run in the job's
+  temporary workspace, not in your checkout (see
+  [How it works](#how-it-works)). A non-zero exit is a failure.
 - **`title`** - MR title (also the commit subject, after
   `commit_title_prefix`).
 
@@ -576,9 +590,9 @@ underscores.
 
 **Branch and commit options:**
 
-- **`base_branch`** (default: inherited) - Target branch for this job's MR.
-  May also be a jj revset expression such as `trunk()`, `root()`, or a
-  user-defined revset alias.
+- **`base_branch`** (default: inherited, ultimately `trunk()`) - Target
+  branch for this job's MR. May also be a jj revset expression such as
+  `trunk()`, `root()`, or a user-defined revset alias.
 - **`branch_prefix`** (default: inherited) - Override the branch-name prefix
   for this job only.
 - **`mr_title_prefix`** (default: inherited) - Override the MR title prefix
@@ -758,9 +772,8 @@ title = "run the shared check script for this job"
 
 #### `RA_WORKSPACE_DIR`
 
-A job's command runs in a temporary jj workspace, which is also its working
-directory. `RA_WORKSPACE_DIR` names that directory explicitly, so a command
-that changes directory can still find its way back:
+`RA_WORKSPACE_DIR` names the job's [temporary workspace](#how-it-works)
+explicitly, so a command that changes directory can still find its way back:
 
 ```toml
 [job.build]
