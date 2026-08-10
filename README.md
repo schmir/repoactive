@@ -1311,10 +1311,10 @@ Key points:
   it emits.
 - **Inheritance with override.** Each emitted job inherits the generator's
   `tags`, `cooldown_period`, `base_branch`, `timeout`, `labels`,
-  `branch_prefix`/title prefixes, `draft` and `create_mr` unless its own
-  fragment sets them. It also defaults to `depends_on = ["<generator>"]`
-  (i.e. built flat on `trunk()`); override `depends_on` to a sibling emitted
-  job to stack them into an MR chain.
+  `branch_prefix`/title prefixes, `draft`, `create_mr` and `auto_merge`
+  unless its own fragment sets them. It also defaults to
+  `depends_on = ["<generator>"]` (i.e. built flat on `trunk()`); override
+  `depends_on` to a sibling emitted job to stack them into an MR chain.
 - **Stable names are your responsibility.** Cooldown, branches and the
   `Repoactive-Job` trailer all key on a job's `name`, so derive emitted
   names deterministically from repository state (`upgrade-pkg-a`, not a
