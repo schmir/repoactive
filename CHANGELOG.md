@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.4.0 - unreleased
+## 0.4.0 - 2026-08-13
 
 - Explicitly named jobs on the command line (`repoactive run <name>`) now
   run immediately ignoring the cooldown checks. Cooldown continues to
