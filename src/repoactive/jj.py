@@ -385,10 +385,6 @@ class JJ:
     def abandon(self) -> None:
         self._run("abandon", "@")
 
-    def abandon_revision(self, revision: str) -> None:
-        """Abandon a specific revision (not the working copy)."""
-        self._run("abandon", revision)
-
     def same_content(self, rev1: str, rev2: str) -> bool:
         """Return True if rev1 and rev2 have identical tree contents."""
         return not self._run("diff", "--git", "--from", rev1, "--to", rev2).strip()
@@ -415,10 +411,6 @@ class JJ:
         """Rebase revision and all its descendants onto onto without touching @."""
         onto_args = [arg for parent in onto for arg in ("--onto", parent)]
         self._run("rebase", "-s", revision, *onto_args)
-
-    def describe_revision(self, revision: str, message: str) -> None:
-        """Set the commit message of a specific revision without touching @."""
-        self._run("describe", "-r", revision, "--message", message)
 
     def get_description(self, revision: str) -> str:
         """Return the commit message of a specific revision."""

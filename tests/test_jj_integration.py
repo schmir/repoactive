@@ -609,6 +609,48 @@ class TestBookmarkTrack:
         repo.bookmark_track()  # must not raise
 
 
+class TestGitPushBookmarks:
+    def test_pushes_named_bookmark(self, repo_with_remote: tuple[JJ, Path]) -> None:
+        local, _ = repo_with_remote
+        local.describe("initial commit")
+        local.bookmark_set("feature")
+
+        local.git_push_bookmarks("feature")
+
+        assert local.remote_bookmark_commit_id("feature") == _commit_id(local, "feature")
+
+    def test_pushes_several_bookmarks_at_once(self, repo_with_remote: tuple[JJ, Path]) -> None:
+        local, _ = repo_with_remote
+        local.describe("first")
+        local.bookmark_set("feature-a")
+        local.new("@")
+        local.describe("second")
+        local.bookmark_set("feature-b")
+
+        local.git_push_bookmarks("feature-a", "feature-b")
+
+        assert local.remote_bookmark_commit_id("feature-a") is not None
+        assert local.remote_bookmark_commit_id("feature-b") is not None
+
+    def test_no_bookmarks_pushes_nothing(self, repo_with_remote: tuple[JJ, Path]) -> None:
+        # Without the empty-args guard this runs a bare `jj git push`, which
+        # picks up every tracked bookmark that moved: here the already-pushed
+        # `feature`, which the caller did not ask to push.
+        local, _ = repo_with_remote
+        local.describe("initial commit")
+        local.bookmark_set("feature")
+        local.git_push_bookmarks("feature")
+        pushed = _commit_id(local, "feature")
+
+        local.new("feature")
+        local.describe("more work")
+        local.bookmark_set("feature")
+
+        local.git_push_bookmarks()
+
+        assert local.remote_bookmark_commit_id("feature") == pushed
+
+
 class TestRemoteBookmarkCommitId:
     def test_returns_commit_id_of_pushed_bookmark(self, repo_with_remote: tuple[JJ, Path]) -> None:
         local, _ = repo_with_remote
@@ -867,6 +909,44 @@ class TestJobCommitsInRevset:
         repo.new("@")
         repo.describe("second\n\nRepoactive-Job: my-job")
         assert len(repo.job_commits_in_revset("::@", "my-job")) == 2  # noqa: PLR2004
+
+
+class TestJobNamesInRevset:
+    def test_returns_name_from_trailer(self, repo: JJ) -> None:
+        repo.describe("upgrade deps\n\nRepoactive-Job: my-job")
+        assert repo.job_names_in_revset("::@") == {"my-job"}
+
+    def test_splits_repeated_trailers_on_one_commit(self, repo: JJ) -> None:
+        # A generated job's commit carries its own name and its generator's as
+        # repeated trailers; both must come back (ADR 0004).
+        repo.describe("upgrade deps\n\nRepoactive-Job: deps-pkg-a\nRepoactive-Job: per-package")
+        assert repo.job_names_in_revset("::@") == {"deps-pkg-a", "per-package"}
+
+    def test_collects_names_across_commits(self, repo: JJ) -> None:
+        repo.describe("first\n\nRepoactive-Job: job-a")
+        repo.new("@")
+        repo.describe("second\n\nRepoactive-Job: job-b")
+        assert repo.job_names_in_revset("::@") == {"job-a", "job-b"}
+
+    def test_excludes_commit_without_trailer(self, repo: JJ) -> None:
+        repo.describe("upgrade deps")
+        assert repo.job_names_in_revset("::@") == set()
+
+    def test_restricts_to_the_given_revset(self, repo: JJ) -> None:
+        repo.describe("on main\n\nRepoactive-Job: job-a")
+        repo.bookmark_set("main")
+        # a sibling branch off the root, not descending from the job commit
+        repo.new("root()")
+        repo.describe("elsewhere\n\nRepoactive-Job: job-b")
+        repo.bookmark_set("other")
+
+        assert repo.job_names_in_revset("::main") == {"job-a"}
+        assert repo.job_names_in_revset("::other") == {"job-b"}
+        assert repo.job_names_in_revset("::(main | other)") == {"job-a", "job-b"}
+
+    def test_empty_for_empty_revset(self, repo: JJ) -> None:
+        repo.describe("upgrade deps\n\nRepoactive-Job: my-job")
+        assert repo.job_names_in_revset("none()") == set()
 
 
 class TestRevsetIsEmpty:
