@@ -551,9 +551,6 @@ def _init_jj_repo(path: Path) -> JJ:
         check=True,
         capture_output=True,
     )
-    (path / ".jj" / "repo" / "config.toml").write_text(
-        '[user]\nname = "Test User"\nemail = "test@test.com"\n'
-    )
     return JJ(path)
 
 

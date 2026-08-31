@@ -21,9 +21,6 @@ pytestmark = [pytest.mark.integration, pytest.mark.slow]
 def _init_repo(path: Path) -> JJ:
     path.mkdir(parents=True, exist_ok=True)
     subprocess.run(["jj", "git", "init", "--colocate", str(path)], check=True, capture_output=True)
-    (path / ".jj" / "repo" / "config.toml").write_text(
-        '[user]\nname = "Test User"\nemail = "test@test.com"\n'
-    )
     return JJ(path)
 
 

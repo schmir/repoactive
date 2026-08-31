@@ -30,9 +30,6 @@ def _init_repo(path: Path, *, colocate: bool = True) -> JJ:
         else ["jj", "--config=git.colocate=false", "git", "init", str(path)]
     )
     subprocess.run(args, check=True, capture_output=True)
-    (path / ".jj" / "repo" / "config.toml").write_text(
-        '[user]\nname = "Test User"\nemail = "test@test.com"\n'
-    )
     return JJ(path)
 
 
