@@ -3,7 +3,7 @@
 import json
 import logging
 import re
-from datetime import datetime
+import subprocess
 from importlib.metadata import version
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -13,12 +13,11 @@ from rich.logging import RichHandler
 from typer.testing import CliRunner
 
 from repoactive.cli import LOCK_HELD_EXIT_CODE, _setup_logging, app
-from repoactive.jj import CommandFailedError, JobCommit
+from repoactive.jj import JJ, CommandFailedError
 from repoactive.lock import RunLockHeldError
 from repoactive.platforms import PlatformTokenNotSetError
 from repoactive.platforms.base import PlatformError
 from repoactive.runner import RunMode, RunSummary
-from repoactive.selection import UnknownJobsError, UnknownTagsError
 
 runner = CliRunner()
 
@@ -314,27 +313,24 @@ class TestInfoTags:
 
 
 class TestRun:
+    @pytest.mark.slow
     def test_runs_jobs_and_succeeds(self, tmp_path: Path) -> None:
-        repo = _make_repo(tmp_path)
-        cfg = repo / "config.toml"
+        repo = _init_jj_repo(tmp_path)
+        cfg = repo.cwd / "config.toml"
         _write_job(cfg, "a")
-        with patch("repoactive.cli.run_all", return_value=RunSummary()) as run_all:
-            result = runner.invoke(app, ["run", "--repo", str(repo), "--config", str(cfg)])
-        assert result.exit_code == 0
-        kwargs = run_all.call_args.kwargs
-        assert kwargs["repo_path"] == repo
-        assert kwargs["mode"] is RunMode.local
-        assert kwargs["requested_names"] == frozenset()
-        assert kwargs["requested_tags"] == frozenset()
-        assert kwargs["platform"] is None
 
+        result = runner.invoke(app, ["run", "--repo", str(repo.cwd), "--config", str(cfg)])
+
+        assert result.exit_code == 0
+
+    @pytest.mark.slow
     def test_failed_summary_exits_nonzero(self, tmp_path: Path) -> None:
-        repo = _make_repo(tmp_path)
-        cfg = repo / "config.toml"
-        _write_job(cfg, "a")
-        summary = RunSummary(failed={"a": RuntimeError("boom")})
-        with patch("repoactive.cli.run_all", return_value=summary):
-            result = runner.invoke(app, ["run", "--repo", str(repo), "--config", str(cfg)])
+        repo = _init_jj_repo(tmp_path)
+        cfg = repo.cwd / "config.toml"
+        cfg.write_text('[job.a]\ncommand = "false"\ntitle = "a"\n')
+
+        result = runner.invoke(app, ["run", "--repo", str(repo.cwd), "--config", str(cfg)])
+
         assert result.exit_code == 1
 
     def test_lock_held_exits_with_distinct_code(self, tmp_path: Path) -> None:
@@ -347,26 +343,29 @@ class TestRun:
         assert result.exit_code == LOCK_HELD_EXIT_CODE
         assert "Error: another repoactive run is in progress" in result.output
 
+    @pytest.mark.slow
     def test_unknown_job_reports_error_without_traceback(self, tmp_path: Path) -> None:
-        repo = _make_repo(tmp_path)
-        cfg = repo / "config.toml"
+        repo = _init_jj_repo(tmp_path)
+        cfg = repo.cwd / "config.toml"
         _write_job(cfg, "a")
-        err = UnknownJobsError(frozenset({"nope"}))
-        with patch("repoactive.cli.run_all", side_effect=err):
-            result = runner.invoke(app, ["run", "--repo", str(repo), "--config", str(cfg), "nope"])
+
+        result = runner.invoke(app, ["run", "--repo", str(repo.cwd), "--config", str(cfg), "nope"])
+
         assert result.exit_code == 1
         assert "Error: unknown job(s): nope" in result.output
         assert "Traceback" not in result.output
 
+    @pytest.mark.slow
     def test_unknown_tag_reports_error_without_traceback(self, tmp_path: Path) -> None:
-        repo = _make_repo(tmp_path)
-        cfg = repo / "config.toml"
+        repo = _init_jj_repo(tmp_path)
+        cfg = repo.cwd / "config.toml"
         _write_job(cfg, "a")
-        err = UnknownTagsError(frozenset({"weekley"}))
-        with patch("repoactive.cli.run_all", side_effect=err):
-            result = runner.invoke(
-                app, ["run", "--repo", str(repo), "--config", str(cfg), "--tag", "weekley"]
-            )
+
+        result = runner.invoke(
+            app,
+            ["run", "--repo", str(repo.cwd), "--config", str(cfg), "--tag", "weekley"],
+        )
+
         assert result.exit_code == 1
         assert "Error: unknown tag(s): weekley" in result.output
         assert "Traceback" not in result.output
@@ -412,19 +411,36 @@ class TestRun:
         assert "Error: GitHub: cannot access repository" in result.output
         assert "Traceback" not in result.output
 
-    def test_passes_jobs_and_tags(self, tmp_path: Path) -> None:
-        repo = _make_repo(tmp_path)
-        cfg = repo / "config.toml"
-        _write_job(cfg, "a")
-        with patch("repoactive.cli.run_all", return_value=RunSummary()) as run_all:
-            result = runner.invoke(
-                app,
-                ["run", "--repo", str(repo), "--config", str(cfg), "--tag", "x", "a"],
-            )
+    @pytest.mark.slow
+    def test_selects_named_and_tagged_jobs(self, tmp_path: Path) -> None:
+        repo = _init_jj_repo(tmp_path)
+        cfg = repo.cwd / "config.toml"
+        cfg.write_text(
+            """
+[job.a]
+command = "touch selected-a"
+title = "a"
+
+[job.b]
+command = "touch selected-b"
+title = "b"
+tags = ["x"]
+
+[job.c]
+command = "touch unselected-c"
+title = "c"
+"""
+        )
+
+        result = runner.invoke(
+            app,
+            ["run", "--repo", str(repo.cwd), "--config", str(cfg), "--tag", "x", "a"],
+        )
+
         assert result.exit_code == 0
-        kwargs = run_all.call_args.kwargs
-        assert kwargs["requested_names"] == frozenset({"a"})
-        assert kwargs["requested_tags"] == frozenset({"x"})
+        assert repo.bookmark_exists("repoactive/a")
+        assert repo.bookmark_exists("repoactive/b")
+        assert not repo.bookmark_exists("repoactive/c")
 
     def test_publish_mode_resolves_platform(self, tmp_path: Path) -> None:
         repo = _make_repo(tmp_path)
@@ -444,51 +460,42 @@ class TestRun:
         assert run_all.call_args.kwargs["platform"] is platform
         assert run_all.call_args.kwargs["mode"] is RunMode.publish
 
-    def test_non_publish_mode_skips_platform(self, tmp_path: Path) -> None:
-        repo = _make_repo(tmp_path)
-        cfg = repo / "config.toml"
+    @pytest.mark.slow
+    def test_push_mode_does_not_require_platform(self, tmp_path: Path) -> None:
+        repo = _init_jj_repo(tmp_path)
+        cfg = repo.cwd / "config.toml"
         _write_job(cfg, "a")
-        with (
-            patch("repoactive.cli.run_all", return_value=RunSummary()),
-            patch("repoactive.cli.get_platform") as get_platform,
-        ):
-            result = runner.invoke(
-                app,
-                ["run", "--repo", str(repo), "--config", str(cfg), "--mode", "push"],
-            )
+
+        result = runner.invoke(
+            app,
+            ["run", "--repo", str(repo.cwd), "--config", str(cfg), "--mode", "push"],
+        )
+
         assert result.exit_code == 0
-        get_platform.assert_not_called()
 
     def test_non_colocated_repo_exits_nonzero(self, tmp_path: Path) -> None:
         result = runner.invoke(app, ["run", "--repo", str(tmp_path)])
         assert result.exit_code == 1
 
+    @pytest.mark.slow
     def test_plain_git_repo_is_colocated_in_place(self, tmp_path: Path) -> None:
         repo = tmp_path
-        (repo / ".git").mkdir()
+        subprocess.run(["git", "init", str(repo)], check=True, capture_output=True)
         cfg = repo / "config.toml"
         _write_job(cfg, "a")
-        jj = MagicMock()
 
-        def fake_init() -> None:
-            (repo / ".jj").mkdir()
+        # The hint is a rich panel whose prose wraps to the console width
+        # (rich reads COLUMNS); pin it wide so the asserted phrase is not
+        # split across lines when the test runs in a narrow terminal. Force
+        # the panel on in case the surrounding environment turned it off.
+        result = runner.invoke(
+            app,
+            ["run", "--repo", str(repo), "--config", str(cfg)],
+            env={"COLUMNS": "200", "REPOACTIVE_UI": "interactive"},
+        )
 
-        jj.git_init_colocate.side_effect = fake_init
-        with (
-            patch("repoactive.cli.JJ", return_value=jj),
-            patch("repoactive.cli.run_all", return_value=RunSummary()),
-        ):
-            # The hint is a rich panel whose prose wraps to the console width
-            # (rich reads COLUMNS); pin it wide so the asserted phrase is not
-            # split across lines when the test runs in a narrow terminal. Force
-            # the panel on in case the surrounding environment turned it off.
-            result = runner.invoke(
-                app,
-                ["run", "--repo", str(repo), "--config", str(cfg)],
-                env={"COLUMNS": "200", "REPOACTIVE_UI": "interactive"},
-            )
         assert result.exit_code == 0
-        jj.git_init_colocate.assert_called_once()
+        assert (repo / ".jj").is_dir()
         assert "jj git init --colocate" in result.output
         assert "To undo" in result.output
 
@@ -509,12 +516,12 @@ class TestRun:
 
     def test_plain_git_repo_without_config_is_not_colocated(self, tmp_path: Path) -> None:
         repo = tmp_path
-        (repo / ".git").mkdir()
-        jj = MagicMock()
-        with patch("repoactive.cli.JJ", return_value=jj):
-            result = runner.invoke(app, ["run", "--repo", str(repo)])
+        subprocess.run(["git", "init", str(repo)], check=True, capture_output=True)
+
+        result = runner.invoke(app, ["run", "--repo", str(repo)])
+
         assert result.exit_code == 1
-        jj.git_init_colocate.assert_not_called()
+        assert not (repo / ".jj").exists()
 
     def test_missing_config_exits_nonzero(self, tmp_path: Path) -> None:
         repo = _make_repo(tmp_path)
@@ -523,8 +530,7 @@ class TestRun:
 
     def test_missing_jj_points_to_install_docs(self, tmp_path: Path) -> None:
         repo = _make_repo(tmp_path)
-        with patch("repoactive.jj.shutil.which", return_value=None):
-            result = runner.invoke(app, ["run", "--repo", str(repo)])
+        result = runner.invoke(app, ["run", "--repo", str(repo)], env={"PATH": ""})
         assert result.exit_code == 1
         assert "docs.jj-vcs.dev" in result.output
 
@@ -539,14 +545,40 @@ class TestDumpSchema:
         assert schema["title"] == "Config"
 
 
-def _commit(name: str, age: str = "1 day ago") -> JobCommit:
-    return JobCommit(
-        commit_id=f"abc{name}",
-        change_id=f"chg{name}",
-        job_names={name},
-        subject=f"subject {name}",
-        relative_age=age,
+def _init_jj_repo(path: Path) -> JJ:
+    subprocess.run(
+        ["jj", "git", "init", "--colocate", str(path)],
+        check=True,
+        capture_output=True,
     )
+    (path / ".jj" / "repo" / "config.toml").write_text(
+        '[user]\nname = "Test User"\nemail = "test@test.com"\n'
+    )
+    return JJ(path)
+
+
+def _add_job_commit(repo: JJ, name: str) -> None:
+    repo.describe(f"subject {name}\n\nRepoactive-Job: {name}")
+
+
+def _repo_with_merged_and_unmerged_jobs(tmp_path: Path) -> Path:
+    remote = tmp_path / "remote.git"
+    subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True)
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    repo = _init_jj_repo(repo_path)
+    subprocess.run(
+        ["jj", "git", "remote", "add", "origin", str(remote)],
+        cwd=repo.cwd,
+        check=True,
+        capture_output=True,
+    )
+    _add_job_commit(repo, "alpha")
+    repo.bookmark_set("main")
+    repo.git_push_bookmarks("main")
+    repo.new("main")
+    _add_job_commit(repo, "beta")
+    return repo_path
 
 
 class TestRecentCommits:
@@ -560,6 +592,9 @@ class TestRecentCommits:
         assert result.exit_code == 1
 
     def test_jj_failure_reports_error_without_traceback(self, tmp_path: Path) -> None:
+        # recent-commits has its own JJError handler, separate from run's. jj
+        # resolves an unusable trunk() to root() rather than failing, so the
+        # failure is injected instead of produced from repository state.
         repo = _make_repo(tmp_path)
         jj = MagicMock()
         jj.recent_job_commits.side_effect = CommandFailedError("jj", ("log",), "no trunk()")
@@ -569,65 +604,52 @@ class TestRecentCommits:
         assert "Error: jj log failed" in result.output
         assert "Traceback" not in result.output
 
+    @pytest.mark.slow
     def test_no_commits_reports_message(self, tmp_path: Path) -> None:
-        repo = _make_repo(tmp_path)
-        jj = MagicMock()
-        jj.recent_job_commits.return_value = []
-        with patch("repoactive.cli.JJ", return_value=jj):
-            result = runner.invoke(app, ["recent-commits", "--repo", str(repo)])
+        repo = _init_jj_repo(tmp_path)
+        result = runner.invoke(app, ["recent-commits", "--repo", str(repo.cwd)])
         assert result.exit_code == 0
         assert "No matching commits found." in result.stdout
 
+    @pytest.mark.slow
     def test_lists_commits(self, tmp_path: Path) -> None:
-        repo = _make_repo(tmp_path)
-        jj = MagicMock()
-        jj.recent_job_commits.return_value = [_commit("alpha"), _commit("beta")]
-        with patch("repoactive.cli.JJ", return_value=jj):
-            result = runner.invoke(app, ["recent-commits", "--repo", str(repo)])
+        repo = _repo_with_merged_and_unmerged_jobs(tmp_path)
+        result = runner.invoke(app, ["recent-commits", "--repo", str(repo)])
         assert result.exit_code == 0
         assert "alpha" in result.stdout
         assert "beta" in result.stdout
         assert "subject alpha" in result.stdout
 
+    @pytest.mark.slow
     def test_filters_by_job_name(self, tmp_path: Path) -> None:
-        repo = _make_repo(tmp_path)
-        jj = MagicMock()
-        jj.recent_job_commits.return_value = [_commit("alpha"), _commit("beta")]
-        with patch("repoactive.cli.JJ", return_value=jj):
-            result = runner.invoke(app, ["recent-commits", "--repo", str(repo), "alpha"])
+        repo = _repo_with_merged_and_unmerged_jobs(tmp_path)
+        result = runner.invoke(app, ["recent-commits", "--repo", str(repo), "alpha"])
         assert result.exit_code == 0
         assert "subject alpha" in result.stdout
         assert "subject beta" not in result.stdout
 
-    def test_status_merged_uses_trunk_revset(self, tmp_path: Path) -> None:
-        repo = _make_repo(tmp_path)
-        jj = MagicMock()
-        jj.recent_job_commits.return_value = [_commit("alpha")]
-        with patch("repoactive.cli.JJ", return_value=jj):
-            result = runner.invoke(
-                app, ["recent-commits", "--repo", str(repo), "--status", "merged"]
-            )
+    @pytest.mark.slow
+    def test_status_merged_lists_only_merged_commits(self, tmp_path: Path) -> None:
+        repo = _repo_with_merged_and_unmerged_jobs(tmp_path)
+        result = runner.invoke(app, ["recent-commits", "--repo", str(repo), "--status", "merged"])
         assert result.exit_code == 0
-        assert jj.recent_job_commits.call_args.kwargs["revset"] == "::trunk()"
+        assert "subject alpha" in result.stdout
+        assert "subject beta" not in result.stdout
 
-    def test_status_unmerged_uses_negated_trunk_revset(self, tmp_path: Path) -> None:
-        repo = _make_repo(tmp_path)
-        jj = MagicMock()
-        jj.recent_job_commits.return_value = [_commit("alpha")]
-        with patch("repoactive.cli.JJ", return_value=jj):
-            result = runner.invoke(
-                app, ["recent-commits", "--repo", str(repo), "--status", "unmerged"]
-            )
+    @pytest.mark.slow
+    def test_status_unmerged_lists_only_unmerged_commits(self, tmp_path: Path) -> None:
+        repo = _repo_with_merged_and_unmerged_jobs(tmp_path)
+        result = runner.invoke(
+            app, ["recent-commits", "--repo", str(repo), "--status", "unmerged"]
+        )
         assert result.exit_code == 0
-        assert jj.recent_job_commits.call_args.kwargs["revset"] == "~(::trunk())"
+        assert "subject alpha" not in result.stdout
+        assert "subject beta" in result.stdout
 
-    def test_status_all_uses_all_revset_and_passes_cutoff(self, tmp_path: Path) -> None:
-        repo = _make_repo(tmp_path)
-        jj = MagicMock()
-        jj.recent_job_commits.return_value = [_commit("alpha")]
-        with patch("repoactive.cli.JJ", return_value=jj):
-            result = runner.invoke(app, ["recent-commits", "--repo", str(repo)])
+    @pytest.mark.slow
+    def test_status_all_lists_merged_and_unmerged_commits(self, tmp_path: Path) -> None:
+        repo = _repo_with_merged_and_unmerged_jobs(tmp_path)
+        result = runner.invoke(app, ["recent-commits", "--repo", str(repo)])
         assert result.exit_code == 0
-        args, kwargs = jj.recent_job_commits.call_args
-        assert kwargs["revset"] == "all()"
-        assert isinstance(args[0], datetime)
+        assert "subject alpha" in result.stdout
+        assert "subject beta" in result.stdout
