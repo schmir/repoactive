@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.1 - unreleased
+
+- `run`, `validate-config`, `info jobs`, and `info tags` now accept
+  `--config-revset REVSET` to read configuration from its merged tree.
+  Conflicts are reported and allowed unless they prevent configuration from
+  parsing. See [ADR 0021](docs/adr/0021-read-config-from-a-revset.md) and
+  [Reading configuration from a revset](README.md#reading-configuration-from-a-revset).
+
 ## 0.4.0 - 2026-08-13
 
 - Explicitly named jobs on the command line (`repoactive run <name>`) now

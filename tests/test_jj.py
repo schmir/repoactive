@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from repoactive.jj import (
+    CONFIG_WORKSPACE_PREFIX,
     WORKSPACE_PREFIX,
     CommandFailedError,
     JJNotFoundError,
@@ -17,6 +18,7 @@ from repoactive.jj import (
     NotAJJRepoError,
     NotColocatedGitRepoError,
     _jj_timestamp,
+    config_workspace_name,
     require_colocated_repo,
     require_jj_on_path,
     workspace_name,
@@ -38,6 +40,18 @@ class TestCommandFailedError:
 class TestWorkspaceName:
     def test_prefixes_job_name(self) -> None:
         assert workspace_name("foo") == f"{WORKSPACE_PREFIX}foo"
+
+    def test_config_workspace_name_is_prefixed_and_fresh(self) -> None:
+        name = config_workspace_name()
+        assert name.startswith(CONFIG_WORKSPACE_PREFIX)
+        # Concurrent commands must use different names.
+        assert name != config_workspace_name()
+
+    def test_config_workspace_name_is_outside_the_job_prefix(self) -> None:
+        # A config workspace is created without the run lock, so a run's stale
+        # sweep must not be able to match it (ADR 0021).
+        assert not config_workspace_name().startswith(WORKSPACE_PREFIX)
+        assert not CONFIG_WORKSPACE_PREFIX.startswith(WORKSPACE_PREFIX)
 
 
 class TestRequireJJOnPath:

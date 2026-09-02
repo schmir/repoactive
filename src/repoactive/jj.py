@@ -3,16 +3,19 @@
 import contextlib
 import enum
 import logging
+import re
 import shutil
 import subprocess
 import tempfile
 import time
+import uuid
 from collections.abc import Callable, Collection, Generator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
 from repoactive.constants import JOB_TRAILER_KEY
+from repoactive.lock import config_workspace_is_free, config_workspace_lock
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +29,9 @@ class Colocation(enum.Enum):
 # configurable so that stale workspaces (left behind by a killed run) can always
 # be recognised and reclaimed by name (see JJ.forget_stale_workspaces).
 WORKSPACE_PREFIX = "repoactive-tmp-"
+
+# Prefix for temporary configuration workspaces. See ADR 0021.
+CONFIG_WORKSPACE_PREFIX = "repoactive-config-"
 
 # The all-zeros commit_id jj reports for the virtual root commit, which has no
 # git counterpart.
@@ -46,6 +52,14 @@ def _jj_timestamp(dt: datetime) -> str:
 def workspace_name(job_name: str) -> str:
     """Workspace name repoactive uses for a job's temporary workspace."""
     return f"{WORKSPACE_PREFIX}{job_name}"
+
+
+def config_workspace_name() -> str:
+    """Build a unique name for a configuration workspace.
+
+    The random suffix prevents name conflicts between concurrent commands.
+    """
+    return f"{CONFIG_WORKSPACE_PREFIX}{uuid.uuid4().hex}"
 
 
 def revset_heads(revs: list[str]) -> str:
@@ -497,6 +511,15 @@ class JJ:
         output = self._run("log", "--no-graph", "-r", revset, "-T", 'commit_id ++ "\\n"')
         return [line for line in output.splitlines() if line]
 
+    def conflicted_paths(self, revision: str = "@") -> list[str]:
+        """Return conflicted paths in revision.
+
+        Call this only when has_conflict is true because jj reports an empty
+        list as an error.
+        """
+        output = self._run("resolve", "--list", "--revision", revision)
+        return [re.split(r"\s{2,}", line, maxsplit=1)[0] for line in output.splitlines() if line]
+
     def has_conflict(self, revset: str) -> bool:
         """Return True if any commit in revset contains a materialized conflict.
 
@@ -639,7 +662,8 @@ class JJ:
         A run killed before its `finally` could call workspace_forget leaves its
         temporary workspace (named with WORKSPACE_PREFIX) registered in jj. Because
         the prefix is fixed, every such workspace can be recognised and dropped here,
-        even for jobs that have since been renamed or removed.
+        even for jobs that have since been renamed or removed. Only the run lock
+        makes that safe, so config workspaces stay out of scope by prefix.
         """
         stale = sorted(n for n in self.workspace_names() if n.startswith(WORKSPACE_PREFIX))
         logger.debug("stale workspaces to forget: %s", stale)
@@ -681,6 +705,42 @@ class JJ:
 
     def workspace_forget(self, name: str) -> None:
         self._run("workspace", "forget", name)
+
+    @contextlib.contextmanager
+    def revset_workspace(self, revset: str) -> Generator["JJ"]:
+        """Yield a temporary workspace containing the merged tree of revset.
+
+        Conflicts remain materialised for caller inspection as required by ADR
+        0021.
+        """
+        self.forget_stale_config_workspaces()
+        name = config_workspace_name()
+        # The lock is taken before the workspace is registered, so a command
+        # reclaiming abandoned workspaces never sees this one unlocked.
+        with (
+            config_workspace_lock(self.cwd, name),
+            self.temp_workspace(name, Colocation.PLAIN) as workspace,
+        ):
+            workspace.new(revset)
+            yield workspace
+
+    def forget_stale_config_workspaces(self) -> None:
+        """Forget configuration workspaces that have no held advisory lock.
+
+        The advisory lock identifies workspaces that live commands use. See
+        ADR 0021.
+        """
+        abandoned = sorted(
+            name
+            for name in self.workspace_names()
+            if name.startswith(CONFIG_WORKSPACE_PREFIX)
+            and config_workspace_is_free(self.cwd, name)
+        )
+        logger.debug("abandoned config workspaces to forget: %s", abandoned)
+        for name in abandoned:
+            # Another command may be reclaiming the same workspace right now.
+            with contextlib.suppress(JJError):
+                self.workspace_forget(name)
 
     @contextlib.contextmanager
     def temp_workspace(

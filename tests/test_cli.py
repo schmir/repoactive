@@ -22,8 +22,12 @@ from repoactive.runner import RunMode, RunSummary
 runner = CliRunner()
 
 
+def _job_toml(name: str) -> str:
+    return f'[job.{name}]\ncommand = "echo"\ntitle = "{name}"\n'
+
+
 def _write_job(path: Path, name: str) -> None:
-    path.write_text(f'[job.{name}]\ncommand = "echo"\ntitle = "{name}"\n')
+    path.write_text(_job_toml(name))
 
 
 def _make_repo(tmp_path: Path) -> Path:
@@ -650,3 +654,199 @@ class TestRecentCommits:
         assert result.exit_code == 0
         assert "subject alpha" in result.stdout
         assert "subject beta" in result.stdout
+
+
+def _commit_config(repo: JJ, name: str, files: dict[str, str], parent: str = "root()") -> None:
+    """Commit files on a fresh child of parent and point bookmark name at it."""
+    repo.new(parent)
+    for relative, text in files.items():
+        path = repo.cwd / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    repo.describe(name)
+    repo.bookmark_set(name)
+
+
+def _git(cwd: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", *args], cwd=cwd, capture_output=True, text=True, check=True
+    ).stdout
+
+
+def _file_at(repo: JJ, revision: str, path: str) -> str:
+    return subprocess.run(
+        ["jj", "--no-pager", "file", "show", "-r", revision, path],
+        cwd=repo.cwd,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+
+
+_CONFIG_REVSET_COMMANDS = (
+    ["run"],
+    ["validate-config"],
+    ["info", "jobs"],
+    ["info", "tags"],
+)
+
+
+class TestConfigRevsetOption:
+    def test_config_reading_commands_expose_it(self) -> None:
+        for command in _CONFIG_REVSET_COMMANDS:
+            result = runner.invoke(app, [*command, "--help"], env={"COLUMNS": "200"})
+            assert result.exit_code == 0
+            assert "--config-revset" in _plain(result.output), command
+
+    def test_commands_without_config_do_not_expose_it(self) -> None:
+        for command in (["recent-commits"], ["dump-schema"]):
+            result = runner.invoke(app, [*command, "--help"], env={"COLUMNS": "200"})
+            assert result.exit_code == 0
+            assert "--config-revset" not in _plain(result.output), command
+
+    def test_rejects_combination_with_config(self, tmp_path: Path) -> None:
+        # Rejected before anything touches the repository, so no jj is needed.
+        cfg = tmp_path / "config.toml"
+        _write_job(cfg, "a")
+        for command in _CONFIG_REVSET_COMMANDS:
+            result = runner.invoke(
+                app,
+                [*command, "--repo", str(tmp_path), "--config-revset", "main", "-c", str(cfg)],
+            )
+            assert result.exit_code == 1, command
+            assert "--config-revset cannot be combined with --config" in result.output, command
+
+    def test_rejects_a_directory_that_is_neither_git_nor_jj(self, tmp_path: Path) -> None:
+        result = runner.invoke(
+            app, ["info", "jobs", "--repo", str(tmp_path), "--config-revset", "main"]
+        )
+        assert result.exit_code == 1
+        assert "not a jj repository" in result.output
+        assert not (tmp_path / ".jj").exists()
+
+
+@pytest.mark.slow
+class TestConfigRevset:
+    def test_reads_config_from_the_revset_not_the_working_copy(self, tmp_path: Path) -> None:
+        repo = _init_jj_repo(tmp_path / "repo")
+        _commit_config(repo, "main", {".repoactive.toml": _job_toml("committed")})
+        repo.new("root()")
+        (repo.cwd / ".repoactive.toml").write_text(_job_toml("working-copy"))
+
+        result = runner.invoke(
+            app, ["info", "jobs", "--repo", str(repo.cwd), "--config-revset", "main"]
+        )
+        assert result.exit_code == 0
+        assert "committed" in result.stdout
+        assert "working-copy" not in result.stdout
+        assert repo.workspace_names() == {"default"}
+
+    def test_merges_the_trees_of_a_multi_revision_revset(self, tmp_path: Path) -> None:
+        repo = _init_jj_repo(tmp_path / "repo")
+        _commit_config(repo, "base", {".repoactive.toml": _job_toml("shared")})
+        _commit_config(repo, "left", {".repoactive.d/a.toml": _job_toml("only-left")}, "base")
+        _commit_config(repo, "right", {".repoactive.d/b.toml": _job_toml("only-right")}, "base")
+
+        result = runner.invoke(
+            app, ["info", "jobs", "--repo", str(repo.cwd), "--config-revset", "left | right"]
+        )
+        assert result.exit_code == 0
+        assert "shared" in result.stdout
+        assert "only-left" in result.stdout
+        assert "only-right" in result.stdout
+
+    def test_conflicting_merge_warns_and_carries_on(self, tmp_path: Path) -> None:
+        # A conflict outside the configuration does not stop the command. The
+        # warning identifies the conflicted file.
+        repo = _init_jj_repo(tmp_path / "repo")
+        _commit_config(repo, "base", {".repoactive.toml": _job_toml("a"), "notes.txt": "base\n"})
+        _commit_config(repo, "left", {"notes.txt": "left\n"}, "base")
+        _commit_config(repo, "right", {"notes.txt": "right\n"}, "base")
+
+        result = runner.invoke(
+            app, ["info", "jobs", "--repo", str(repo.cwd), "--config-revset", "left | right"]
+        )
+        assert result.exit_code == 0, result.output
+        assert "produced file conflicts" in result.output
+        assert "notes.txt" in result.output
+        assert "a" in result.stdout
+        assert repo.workspace_names() == {"default"}
+
+    def test_conflicting_config_file_warns_before_failing_to_parse(self, tmp_path: Path) -> None:
+        repo = _init_jj_repo(tmp_path / "repo")
+        _commit_config(repo, "base", {".repoactive.toml": _job_toml("a")})
+        _commit_config(repo, "left", {".repoactive.toml": _job_toml("left-only")}, "base")
+        _commit_config(repo, "right", {".repoactive.toml": _job_toml("right-only")}, "base")
+
+        result = runner.invoke(
+            app, ["info", "jobs", "--repo", str(repo.cwd), "--config-revset", "left | right"]
+        )
+        assert ".repoactive.toml" in result.output
+        assert "file conflicts" in result.output
+        # Conflict markers make the configuration file invalid.
+        assert result.exit_code == 1
+        assert "invalid config" in result.output
+        assert repo.workspace_names() == {"default"}
+
+    def test_unknown_revset_reports_a_clean_error(self, tmp_path: Path) -> None:
+        repo = _init_jj_repo(tmp_path / "repo")
+        _commit_config(repo, "main", {".repoactive.toml": _job_toml("a")})
+
+        result = runner.invoke(
+            app, ["info", "jobs", "--repo", str(repo.cwd), "--config-revset", "no-such-bookmark"]
+        )
+        assert result.exit_code == 1
+        assert "Traceback" not in result.output
+        assert repo.workspace_names() == {"default"}
+
+    def test_colocates_a_plain_git_repository(self, tmp_path: Path) -> None:
+        # The option converts a plain git repository before it creates a workspace.
+        repo_path = tmp_path / "repo"
+        repo_path.mkdir()
+        subprocess.run(["git", "init", str(repo_path)], check=True, capture_output=True)
+        (repo_path / ".repoactive.toml").write_text(_job_toml("committed"))
+        _git(repo_path, "add", "-A")
+        _git(repo_path, "-c", "user.name=T", "-c", "user.email=t@t.com", "commit", "-m", "initial")
+
+        result = runner.invoke(
+            app, ["info", "jobs", "--repo", str(repo_path), "--config-revset", "@-"]
+        )
+        assert result.exit_code == 0, result.output
+        assert "committed" in result.stdout
+        assert (repo_path / ".jj").is_dir()
+        assert JJ(repo_path).workspace_names() == {"default"}
+
+    def test_validate_config_names_the_revset(self, tmp_path: Path) -> None:
+        repo = _init_jj_repo(tmp_path / "repo")
+        _commit_config(repo, "main", {".repoactive.toml": _job_toml("a")})
+
+        result = runner.invoke(
+            app, ["validate-config", "--repo", str(repo.cwd), "--config-revset", "main"]
+        )
+        assert result.exit_code == 0
+        assert "Configuration files from revset 'main':" in result.stdout
+        assert "Config OK: 1 job(s) defined." in result.stdout
+
+    def test_run_keeps_the_config_workspace_alive_for_the_jobs(self, tmp_path: Path) -> None:
+        # RA_CONFIG_SOURCE_DIR points into the temporary workspace, so the job
+        # can only reach its script if that workspace outlives config loading.
+        repo = _init_jj_repo(tmp_path / "repo")
+        _commit_config(
+            repo,
+            "main",
+            {
+                ".repoactive.toml": (
+                    "[job.uses-script]\n"
+                    'command = "sh $RA_CONFIG_SOURCE_DIR/gen.sh"\n'
+                    'title = "run the script beside the config"\n'
+                ),
+                "gen.sh": "echo generated > output.txt\n",
+            },
+        )
+        repo.new("root()")
+
+        result = runner.invoke(app, ["run", "--repo", str(repo.cwd), "--config-revset", "main"])
+        assert result.exit_code == 0, result.output
+        assert repo.bookmark_exists("repoactive/uses-script")
+        assert _file_at(repo, "repoactive/uses-script", "output.txt") == "generated\n"
+        assert repo.workspace_names() == {"default"}

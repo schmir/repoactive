@@ -16,8 +16,10 @@ from repoactive.jj import (
     NotAJJRepoError,
     NotColocatedGitRepoError,
     RemoteNotFoundError,
+    config_workspace_name,
     require_colocated_repo,
 )
+from repoactive.lock import config_workspace_lock
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
 
@@ -1210,6 +1212,81 @@ class TestTempWorkspace:
         assert not created[0].exists()
 
 
+class TestRevsetWorkspace:
+    @staticmethod
+    def _commit(repo: JJ, bookmark: str, filename: str, parent: str = "root()") -> None:
+        repo.new(parent)
+        (repo.cwd / filename).write_text(filename)
+        repo.describe(bookmark)
+        repo.bookmark_set(bookmark)
+
+    def test_materialises_a_single_revision(self, repo: JJ) -> None:
+        self._commit(repo, "main", "a.txt")
+        repo.new("root()")
+
+        with repo.revset_workspace("main") as ws:
+            assert (ws.cwd / "a.txt").read_text() == "a.txt"
+            ws_path = ws.cwd
+
+        assert not ws_path.exists()
+        assert repo.workspace_names() == {"default"}
+
+    def test_merges_the_trees_of_several_revisions(self, repo: JJ) -> None:
+        self._commit(repo, "base", "base.txt")
+        self._commit(repo, "left", "left.txt", "base")
+        self._commit(repo, "right", "right.txt", "base")
+
+        with repo.revset_workspace("left | right") as ws:
+            assert sorted(p.name for p in ws.cwd.glob("*.txt")) == [
+                "base.txt",
+                "left.txt",
+                "right.txt",
+            ]
+
+    def test_materialises_a_conflicting_merge(self, repo: JJ) -> None:
+        # A conflict is not an error here: the caller reads the tree anyway and
+        # only warns about the files carrying markers.
+        repo.new("root()")
+        (repo.cwd / "a.txt").write_text("base\n")
+        (repo.cwd / "kept.txt").write_text("kept\n")
+        repo.describe("base")
+        repo.bookmark_set("base")
+        for name, text in (("left", "left\n"), ("right", "right\n")):
+            repo.new("base")
+            (repo.cwd / "a.txt").write_text(text)
+            repo.describe(name)
+            repo.bookmark_set(name)
+
+        with repo.revset_workspace("left | right") as ws:
+            assert ws.has_conflict("@")
+            assert ws.conflicted_paths() == ["a.txt"]
+            assert "<<<<<<<" in (ws.cwd / "a.txt").read_text()
+            assert (ws.cwd / "kept.txt").read_text() == "kept\n"
+
+        assert repo.workspace_names() == {"default"}
+
+    def test_reclaims_an_abandoned_workspace_and_leaves_no_lock(
+        self, repo: JJ, tmp_path: Path
+    ) -> None:
+        self._commit(repo, "main", "a.txt")
+        abandoned = config_workspace_name()
+        repo._workspace_add(abandoned, tmp_path / "abandoned")
+
+        with repo.revset_workspace("main"):
+            assert abandoned not in repo.workspace_names()
+
+        assert repo.workspace_names() == {"default"}
+        assert list((repo.cwd / ".jj").glob("repoactive-config-*.lock")) == []
+
+    def test_unresolvable_revset_raises_and_cleans_up(self, repo: JJ) -> None:
+        self._commit(repo, "main", "a.txt")
+
+        with pytest.raises(CommandFailedError), repo.revset_workspace("no-such-bookmark"):
+            pass
+
+        assert repo.workspace_names() == {"default"}
+
+
 class TestWorkspaceColocation:
     @staticmethod
     def _commit(repo: JJ, filename: str, message: str) -> None:
@@ -1301,3 +1378,53 @@ class TestWorkspaceColocation:
         worktrees = _git(repo.cwd, "worktree", "list", "--porcelain")
         assert f"worktree {tmp_path / 'stale'}" not in worktrees
         assert f"worktree {tmp_path / 'mine'}" in worktrees
+
+    def test_forget_stale_config_workspaces_reclaims_an_abandoned_one(
+        self, repo: JJ, tmp_path: Path
+    ) -> None:
+        # A command killed before its cleanup leaves the workspace registered
+        # with no lock file, which is what marks it reclaimable.
+        self._commit(repo, "a.txt", "initial")
+        abandoned = config_workspace_name()
+        repo._workspace_add(abandoned, tmp_path / "abandoned")
+
+        repo.forget_stale_config_workspaces()
+
+        assert repo.workspace_names() == {"default"}
+
+    def test_forget_stale_config_workspaces_spares_a_held_one(
+        self, repo: JJ, tmp_path: Path
+    ) -> None:
+        self._commit(repo, "a.txt", "initial")
+        live = config_workspace_name()
+        repo._workspace_add(live, tmp_path / "live")
+
+        with config_workspace_lock(repo.cwd, live):
+            repo.forget_stale_config_workspaces()
+            assert sorted(repo.workspace_names()) == ["default", live]
+
+    def test_forget_stale_config_workspaces_leaves_job_workspaces(
+        self, repo: JJ, tmp_path: Path
+    ) -> None:
+        # This operation must not remove job workspaces.
+        self._commit(repo, "a.txt", "initial")
+        job = f"{WORKSPACE_PREFIX}job"
+        repo._workspace_add(job, tmp_path / "job")
+
+        repo.forget_stale_config_workspaces()
+
+        assert sorted(repo.workspace_names()) == ["default", job]
+
+    def test_forget_stale_workspaces_spares_config_workspaces(
+        self, repo: JJ, tmp_path: Path
+    ) -> None:
+        # A config workspace belongs to a command that holds no run lock, so a
+        # concurrent run must not forget it (ADR 0021).
+        self._commit(repo, "a.txt", "initial")
+        config = config_workspace_name()
+        repo._workspace_add(f"{WORKSPACE_PREFIX}job", tmp_path / "job")
+        repo._workspace_add(config, tmp_path / "config")
+
+        repo.forget_stale_workspaces()
+
+        assert sorted(repo.workspace_names()) == ["default", config]

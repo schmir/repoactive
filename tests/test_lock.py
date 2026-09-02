@@ -8,7 +8,13 @@ from pathlib import Path
 
 import pytest
 
-from repoactive.lock import LOCK_FILENAME, RunLockHeldError, run_lock
+from repoactive.lock import (
+    LOCK_FILENAME,
+    RunLockHeldError,
+    config_workspace_is_free,
+    config_workspace_lock,
+    run_lock,
+)
 
 
 def _repo(tmp_path: Path) -> Path:
@@ -103,6 +109,75 @@ def test_released_when_holder_process_dies(tmp_path: Path) -> None:
         child.wait()
         with run_lock(repo):
             pass
+    finally:
+        if child.poll() is None:
+            child.kill()
+            child.wait()
+
+
+_CONFIG_WORKSPACE = "repoactive-config-deadbeef"
+
+_HOLD_CONFIG_SCRIPT = """
+import sys, time
+from pathlib import Path
+from repoactive.lock import config_workspace_lock
+repo, ready, name = sys.argv[1], sys.argv[2], sys.argv[3]
+with config_workspace_lock(Path(repo), name):
+    open(ready, "w").close()
+    time.sleep(30)
+"""
+
+
+def test_config_workspace_without_a_lock_file_is_free(tmp_path: Path) -> None:
+    # The workspace outlived the command that made it: nothing holds it.
+    assert config_workspace_is_free(_repo(tmp_path), _CONFIG_WORKSPACE)
+
+
+def test_config_workspace_is_not_free_while_held(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    with config_workspace_lock(repo, _CONFIG_WORKSPACE):
+        assert not config_workspace_is_free(repo, _CONFIG_WORKSPACE)
+
+
+def test_config_workspace_is_free_again_after_release(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    with config_workspace_lock(repo, _CONFIG_WORKSPACE):
+        pass
+    assert config_workspace_is_free(repo, _CONFIG_WORKSPACE)
+
+
+def test_config_workspace_lock_file_removed_on_exit(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    lock_file = repo / ".jj" / f"{_CONFIG_WORKSPACE}.lock"
+    with config_workspace_lock(repo, _CONFIG_WORKSPACE):
+        assert lock_file.is_file()
+    assert not lock_file.exists()
+
+
+def test_config_workspace_lock_released_on_exception(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    with pytest.raises(RuntimeError, match="boom"), config_workspace_lock(repo, _CONFIG_WORKSPACE):
+        raise RuntimeError("boom")
+    assert config_workspace_is_free(repo, _CONFIG_WORKSPACE)
+
+
+def test_config_workspace_freed_when_holder_process_dies(tmp_path: Path) -> None:
+    # The lock makes the workspace reclaimable after the command is killed.
+    repo = _repo(tmp_path)
+    ready = tmp_path / "ready"
+    child = subprocess.Popen(
+        [sys.executable, "-c", _HOLD_CONFIG_SCRIPT, str(repo), str(ready), _CONFIG_WORKSPACE]
+    )
+    try:
+        deadline = time.monotonic() + 5
+        while not ready.exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert ready.exists(), "child never acquired the lock"
+        assert not config_workspace_is_free(repo, _CONFIG_WORKSPACE)
+
+        child.kill()
+        child.wait()
+        assert config_workspace_is_free(repo, _CONFIG_WORKSPACE)
     finally:
         if child.poll() is None:
             child.kill()

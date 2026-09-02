@@ -122,3 +122,11 @@ it.
   (safe: the run lock serialises runs and jobs run sequentially). The
   default workspace is reconciled with `jj workspace update-stale`. The
   content-unchanged push-skip is a deferred follow-up.
+- [0021 — Read the configuration from a revset with a temporary workspace](0021-read-config-from-a-revset.md)
+  — Accepted. `--config-revset` uses `jj new` to merge the selected
+  revisions in a temporary jj workspace. The command discovers the
+  configuration in that workspace instead of the working copy. The workspace
+  exists for the complete command so that `RA_CONFIG_SOURCE_DIR` remains
+  valid while jobs run. The command rejects the use of `--config` with
+  `--config-revset`. It reports a merge conflict before it reports a related
+  TOML parse error.

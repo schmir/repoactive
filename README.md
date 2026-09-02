@@ -40,6 +40,7 @@ request (MR) throughout; on GitHub, read that as pull request (PR).
   - [Example](#example)
   - [`[platform.<name>]`](#platformname)
   - [Config file locations](#config-file-locations)
+  - [Reading configuration from a revset](#reading-configuration-from-a-revset)
   - [Variables passed to job commands](#variables-passed-to-job-commands)
   - [Passing secrets to commands with `secret_env`](#passing-secrets-to-commands-with-secret_env)
   - [Overriding values on the command line](#overriding-values-on-the-command-line)
@@ -285,9 +286,9 @@ repoactive --version
 Every command that works against a repository accepts `--repo`/`-r` and
 `--debug`/`-d`. The commands that read configuration - `run`,
 `validate-config`, `info jobs`, and `info tags` - also accept the same
-`--config`/`-c` and `--set`/`-s` options, described in the
-[`repoactive run`](#repoactive-run) table below. `recent-commits` works from
-the repository alone and reads no configuration;
+`--config`/`-c`, `--config-revset`, and `--set`/`-s` options, described in
+the [`repoactive run`](#repoactive-run) table below. `recent-commits` works
+from the repository alone and reads no configuration;
 [`dump-schema`](#repoactive-dump-schema) touches no repository at all and
 takes only `--output`.
 
@@ -324,6 +325,9 @@ repoactive run --mode push
 # Push branches and create or update merge requests
 repoactive run --mode publish
 
+# Use the configuration as it stands on trunk, whatever is checked out
+repoactive run --config-revset 'trunk()'
+
 # Enable debug logging
 repoactive run --debug
 ```
@@ -331,6 +335,7 @@ repoactive run --debug
 | Option                          | Short | Description                                                                                                                  |
 | ------------------------------- | ----- | ---------------------------------------------------------------------------------------------------------------------------- |
 | `--config PATH`                 | `-c`  | Config file or directory of `*.toml` files; repeat to merge. Default: `.repoactive.d/` and `.repoactive.toml` under `--repo` |
+| `--config-revset REVSET`        |       | Read configuration from the merged tree of `REVSET` instead of from the working copy. Cannot be combined with `--config`     |
 | `--set NAME=VALUE`              | `-s`  | Override a config value (repeatable); `NAME` is a dotted TOML key, `VALUE` a TOML expression. Wins over `--config`           |
 | `--repo PATH`                   | `-r`  | jj repository path (default: `.`)                                                                                            |
 | `--mode [local\|push\|publish]` | `-m`  | How far to publish: `local` (default) applies only locally, `push` also pushes branches, `publish` also creates/updates MRs  |
@@ -803,6 +808,45 @@ directory of `*.toml` files, and may be repeated to merge several sources;
 later sources win. Explicit paths are resolved relative to the current
 directory, not `--repo`.
 
+### Reading configuration from a revset
+
+By default, the command reads the configuration from the working copy. The
+working copy can contain an incomplete change or an unsuitable revision.
+`--config-revset` creates a temporary jj workspace. The command runs
+`jj new REVSET` in this workspace to merge the revisions. It then discovers
+`.repoactive.d/` and `.repoactive.toml` in the temporary workspace instead
+of under `--repo`.
+
+```bash
+# Always run the configuration that is on trunk, whatever is checked out
+repoactive run --config-revset 'trunk()'
+
+# Preview the configuration a branch would produce once it lands
+repoactive info jobs --config-revset 'trunk() | my-feature-branch'
+```
+
+A revset that selects several revisions produces a merged tree. This
+behavior makes the second example possible. The following rules apply:
+
+- `--config-revset` cannot be combined with `--config`; the combination is
+  rejected. `--set`/`-s` still applies and still wins.
+- Merging the revset's revisions can cause conflicts. `repoactive` warns and
+  names the conflicted files. The command then continues. If a configuration
+  file contains conflict markers, the command cannot parse the file and
+  reports an invalid-configuration error.
+- The option needs jj and a colocated jj repository, even for the read-only
+  commands. A plain git repository is converted with
+  `jj git init --colocate` first - the same conversion a bare
+  `repoactive run` performs, with the same undo hint.
+- Only the _configuration_ comes from the revset. Jobs still run on commits
+  that use `trunk()` or their `base_branch` as the base. The local
+  repository is still the source of truth. Therefore, you must still fetch
+  the clone (see
+  [Keeping the local clone current](#keeping-the-local-clone-current)).
+
+See [ADR 0021](docs/adr/0021-read-config-from-a-revset.md) for the
+reasoning.
+
 ### Variables passed to job commands
 
 `repoactive` injects a few `RA_`-prefixed environment variables into every
@@ -900,6 +944,12 @@ The value is the config file's real location on disk, so it is the same
 whether the file was discovered automatically or named with `-c`. A command
 whose value came from a `--set` override has no config file, so
 `RA_CONFIG_SOURCE_DIR` is unset for it.
+
+With [`--config-revset`](#reading-configuration-from-a-revset), the value
+points to the temporary workspace that contains the configuration. The
+workspace exists for the complete run. A command can read files from it. The
+command deletes the workspace when it exits. Files written to the workspace
+do not remain after the command exits.
 
 ### Passing secrets to commands with `secret_env`
 

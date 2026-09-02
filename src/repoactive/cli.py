@@ -1,7 +1,9 @@
 """Command-line interface for repoactive."""
 
+import contextlib
 import json
 import logging
+from collections.abc import Generator
 from datetime import UTC, datetime
 from enum import StrEnum
 from importlib.metadata import version
@@ -77,6 +79,14 @@ _SetOption = Annotated[
         "VALUE is a TOML expression. Repeatable; wins over --config.",
     ),
 ]
+_ConfigRevsetOption = Annotated[
+    str | None,
+    typer.Option(
+        "--config-revset",
+        help="Read configuration from the merged tree of this revset instead of from the "
+        "working copy. Cannot be combined with --config.",
+    ),
+]
 _RepoOption = Annotated[Path, typer.Option("--repo", "-r", help="Path to the jj repository.")]
 _DebugOption = Annotated[bool, typer.Option("--debug", "-d", help="Enable debug logging.")]
 
@@ -137,6 +147,11 @@ def _error(message: str) -> None:
     typer.secho(f"Error: {message}", err=True, fg=typer.colors.RED, bold=True)
 
 
+def _warn(message: str) -> None:
+    """Print message to stderr as a bold yellow Warning: line."""
+    typer.secho(f"Warning: {message}", err=True, fg=typer.colors.YELLOW, bold=True)
+
+
 def _check_jj() -> None:
     """Exit with a clear error unless the jj executable is on PATH."""
     try:
@@ -177,6 +192,45 @@ def _ensure_colocated_repo(repo: Path) -> None:
         raise typer.Exit(code=1) from e
 
 
+@contextlib.contextmanager
+def _config_root(
+    repo: Path, config_paths: list[Path] | None, config_revset: str | None
+) -> Generator[Path]:
+    """Yield the directory to discover configuration in.
+
+    The context lifetime keeps configuration-relative paths valid as required by
+    ADR 0021.
+    """
+    if config_revset is None:
+        yield repo
+        return
+    if config_paths:
+        _error("--config-revset cannot be combined with --config")
+        raise typer.Exit(code=1)
+    _check_jj()
+    # Create a colocated jj repository before the workspace. See ADR 0021.
+    _ensure_colocated_repo(repo)
+    with contextlib.ExitStack() as stack:
+        try:
+            workspace = stack.enter_context(JJ(repo).revset_workspace(config_revset))
+            _warn_about_conflicts(workspace, config_revset)
+        except JJError as e:
+            # Report an invalid revset without a traceback.
+            _error(str(e))
+            raise typer.Exit(code=1) from e
+        yield workspace.cwd
+
+
+def _warn_about_conflicts(workspace: JJ, config_revset: str) -> None:
+    """Warn about conflicted files, but continue to read the configuration."""
+    if not workspace.has_conflict("@"):
+        return
+    paths = workspace.conflicted_paths()
+    _warn(f"merging revset {config_revset!r} produced file conflicts:")
+    for path in paths:
+        typer.echo(f"  {path}", err=True)
+
+
 def _version_callback(value: bool) -> None:
     if value:
         typer.echo(version("repoactive"))
@@ -205,6 +259,7 @@ def callback(
 @app.command()
 def run(  # noqa: PLR0913, PLR0917
     config_paths: _ConfigOption = None,
+    config_revset: _ConfigRevsetOption = None,
     repo: _RepoOption = _DEFAULT_REPO,
     mode: Annotated[
         RunMode,
@@ -233,35 +288,38 @@ def run(  # noqa: PLR0913, PLR0917
     """Apply jobs locally; pass --mode push or --mode publish to publish."""
     _setup_logging(debug)
     _check_jj()
-    cfg = _load_config_or_exit(config_paths, repo, overrides)
-    _ensure_colocated_repo(repo)
-    try:
-        platform = get_platform(cfg, repo) if mode is RunMode.publish else None
-        summary = run_all(
-            config=cfg,
-            repo_path=repo,
-            platform=platform,
-            requested_names=frozenset(jobs or []),
-            requested_tags=frozenset(tags or []),
-            mode=mode,
-        )
-    except RunLockHeldError as e:
-        _error(str(e))
-        raise typer.Exit(code=LOCK_HELD_EXIT_CODE) from e
-    except (
-        UnknownJobsError,
-        UnknownTagsError,
-        JJError,
-        MissingSecretError,
-        NoPlatformConfiguredError,
-        PlatformTokenNotSetError,
-        PlatformError,
-    ) as e:
-        # Anticipated failures (a mistyped job name or tag, a job granting an
-        # unset secret, no matching platform, an unset or rejected token, a
-        # failing jj/git invocation) get a clean error line, not a traceback.
-        _error(str(e))
-        raise typer.Exit(code=1) from e
+    # The config workspace is held for the whole run, so a job command can still
+    # reach the files RA_CONFIG_SOURCE_DIR points at (ADR 0021).
+    with _config_root(repo, config_paths, config_revset) as config_root:
+        cfg = _load_config_or_exit(config_paths, config_root, overrides)
+        _ensure_colocated_repo(repo)
+        try:
+            platform = get_platform(cfg, repo) if mode is RunMode.publish else None
+            summary = run_all(
+                config=cfg,
+                repo_path=repo,
+                platform=platform,
+                requested_names=frozenset(jobs or []),
+                requested_tags=frozenset(tags or []),
+                mode=mode,
+            )
+        except RunLockHeldError as e:
+            _error(str(e))
+            raise typer.Exit(code=LOCK_HELD_EXIT_CODE) from e
+        except (
+            UnknownJobsError,
+            UnknownTagsError,
+            JJError,
+            MissingSecretError,
+            NoPlatformConfiguredError,
+            PlatformTokenNotSetError,
+            PlatformError,
+        ) as e:
+            # Anticipated failures (a mistyped job name or tag, a job granting an
+            # unset secret, no matching platform, an unset or rejected token, a
+            # failing jj/git invocation) get a clean error line, not a traceback.
+            _error(str(e))
+            raise typer.Exit(code=1) from e
     if not summary.ok:
         raise typer.Exit(code=1)
 
@@ -269,6 +327,7 @@ def run(  # noqa: PLR0913, PLR0917
 @app.command("validate-config")
 def validate_config(
     config_paths: _ConfigOption = None,
+    config_revset: _ConfigRevsetOption = None,
     repo: _RepoOption = _DEFAULT_REPO,
     overrides: _SetOption = None,
     debug: _DebugOption = False,
@@ -280,25 +339,32 @@ def validate_config(
     code 1 on failure.
     """
     _setup_logging(debug)
-    try:
-        paths = _resolve_config(config_paths, repo)
-        files = expand_config_paths(paths)
-        typer.echo("Configuration files:")
-        for file in files:
-            typer.echo(f"  {file}")
-        cfg = load_config(paths, overrides=overrides or None)
-    except ConfigNotFoundError as e:
-        _error(str(e))
-        raise typer.Exit(code=1) from e
-    except ConfigError as e:
-        _error(f"invalid config {e}")
-        raise typer.Exit(code=1) from e
+    with _config_root(repo, config_paths, config_revset) as config_root:
+        try:
+            paths = _resolve_config(config_paths, config_root)
+            files = expand_config_paths(paths)
+            if config_revset is not None:
+                # Say where the listed paths come from; they are inside a
+                # temporary workspace that is gone by the time this returns.
+                typer.echo(f"Configuration files from revset {config_revset!r}:")
+            else:
+                typer.echo("Configuration files:")
+            for file in files:
+                typer.echo(f"  {file}")
+            cfg = load_config(paths, overrides=overrides or None)
+        except ConfigNotFoundError as e:
+            _error(str(e))
+            raise typer.Exit(code=1) from e
+        except ConfigError as e:
+            _error(f"invalid config {e}")
+            raise typer.Exit(code=1) from e
     typer.echo(f"Config OK: {len(cfg.jobs)} job(s) defined.")
 
 
 @info_app.command("jobs")
 def info_jobs(
     config_paths: _ConfigOption = None,
+    config_revset: _ConfigRevsetOption = None,
     repo: _RepoOption = _DEFAULT_REPO,
     overrides: _SetOption = None,
     debug: _DebugOption = False,
@@ -310,13 +376,15 @@ def info_jobs(
     also shows the job's title and effective tags in aligned columns.
     """
     _setup_logging(debug)
-    cfg = _load_config_or_exit(config_paths, repo, overrides)
+    with _config_root(repo, config_paths, config_revset) as config_root:
+        cfg = _load_config_or_exit(config_paths, config_root, overrides)
     print_job_table(format_job_forest(topological_sort(cfg.jobs)))
 
 
 @info_app.command("tags")
 def info_tags(
     config_paths: _ConfigOption = None,
+    config_revset: _ConfigRevsetOption = None,
     repo: _RepoOption = _DEFAULT_REPO,
     overrides: _SetOption = None,
     debug: _DebugOption = False,
@@ -331,7 +399,8 @@ def info_tags(
     Each line also shows the job's title and effective tags in aligned columns.
     """
     _setup_logging(debug)
-    cfg = _load_config_or_exit(config_paths, repo, overrides)
+    with _config_root(repo, config_paths, config_revset) as config_root:
+        cfg = _load_config_or_exit(config_paths, config_root, overrides)
     jobs_by_tag: dict[str, list[Job]] = {}
     # Sort all jobs at once: a per-tag sort would break on dependencies whose
     # tags differ from the dependent's.
