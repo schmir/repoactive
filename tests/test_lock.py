@@ -89,6 +89,7 @@ time.sleep(30)
 """
 
 
+@pytest.mark.slow
 def test_released_when_holder_process_dies(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     lock_file = repo / ".jj" / LOCK_FILENAME
@@ -161,6 +162,7 @@ def test_config_workspace_lock_released_on_exception(tmp_path: Path) -> None:
     assert config_workspace_is_free(repo, _CONFIG_WORKSPACE)
 
 
+@pytest.mark.slow
 def test_config_workspace_freed_when_holder_process_dies(tmp_path: Path) -> None:
     # The lock makes the workspace reclaimable after the command is killed.
     repo = _repo(tmp_path)

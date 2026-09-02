@@ -51,6 +51,7 @@ def _plain(output: str) -> str:
 
 
 class TestDebugOption:
+    @pytest.mark.slow
     def test_all_jj_commands_expose_debug(self) -> None:
         for command in ("run", "validate-config", "recent-commits"):
             result = runner.invoke(app, [command, "--help"], env={"COLUMNS": "200"})
@@ -692,6 +693,7 @@ _CONFIG_REVSET_COMMANDS = (
 
 
 class TestConfigRevsetOption:
+    @pytest.mark.slow
     def test_config_reading_commands_expose_it(self) -> None:
         for command in _CONFIG_REVSET_COMMANDS:
             result = runner.invoke(app, [*command, "--help"], env={"COLUMNS": "200"})

@@ -65,6 +65,7 @@ class TestRunCommand:
             time.sleep(0.05)
         assert not _alive(child_pid), "backgrounded child survived the timeout kill"
 
+    @pytest.mark.slow
     def test_spawn_kills_group_when_body_raises(self, tmp_path: Path) -> None:
         # A body that raises for a reason other than a timeout must still leave no
         # orphan: _spawn kills the whole process group (including a backgrounded
