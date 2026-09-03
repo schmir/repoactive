@@ -32,14 +32,17 @@ dump-schema:
 dev:
     uv tool install -e .
 
-# Build the repoactive Docker image
-docker-build:
-    docker build -t repoactive .
-    docker image ls repoactive
+# Build the repoactive container image (CONTAINER_ENGINE overrides; podman preferred when present)
+build-image:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    engine="${CONTAINER_ENGINE:-$(command -v podman >/dev/null 2>&1 && echo podman || echo docker)}"
+    "$engine" build -t repoactive .
+    "$engine" image ls repoactive
 
-# Build the Docker image and smoke-test it against a fresh clone (needs docker + network)
-docker-smoketest:
-    uv run nox -s docker-smoketest
+# Build the image and smoke-test it against a fresh clone (needs a container engine + network)
+smoketest:
+    uv run nox -s smoketest
 
 # Update the nix flake lockfile
 update-flake:

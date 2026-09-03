@@ -9,9 +9,9 @@ fail() {
     local exit_code=$?
     set +x
     # Bold red banner. Emitted unconditionally (raw ANSI) rather than gated on a
-    # TTY: this script always runs under `docker run` with no TTY, so a `[ -t 2 ]`
-    # check would suppress the colour exactly where we want to see it. GitHub
-    # Actions and most CI log viewers render ANSI anyway.
+    # TTY: this script always runs under a container run with no TTY, so a
+    # `[ -t 2 ]` check would suppress the colour exactly where we want to see
+    # it. GitHub Actions and most CI log viewers render ANSI anyway.
     local red=$'\033[1;31m' reset=$'\033[0m'
     echo >&2
     echo "${red}################################################################${reset}" >&2

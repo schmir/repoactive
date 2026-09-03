@@ -1,6 +1,8 @@
 #!/usr/bin/env -S uv run nox --noxfile
 """Nox sessions for CI: tests, type checking, config validation, and schema checks."""
 
+import os
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -45,35 +47,48 @@ def check_schema(session: nox.Session) -> None:
             session.error("config-schema.json is out of date; run 'just dump-schema'")
 
 
-@nox.session(venv_backend="none", name="docker-smoketest")
-def docker_smoketest(session: nox.Session) -> None:
-    """Build the Docker image and smoke-test it against a fresh clone of repoactive.
+CONTAINER_ENGINE_ENV = "CONTAINER_ENGINE"
 
-    Requires a running Docker daemon and network access. Not part of `just ci`;
-    run manually with `nox -s docker-smoketest`. Pass `-- --no-build` to reuse
-    an existing `repoactive` image (CI pre-builds it with layer caching).
+
+def container_engine(session: nox.Session) -> str:
+    """Pick the container engine for the smoke test.
+
+    CONTAINER_ENGINE wins if set; otherwise podman when it is on PATH, else
+    docker. Images do not cross engines, so CI, which pre-builds with docker
+    buildx, pins the variable to docker.
     """
-    if "--no-build" not in session.posargs:
-        # Mirrors `just docker-build`.
-        session.run("docker", "build", "-t", "repoactive", ".", external=True)
+    chosen = os.environ.get(CONTAINER_ENGINE_ENV, "").strip()
+    if chosen:
+        if shutil.which(chosen) is None:
+            session.error(f"{CONTAINER_ENGINE_ENV}={chosen} but {chosen} is not on PATH")
+        return chosen
+    return "podman" if shutil.which("podman") else "docker"
 
-    # The smoke test itself lives in scripts/docker-smoketest.sh (a real shell
-    # file so it can be linted and edited without a Python-string layer). We read
-    # it here and pass it as the `bash -c` argument -- the string travels as a
-    # single argv element over the Docker API, so it works under Docker-in-Docker
-    # too (unlike a bind mount, whose source path would resolve on the daemon's
-    # filesystem rather than this checkout).
+
+@nox.session(venv_backend="none", name="smoketest")
+def smoketest(session: nox.Session) -> None:
+    """Build the container image and smoke-test it against a fresh clone of repoactive.
+
+    Requires a working container engine (see container_engine) and network
+    access. Not part of `just ci`; run manually with `nox -s smoketest`.
+    Pass `-- --no-build` to reuse an existing `repoactive` image (CI pre-builds
+    it with layer caching).
+    """
+    engine = container_engine(session)
+    session.log(f"using container engine: {engine}")
+
+    if "--no-build" not in session.posargs:
+        # Mirrors `just build-image`.
+        session.run(engine, "build", "-t", "repoactive", ".", external=True)
+
+    # The smoke test itself lives in scripts/smoketest.sh. We read it here and
+    # pass it as the `bash -c` argument.
     script = Path("scripts/smoketest.sh").read_text()
-    # --entrypoint bash overrides the image's `repoactive` entrypoint so we can
-    # script inside the container; repoactive stays on PATH.
-    #
-    # Run via subprocess rather than session.run: on failure nox would echo the
-    # entire `docker run ... -c <whole script>` command line, burying the smoke
-    # test's own red failure banner in noise. We check the exit code ourselves and
-    # report a one-line error instead.
+    # Run via subprocess rather than session.run: on failure nox would echo the entire `run ... -c
+    # <whole script>` command line.
     result = subprocess.run(
-        ["docker", "run", "--rm", "--entrypoint", "bash", "repoactive", "-c", script],
+        [engine, "run", "--rm", "--entrypoint", "bash", "repoactive", "-c", script],
         check=False,
     )
     if result.returncode != 0:
-        session.error(f"docker smoke test failed (exit {result.returncode}); see banner above")
+        session.error(f"{engine} smoke test failed (exit {result.returncode}); see banner above")

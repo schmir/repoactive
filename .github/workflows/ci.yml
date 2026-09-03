@@ -66,7 +66,7 @@ jobs:
       - name: Tests
         run: uv run nox -p ${{ matrix.python-version }} -s tests
 
-  docker-smoketest:
+  smoketest:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -94,5 +94,9 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Docker smoke test
-        run: uv run nox -s docker-smoketest -- --no-build
+      # The image above is loaded into docker, and ubuntu-latest also ships
+      # podman, which the session would otherwise prefer and find no image in.
+      - name: Smoke test
+        env:
+          CONTAINER_ENGINE: docker
+        run: uv run nox -s smoketest -- --no-build

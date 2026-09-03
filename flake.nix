@@ -34,6 +34,7 @@
               git
               jujutsu
               just
+              podman
               prettier
               pyright
               shellcheck
