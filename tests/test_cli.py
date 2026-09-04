@@ -4,6 +4,7 @@ import json
 import logging
 import re
 import subprocess
+from collections.abc import Generator
 from importlib.metadata import version
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -14,12 +15,33 @@ from typer.testing import CliRunner
 
 from repoactive.cli import LOCK_HELD_EXIT_CODE, _setup_logging, app
 from repoactive.jj import JJ, CommandFailedError
-from repoactive.lock import RunLockHeldError
+from repoactive.lock import run_lock
 from repoactive.platforms import PlatformTokenNotSetError
 from repoactive.platforms.base import PlatformError
 from repoactive.runner import RunMode, RunSummary
 
 runner = CliRunner()
+
+
+@pytest.fixture
+def root_logger() -> Generator[logging.Logger, None, None]:
+    """Provide a clean root logger and restore its state after the test."""
+    logger = logging.getLogger()
+    previous_handlers = logger.handlers[:]
+    previous_level = logger.level
+    logger.handlers.clear()
+    logger.setLevel(logging.WARNING)
+    try:
+        yield logger
+    finally:
+        logger.handlers[:] = previous_handlers
+        logger.setLevel(previous_level)
+
+
+def _setup_test_logging(logger: logging.Logger, *, debug: bool) -> None:
+    """Configure logging after removing handlers added by pytest."""
+    logger.handlers.clear()
+    _setup_logging(debug)
 
 
 def _job_toml(name: str) -> str:
@@ -67,39 +89,45 @@ class TestVersion:
 
 
 class TestSetupLogging:
-    def test_debug_flag_wins_over_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_debug_flag_wins_over_env(
+        self, monkeypatch: pytest.MonkeyPatch, root_logger: logging.Logger
+    ) -> None:
         monkeypatch.setenv("REPOACTIVE_LOG_LEVEL", "warning")
-        with patch("logging.basicConfig") as basic_config:
-            _setup_logging(debug=True)
-        basic_config.assert_called_once()
-        assert basic_config.call_args.kwargs["level"] == logging.DEBUG
+        _setup_test_logging(root_logger, debug=True)
+        assert root_logger.level == logging.DEBUG
 
-    def test_env_sets_level(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_env_sets_level(
+        self, monkeypatch: pytest.MonkeyPatch, root_logger: logging.Logger
+    ) -> None:
         monkeypatch.setenv("REPOACTIVE_LOG_LEVEL", "info")
-        with patch("logging.basicConfig") as basic_config:
-            _setup_logging(debug=False)
-        basic_config.assert_called_once()
-        assert basic_config.call_args.kwargs["level"] == "INFO"
+        _setup_test_logging(root_logger, debug=False)
+        assert root_logger.level == logging.INFO
 
-    def test_logs_go_through_rich_handler(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_logs_go_through_rich_handler(
+        self, monkeypatch: pytest.MonkeyPatch, root_logger: logging.Logger
+    ) -> None:
         monkeypatch.delenv("REPOACTIVE_LOG_HANDLER", raising=False)
         monkeypatch.delenv("REPOACTIVE_UI", raising=False)
-        with patch("logging.basicConfig") as basic_config:
-            _setup_logging(debug=True)
-        (handler,) = basic_config.call_args.kwargs["handlers"]
+        _setup_test_logging(root_logger, debug=True)
+        (handler,) = root_logger.handlers
         assert isinstance(handler, RichHandler)
 
-    def test_plain_handler_uses_stdlib_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_plain_handler_uses_stdlib_default(
+        self, monkeypatch: pytest.MonkeyPatch, root_logger: logging.Logger
+    ) -> None:
         monkeypatch.setenv("REPOACTIVE_LOG_HANDLER", "plain")
-        with patch("logging.basicConfig") as basic_config:
-            _setup_logging(debug=True)
-        basic_config.assert_called_once_with(level=logging.DEBUG)
+        _setup_test_logging(root_logger, debug=True)
+        assert root_logger.level == logging.DEBUG
+        assert len(root_logger.handlers) == 1
+        assert type(root_logger.handlers[0]) is logging.StreamHandler
 
-    def test_unset_leaves_logging_unconfigured(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_unset_leaves_logging_unconfigured(
+        self, monkeypatch: pytest.MonkeyPatch, root_logger: logging.Logger
+    ) -> None:
         monkeypatch.delenv("REPOACTIVE_LOG_LEVEL", raising=False)
-        with patch("logging.basicConfig") as basic_config:
-            _setup_logging(debug=False)
-        basic_config.assert_not_called()
+        _setup_test_logging(root_logger, debug=False)
+        assert root_logger.handlers == []
+        assert root_logger.level == logging.WARNING
 
 
 class TestEnvironmentValidation:
@@ -342,8 +370,7 @@ class TestRun:
         repo = _make_repo(tmp_path)
         cfg = repo / "config.toml"
         _write_job(cfg, "a")
-        err = RunLockHeldError(repo / ".jj" / "repoactive.lock", "pid=999")
-        with patch("repoactive.cli.run_all", side_effect=err):
+        with run_lock(repo):
             result = runner.invoke(app, ["run", "--repo", str(repo), "--config", str(cfg)])
         assert result.exit_code == LOCK_HELD_EXIT_CODE
         assert "Error: another repoactive run is in progress" in result.output
