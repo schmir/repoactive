@@ -162,8 +162,8 @@ choke point in `command.run_command`:
 
 ```python
 for line in proc.stdout:
-    output_lines.append(line)   # -> commit message + error detail
-    view.feed(line)             # -> live view
+    output_lines.append(line)  # -> commit message + error detail
+    view.feed(line)  # -> live view
 ```
 
 Both sinks - the commit boxquote and the live view - draw from that loop, so
