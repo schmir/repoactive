@@ -711,6 +711,123 @@ def _file_at(repo: JJ, revision: str, path: str) -> str:
     ).stdout
 
 
+class TestAdHocOption:
+    @pytest.mark.slow
+    def test_run_exposes_it(self) -> None:
+        result = runner.invoke(app, ["run", "--help"], env={"COLUMNS": "200"})
+        assert result.exit_code == 0
+        assert "--ad-hoc" in _plain(result.output)
+        assert "--ad-hoc-name" in _plain(result.output)
+
+    @pytest.mark.slow
+    def test_other_commands_do_not_expose_it(self) -> None:
+        for command in (["validate-config"], ["info", "jobs"], ["info", "tags"]):
+            result = runner.invoke(app, [*command, "--help"], env={"COLUMNS": "200"})
+            assert result.exit_code == 0
+            assert "--ad-hoc" not in _plain(result.output), command
+
+    def test_name_without_a_command_is_rejected(self, tmp_path: Path) -> None:
+        result = runner.invoke(
+            app, ["run", "--repo", str(_make_repo(tmp_path)), "--ad-hoc-name", "x"]
+        )
+        assert result.exit_code == 1
+        assert "--ad-hoc-name requires --ad-hoc" in result.output
+
+    def test_empty_command_is_rejected(self, tmp_path: Path) -> None:
+        result = runner.invoke(app, ["run", "--repo", str(_make_repo(tmp_path)), "--ad-hoc", " "])
+        assert result.exit_code == 1
+        assert "--ad-hoc needs a command to run" in result.output
+
+    def test_empty_name_is_rejected(self, tmp_path: Path) -> None:
+        result = runner.invoke(
+            app,
+            [
+                "run",
+                "--repo",
+                str(_make_repo(tmp_path)),
+                "--ad-hoc",
+                "just fmt",
+                "--ad-hoc-name",
+                "",
+            ],
+        )
+        assert result.exit_code == 1
+        assert "invalid job name" in result.output
+
+    def test_runs_without_any_configuration(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path)
+        with patch("repoactive.cli.run_all", return_value=RunSummary()) as run_all:
+            result = runner.invoke(app, ["run", "--repo", str(repo), "--ad-hoc", "just fmt"])
+        assert result.exit_code == 0
+        kwargs = run_all.call_args.kwargs
+        assert [j.name for j in kwargs["config"].jobs] == ["just-fmt"]
+        assert kwargs["config"].jobs[0].command == "just fmt"
+        assert kwargs["requested_names"] == frozenset({"just-fmt"})
+
+    def test_ad_hoc_name_names_the_job(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path)
+        with patch("repoactive.cli.run_all", return_value=RunSummary()) as run_all:
+            result = runner.invoke(
+                app,
+                ["run", "--repo", str(repo), "--ad-hoc", "just fmt", "--ad-hoc-name", "fmt"],
+            )
+        assert result.exit_code == 0
+        kwargs = run_all.call_args.kwargs
+        assert [j.name for j in kwargs["config"].jobs] == ["fmt"]
+        assert kwargs["requested_names"] == frozenset({"fmt"})
+
+    def test_adds_itself_to_the_discovered_configuration(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path)
+        _write_job(repo / ".repoactive.toml", "a")
+        with patch("repoactive.cli.run_all", return_value=RunSummary()) as run_all:
+            result = runner.invoke(app, ["run", "--repo", str(repo), "--ad-hoc", "just fmt", "a"])
+        assert result.exit_code == 0
+        kwargs = run_all.call_args.kwargs
+        assert [j.name for j in kwargs["config"].jobs] == ["a", "just-fmt"]
+        assert kwargs["requested_names"] == frozenset({"a", "just-fmt"})
+
+    def test_tagged_jobs_are_selected_alongside_it(self, tmp_path: Path) -> None:
+        # Selection stays the union of names and tags (ADR 0002): --ad-hoc adds
+        # a name, it does not suppress a --tag selection.
+        repo = _make_repo(tmp_path)
+        (repo / ".repoactive.toml").write_text(
+            '[job.a]\ncommand = "echo"\ntitle = "a"\ntags = ["weekly"]\n'
+        )
+        with patch("repoactive.cli.run_all", return_value=RunSummary()) as run_all:
+            result = runner.invoke(
+                app, ["run", "--repo", str(repo), "--ad-hoc", "just fmt", "--tag", "weekly"]
+            )
+        assert result.exit_code == 0
+        kwargs = run_all.call_args.kwargs
+        assert kwargs["requested_names"] == frozenset({"just-fmt"})
+        assert kwargs["requested_tags"] == frozenset({"weekly"})
+
+    def test_explicit_missing_config_still_fails(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path)
+        result = runner.invoke(
+            app,
+            ["run", "--repo", str(repo), "-c", str(repo / "missing.toml"), "--ad-hoc", "just fmt"],
+        )
+        assert result.exit_code == 1
+        assert "invalid config" in result.output
+
+    def test_name_taken_by_a_configured_job_is_rejected(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path)
+        (repo / ".repoactive.toml").write_text('[job.just-fmt]\ncommand = "x"\ntitle = "x"\n')
+        result = runner.invoke(app, ["run", "--repo", str(repo), "--ad-hoc", "just fmt"])
+        assert result.exit_code == 1
+        assert "--ad-hoc-name" in result.output
+
+    @pytest.mark.slow
+    def test_commits_the_command_output_on_its_own_branch(self, tmp_path: Path) -> None:
+        repo = _init_jj_repo(tmp_path)
+
+        result = runner.invoke(app, ["run", "--repo", str(repo.cwd), "--ad-hoc", "echo hi > out"])
+
+        assert result.exit_code == 0
+        assert repo.bookmark_exists("repoactive/echo-hi-out")
+
+
 _CONFIG_REVSET_COMMANDS = (
     ["run"],
     ["validate-config"],

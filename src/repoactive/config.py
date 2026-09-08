@@ -40,6 +40,13 @@ logger = logging.getLogger(__name__)
 _DURATION_RE = re.compile(r"^(\d+)([smhdw])$")
 _JOB_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 _TAG_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+# Job name for an --ad-hoc command built entirely of characters a name may not
+# contain, and the longest name derived from a command (branch_prefix is added
+# on top of it).
+AD_HOC_NAME_FALLBACK = "ad-hoc"
+_AD_HOC_LABEL = "--ad-hoc"
+_AD_HOC_SLUG_RE = re.compile(r"[^A-Za-z0-9_]+")
+_AD_HOC_NAME_MAX_LEN = 50
 # Environment-variable name grammar for secret_env entries. The RA_ and
 # REPOACTIVE_ prefixes are repoactive's own (ADR 0016) and are rejected.
 _ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -284,6 +291,23 @@ class BranchNameIsBaseBranchError(ValueError):
         super().__init__(
             f"job {job!r} resolves to bookmark {branch!r}, which job {base_job!r} "
             "uses as its base_branch; a job's bookmark must not be another job's base_branch"
+        )
+
+
+class EmptyAdHocCommandError(ValueError):
+    """Raised when --ad-hoc is given a blank command."""
+
+    def __init__(self) -> None:
+        super().__init__("--ad-hoc needs a command to run")
+
+
+class AdHocNameCollisionError(ValueError):
+    """Raised when the ad-hoc job name is already taken by a configured job."""
+
+    def __init__(self, name: str) -> None:
+        super().__init__(
+            f"ad-hoc job {name!r} collides with a configured job of the same name; "
+            "pass --ad-hoc-name to run it under a different name"
         )
 
 
@@ -894,9 +918,14 @@ class _ConfigSource:
     label: str
     data: dict
     # Absolute directory of the file this source was read from, or None for
-    # sources without a file (built-in defaults, --set overrides). Exposed to a
-    # command as RA_CONFIG_SOURCE_DIR for the job whose command this source sets.
+    # sources without a file (built-in defaults, --set overrides, --ad-hoc).
+    # Exposed to a command as RA_CONFIG_SOURCE_DIR for the job whose command
+    # this source sets.
     source_dir: Path | None = None
+    # Whether the jobs this source defines must not exist yet. Set for the
+    # --ad-hoc source, whose job would otherwise silently take over a
+    # same-named configured job's tags, labels, depends_on and cooldown.
+    reject_existing_jobs: bool = False
 
 
 def _built_in_defaults() -> list[_ConfigSource]:
@@ -931,6 +960,69 @@ def _parse_override(text: str) -> _ConfigSource:
         raise ConfigError(label, e) from e
 
 
+def ad_hoc_job_name(command: str) -> str:
+    """Derive a job name from an --ad-hoc command.
+
+    Every run of characters a job name may not contain, dashes included,
+    collapses into a single dash, so the same command always yields the same
+    name and thus reuses its branch across runs. Falls back to a fixed name for
+    a command that has no usable character at all.
+    """
+    slug = _AD_HOC_SLUG_RE.sub("-", command.strip()).strip("-")
+    return slug[:_AD_HOC_NAME_MAX_LEN].strip("-") or AD_HOC_NAME_FALLBACK
+
+
+def _ad_hoc_title(command: str) -> str:
+    """Commit subject for an ad-hoc command, marking a multi-line command as cut off.
+
+    Quotes the command, switching to double quotes only when that avoids
+    nesting a quote inside itself.
+    """
+    lines = command.strip().splitlines()
+    text = f"{lines[0].strip()} ..." if len(lines) > 1 else lines[0].strip()
+    quote = '"' if "'" in text and '"' not in text else "'"
+    return f"Run {quote}{text}{quote}"
+
+
+@dataclass(frozen=True)
+class AdHocJob:
+    """The job repoactive builds from --ad-hoc instead of from configuration."""
+
+    command: str
+    # Name from --ad-hoc-name; None derives one from the command.
+    name: str | None = None
+
+    @property
+    def job_name(self) -> str:
+        # Only an absent name derives one; a given name is passed through even
+        # when it is empty, so it fails job-name validation instead of being
+        # silently replaced by the derived one.
+        return ad_hoc_job_name(self.command) if self.name is None else self.name
+
+
+def _ad_hoc_source(ad_hoc: AdHocJob) -> _ConfigSource:
+    """Build the config source holding the ad-hoc job.
+
+    The table is built directly rather than through TOML, so the command needs
+    no quoting. It carries no source_dir: like a --set-defined command, an
+    ad-hoc command belongs to no config file and gets no RA_CONFIG_SOURCE_DIR.
+    """
+    if not ad_hoc.command.strip():
+        raise EmptyAdHocCommandError
+    # The title already names the command, so a prefix would only repeat that
+    # the run was not a human's; the MR title keeps its prefix.
+    body = {
+        "command": ad_hoc.command,
+        "title": _ad_hoc_title(ad_hoc.command),
+        "commit_title_prefix": "",
+    }
+    return _ConfigSource(
+        _AD_HOC_LABEL,
+        {"job": {ad_hoc.job_name: body}},
+        reject_existing_jobs=True,
+    )
+
+
 def _read_toml_file(path: Path) -> _ConfigSource:
     try:
         return _ConfigSource(
@@ -940,14 +1032,39 @@ def _read_toml_file(path: Path) -> _ConfigSource:
         raise ConfigError(str(path), e) from e
 
 
-def load_config(paths: list[Path], overrides: list[str] | None = None) -> Config:
+def load_config(
+    paths: list[Path],
+    overrides: list[str] | None = None,
+    ad_hoc: AdHocJob | None = None,
+) -> Config:
+    """Merge the built-in defaults, the given config paths, an ad-hoc job, and --set overrides.
+
+    The ad-hoc job is layered on top of the files, so it picks up job-defaults
+    and platforms from them, and below the overrides, so --set stays the last
+    word on every field.
+    """
     return _merge_config(
         itertools.chain(
             _built_in_defaults(),
             (_read_toml_file(path) for path in expand_config_paths(paths)),
+            () if ad_hoc is None else (_ad_hoc_source(ad_hoc),),
             (_parse_override(text) for text in overrides or []),
         )
     )
+
+
+def _reject_existing_jobs(source: _ConfigSource, shape: ConfigShape, merged: dict) -> None:
+    """Reject a source that redefines a job an earlier source already defined.
+
+    Only the --ad-hoc source asks for this; every other source merges into an
+    existing job by design. The error escapes _merge_config unwrapped: the
+    collision is with the command line, not with the config being invalid.
+    """
+    if not source.reject_existing_jobs:
+        return
+    for name in shape.job:
+        if name in merged.get("job", {}):
+            raise AdHocNameCollisionError(name)
 
 
 def _merge_config(sources: Iterable[_ConfigSource]) -> Config:
@@ -962,6 +1079,10 @@ def _merge_config(sources: Iterable[_ConfigSource]) -> Config:
             # Reject odd shapes (e.g. job.foo = "hello") up front; the merge
             # helpers assume tables of tables and would fail cryptically.
             shape = ConfigShape.model_validate(data)
+        except ValidationError as e:
+            raise ConfigError(source.label, e) from e
+        _reject_existing_jobs(source, shape, merged)
+        try:
             for name, body in shape.job.items():
                 if "command" in body:
                     command_source_dir[name] = source.source_dir

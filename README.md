@@ -45,6 +45,7 @@ request (MR) throughout; on GitHub, read that as pull request (PR).
   - [Passing secrets to commands with `secret_env`](#passing-secrets-to-commands-with-secret_env)
   - [Overriding values on the command line](#overriding-values-on-the-command-line)
 - [Run control](#run-control)
+  - [Running a command ad-hoc](#running-a-command-ad-hoc)
   - [Selecting jobs with tags](#selecting-jobs-with-tags)
   - [Disabling jobs](#disabling-jobs)
   - [Running a job on a schedule](#running-a-job-on-a-schedule)
@@ -287,10 +288,10 @@ Every command that works against a repository accepts `--repo`/`-r` and
 `--debug`/`-d`. The commands that read configuration - `run`,
 `validate-config`, `info jobs`, and `info tags` - also accept the same
 `--config`/`-c`, `--config-revset`, and `--set`/`-s` options, described in
-the [`repoactive run`](#repoactive-run) table below. `recent-commits` works
-from the repository alone and reads no configuration;
-[`dump-schema`](#repoactive-dump-schema) touches no repository at all and
-takes only `--output`.
+the [`repoactive run`](#repoactive-run) table below. `--ad-hoc` is specific
+to `run`. `recent-commits` works from the repository alone and reads no
+configuration; [`dump-schema`](#repoactive-dump-schema) touches no
+repository at all and takes only `--output`.
 
 All commands exit with these status codes:
 
@@ -328,6 +329,9 @@ repoactive run --mode publish
 # Use the configuration as it stands on trunk, whatever is checked out
 repoactive run --config-revset 'trunk()'
 
+# Run a one-off command without configuring a job for it
+repoactive run --ad-hoc 'just update-flake'
+
 # Enable debug logging
 repoactive run --debug
 ```
@@ -340,6 +344,8 @@ repoactive run --debug
 | `--repo PATH`                   | `-r`  | jj repository path (default: `.`)                                                                                            |
 | `--mode [local\|push\|publish]` | `-m`  | How far to publish: `local` (default) applies only locally, `push` also pushes branches, `publish` also creates/updates MRs  |
 | `--tag TAG`                     | `-t`  | Run jobs carrying any of these tags (repeatable). With no tags/jobs the default run targets the `enabled` tag                |
+| `--ad-hoc COMMAND`              |       | Run `COMMAND` as a one-off job, no configuration needed. See [Running a command ad-hoc](#running-a-command-ad-hoc)           |
+| `--ad-hoc-name NAME`            |       | Name the `--ad-hoc` job (and thus its branch). Default: a name derived from the command                                      |
 | `--debug`                       | `-d`  | Enable debug logging                                                                                                         |
 
 ### `repoactive recent-commits`
@@ -1051,6 +1057,61 @@ argument named.
 The sections below cover the run-control options from the
 [configuration reference](#jobname) in detail: which jobs a run selects, how
 to schedule and throttle them, and how to generate jobs dynamically.
+
+### Running a command ad-hoc
+
+`--ad-hoc COMMAND` runs a single command without writing a job for it. The
+repository needs no `repoactive` configuration at all:
+
+```bash
+repoactive run --ad-hoc 'just update-flake'
+```
+
+`repoactive` builds one job from the command and runs it exactly as if it
+had been configured and named on the command line: the command runs in a
+temporary workspace, its result is committed on the job's own branch, and
+the commit carries the usual `Repoactive-Job` trailer. `--mode push` and
+`--mode publish` work as they do for a configured job.
+
+The job's name (and with it, its branch) is derived from the command: every
+run of characters a job name may not contain becomes a single dash, so
+`just update-flake` produces the branch `repoactive/just-update-flake`. The
+name is deterministic, so running the same ad-hoc command again updates that
+branch instead of opening a second one. Pass `--ad-hoc-name` for a name of
+your own:
+
+```bash
+repoactive run --ad-hoc "sed -i 's/2025/2026/' LICENSE" --ad-hoc-name copyright-year
+```
+
+The commit subject names the command it ran, `Run 'just update-flake'`, and
+carries no `commit_title_prefix`; the merge request title keeps the usual
+`[repoactive] ` prefix.
+
+The remaining rules:
+
+- Configuration is still read when it exists. `[job-defaults]` and
+  `[platform.<name>]` apply to the ad-hoc job, and the configured jobs stay
+  loaded.
+- The ad-hoc job is selected the way a job named on the command line is, so
+  the run is the union of it, any jobs named as arguments, and any `--tag`
+  selection (see [Selecting jobs with tags](#selecting-jobs-with-tags)). On
+  its own, `--ad-hoc` therefore runs that one job and nothing else; combine
+  it with `--tag weekly` and the weekly jobs run too.
+- `--set`/`-s` still wins over everything, so a single field can be tuned in
+  place: `--ad-hoc 'cargo update' -s 'job.cargo-update.timeout = "10m"'`.
+- The name must be free. If a configured job already uses it, `repoactive`
+  says so and stops; `--ad-hoc-name` resolves the clash.
+- The command belongs to no config file, so it gets no
+  [`RA_CONFIG_SOURCE_DIR`](#variables-passed-to-job-commands), just like a
+  command defined through `--set`.
+- Like a job named on the command line, the ad-hoc job runs immediately and
+  ignores any cooldown.
+
+`--ad-hoc` is meant for one-off work and for trying a command out. A command
+worth running repeatedly is worth a [`[job.<name>]`](#jobname) block: a
+readable name, a proper title, tags, and a cooldown. See
+[ADR 0022](docs/adr/0022-ad-hoc-commands.md) for the reasoning.
 
 ### Selecting jobs with tags
 

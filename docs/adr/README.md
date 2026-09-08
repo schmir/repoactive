@@ -130,3 +130,10 @@ it.
   valid while jobs run. The command rejects the use of `--config` with
   `--config-revset`. It reports a merge conflict before it reports a related
   TOML parse error.
+- [0022 — Run a command ad-hoc without configuring a job](0022-ad-hoc-commands.md)
+  — Accepted. `repoactive run --ad-hoc COMMAND` builds one job internally
+  and merges it on top of whatever configuration exists, so a repository
+  needs no configuration at all to run a one-off command. The job's name
+  (and thus its branch) is a deterministic slug of the command unless
+  `--ad-hoc-name` overrides it, and a name a configured job already uses is
+  rejected. Only `run` takes the option.

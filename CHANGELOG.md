@@ -2,6 +2,13 @@
 
 ## 0.4.1 - unreleased
 
+- `run` now accepts `--ad-hoc COMMAND` to run a one-off command as a job
+  without configuring it; a repository needs no configuration at all for
+  this. The job's name, and with it its branch, is derived from the command
+  unless `--ad-hoc-name` gives it one. Its commit subject reads
+  `Run 'just update-flake'`, without the `[repoactive] ` prefix. See
+  [ADR 0022](docs/adr/0022-ad-hoc-commands.md) and
+  [Running a command ad-hoc](README.md#running-a-command-ad-hoc).
 - `run`, `validate-config`, `info jobs`, and `info tags` now accept
   `--config-revset REVSET` to read configuration from its merged tree.
   Conflicts are reported and allowed unless they prevent configuration from

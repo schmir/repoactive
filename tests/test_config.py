@@ -7,16 +7,21 @@ import pydantic
 import pytest
 
 from repoactive.config import (
+    _AD_HOC_NAME_MAX_LEN,
     _DEFAULTED_FIELDS,
+    AdHocJob,
+    AdHocNameCollisionError,
     Config,
     ConfigError,
     ConfigNotFoundError,
     ConfigShape,
     CreateMR,
+    EmptyAdHocCommandError,
     InvalidDurationError,
     Job,
     JobDefaults,
     MissingSecretError,
+    ad_hoc_job_name,
     default_config_paths,
     load_config,
     parse_duration,
@@ -1299,3 +1304,112 @@ class TestResolveGrantedSecrets:
         ) as excinfo:
             job.resolve_granted_secrets()
         assert excinfo.value.name == "A_SECRET"
+
+
+class TestAdHocJobName:
+    def test_spaces_become_dashes(self) -> None:
+        assert ad_hoc_job_name("just update-flake") == "just-update-flake"
+
+    def test_punctuation_collapses_into_single_dashes(self) -> None:
+        assert ad_hoc_job_name("sed -i 's/a/b/' x.txt") == "sed-i-s-a-b-x-txt"
+
+    def test_surrounding_separators_are_dropped(self) -> None:
+        assert ad_hoc_job_name("  ./build.sh  ") == "build-sh"
+
+    def test_long_command_is_truncated_without_a_trailing_dash(self) -> None:
+        name = ad_hoc_job_name("uv run " + "x" * 60 + " last")
+        assert len(name) == _AD_HOC_NAME_MAX_LEN
+        assert not name.endswith("-")
+
+    def test_command_without_usable_characters_falls_back(self) -> None:
+        assert ad_hoc_job_name("!!! ???") == "ad-hoc"
+
+    def test_name_is_stable_across_calls(self) -> None:
+        # The branch of an ad-hoc job is reused across runs, so the same
+        # command must always yield the same name.
+        assert ad_hoc_job_name("uv lock --upgrade") == ad_hoc_job_name("uv lock --upgrade")
+
+
+class TestAdHocJob:
+    def test_derives_the_name_from_the_command(self) -> None:
+        assert AdHocJob(command="just update-flake").job_name == "just-update-flake"
+
+    def test_explicit_name_wins(self) -> None:
+        assert AdHocJob(command="just update-flake", name="flake").job_name == "flake"
+
+    def test_empty_name_is_not_replaced_by_the_derived_one(self) -> None:
+        assert AdHocJob(command="just update-flake", name="").job_name == ""
+
+
+class TestLoadAdHocConfig:
+    def test_builds_the_job_without_any_config_file(self) -> None:
+        cfg = load_config([], ad_hoc=AdHocJob(command="just update-flake"))
+        assert [j.name for j in cfg.jobs] == ["just-update-flake"]
+        job = cfg.jobs[0]
+        assert job.command == "just update-flake"
+        assert job.title == "Run 'just update-flake'"
+        assert job.effective_tags() == {"enabled"}
+
+    def test_commit_subject_carries_no_prefix(self) -> None:
+        cfg = load_config([], ad_hoc=AdHocJob(command="just update-flake"))
+        job = cfg.jobs[0].resolve(cfg.job_defaults)
+        assert job.commit_title_prefix == ""
+        assert job.mr_title_prefix == "[repoactive] "
+
+    def test_command_containing_a_quote_is_quoted_with_the_other_one(self) -> None:
+        cfg = load_config([], ad_hoc=AdHocJob(command="sed -i 's/a/b/' x.txt"))
+        assert cfg.jobs[0].title == "Run \"sed -i 's/a/b/' x.txt\""
+
+    def test_command_belongs_to_no_config_directory(self) -> None:
+        cfg = load_config([], ad_hoc=AdHocJob(command="echo hi"))
+        assert cfg.jobs[0].config_source_dir is None
+
+    def test_multi_line_command_title_is_marked_as_cut_off(self) -> None:
+        cfg = load_config([], ad_hoc=AdHocJob(command="set -e\nmake all\n"))
+        assert cfg.jobs[0].title == "Run 'set -e ...'"
+
+    def test_empty_command_is_rejected(self) -> None:
+        with pytest.raises(EmptyAdHocCommandError):
+            load_config([], ad_hoc=AdHocJob(command="   "))
+
+    def test_explicit_name_names_the_job(self) -> None:
+        cfg = load_config([], ad_hoc=AdHocJob(command="just update-flake", name="flake"))
+        assert [j.name for j in cfg.jobs] == ["flake"]
+
+    def test_empty_explicit_name_is_rejected(self) -> None:
+        # An empty name is a given name, not a missing one: it must fail
+        # validation instead of falling back to the derived name.
+        with pytest.raises(ConfigError, match="--ad-hoc") as excinfo:
+            load_config([], ad_hoc=AdHocJob(command="just fmt", name=""))
+        assert "invalid job name" in str(excinfo.value)
+
+    def test_invalid_explicit_name_is_reported_against_the_option(self) -> None:
+        with pytest.raises(ConfigError, match="--ad-hoc") as excinfo:
+            load_config([], ad_hoc=AdHocJob(command="echo hi", name="bad name"))
+        assert "invalid job name" in str(excinfo.value)
+
+    def test_job_defaults_from_the_config_apply(self, tmp_path: Path) -> None:
+        f = tmp_path / ".repoactive.toml"
+        f.write_text('[job-defaults]\nbranch_prefix = "tmp/"\ntimeout = "9m"\n')
+        cfg = load_config([f], ad_hoc=AdHocJob(command="echo hi"))
+        job = cfg.jobs[0].resolve(cfg.job_defaults)
+        assert job.branch_name() == "tmp/echo-hi"
+        assert job.timeout == "9m"
+
+    def test_configured_jobs_are_kept(self, tmp_path: Path) -> None:
+        f = tmp_path / ".repoactive.toml"
+        f.write_text('[job.x]\ncommand = "echo"\ntitle = "X"\n')
+        cfg = load_config([f], ad_hoc=AdHocJob(command="echo hi"))
+        assert [j.name for j in cfg.jobs] == ["x", "echo-hi"]
+
+    def test_set_override_wins_over_the_ad_hoc_job(self) -> None:
+        cfg = load_config(
+            [], overrides=['job.echo-hi.timeout = "5m"'], ad_hoc=AdHocJob(command="echo hi")
+        )
+        assert cfg.jobs[0].timeout == "5m"
+
+    def test_name_taken_by_a_configured_job_is_rejected(self, tmp_path: Path) -> None:
+        f = tmp_path / ".repoactive.toml"
+        f.write_text('[job.echo-hi]\ncommand = "echo"\ntitle = "X"\ntags = ["nightly"]\n')
+        with pytest.raises(AdHocNameCollisionError, match="--ad-hoc-name"):
+            load_config([f], ad_hoc=AdHocJob(command="echo hi"))

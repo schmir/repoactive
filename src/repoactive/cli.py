@@ -14,9 +14,12 @@ import typer
 from rich.logging import RichHandler
 
 from repoactive.config import (
+    AdHocJob,
+    AdHocNameCollisionError,
     Config,
     ConfigError,
     ConfigNotFoundError,
+    EmptyAdHocCommandError,
     Job,
     MissingSecretError,
     default_config_paths,
@@ -87,6 +90,22 @@ _ConfigRevsetOption = Annotated[
         "working copy. Cannot be combined with --config.",
     ),
 ]
+_AdHocOption = Annotated[
+    str | None,
+    typer.Option(
+        "--ad-hoc",
+        help="Run this shell command as a one-off job, without configuring it. The job is "
+        "added to any configuration found and selected like a job named on the command line.",
+    ),
+]
+_AdHocNameOption = Annotated[
+    str | None,
+    typer.Option(
+        "--ad-hoc-name",
+        help="Name for the --ad-hoc job, which also names its branch. "
+        "Default: derived from the command.",
+    ),
+]
 _RepoOption = Annotated[Path, typer.Option("--repo", "-r", help="Path to the jj repository.")]
 _DebugOption = Annotated[bool, typer.Option("--debug", "-d", help="Enable debug logging.")]
 
@@ -123,18 +142,38 @@ class MergeStatus(StrEnum):
     unmerged = "unmerged"
 
 
-def _resolve_config(config_paths: list[Path] | None, repo: Path) -> list[Path]:
-    """Use the given config paths, or discover defaults inside repo."""
-    return config_paths or default_config_paths(repo)
+def _resolve_config(
+    config_paths: list[Path] | None, repo: Path, *, required: bool = True
+) -> list[Path]:
+    """Use the given config paths, or discover defaults inside repo.
+
+    With required=False a missing default config yields no paths instead of an
+    error: --ad-hoc brings its own job and needs no configuration.
+    """
+    if config_paths:
+        return config_paths
+    try:
+        return default_config_paths(repo)
+    except ConfigNotFoundError:
+        if required:
+            raise
+        return []
 
 
 def _load_config_or_exit(
-    config_paths: list[Path] | None, repo: Path, overrides: list[str] | None = None
+    config_paths: list[Path] | None,
+    repo: Path,
+    overrides: list[str] | None = None,
+    ad_hoc: AdHocJob | None = None,
 ) -> Config:
     """Load the config, or print a clean error and exit non-zero."""
     try:
-        return load_config(_resolve_config(config_paths, repo), overrides=overrides or None)
+        paths = _resolve_config(config_paths, repo, required=ad_hoc is None)
+        return load_config(paths, overrides=overrides or None, ad_hoc=ad_hoc)
     except ConfigNotFoundError as e:
+        _error(str(e))
+        raise typer.Exit(code=1) from e
+    except (EmptyAdHocCommandError, AdHocNameCollisionError) as e:
         _error(str(e))
         raise typer.Exit(code=1) from e
     except ConfigError as e:
@@ -256,6 +295,16 @@ def callback(
         raise typer.Exit(code=1) from e
 
 
+def _ad_hoc_job(command: str | None, name: str | None) -> AdHocJob | None:
+    """Build the AdHocJob for --ad-hoc, or exit when only --ad-hoc-name was given."""
+    if command is None:
+        if name is not None:
+            _error("--ad-hoc-name requires --ad-hoc")
+            raise typer.Exit(code=1)
+        return None
+    return AdHocJob(command=command, name=name)
+
+
 @app.command()
 def run(  # noqa: PLR0913, PLR0917
     config_paths: _ConfigOption = None,
@@ -272,6 +321,8 @@ def run(  # noqa: PLR0913, PLR0917
     ] = RunMode.local,
     overrides: _SetOption = None,
     debug: _DebugOption = False,
+    ad_hoc_command: _AdHocOption = None,
+    ad_hoc_name: _AdHocNameOption = None,
     tags: Annotated[
         list[str] | None,
         typer.Option(
@@ -288,10 +339,14 @@ def run(  # noqa: PLR0913, PLR0917
     """Apply jobs locally; pass --mode push or --mode publish to publish."""
     _setup_logging(debug)
     _check_jj()
+    ad_hoc = _ad_hoc_job(ad_hoc_command, ad_hoc_name)
+    # An ad-hoc job is requested by name, so it runs at once like any job named
+    # on the command line, alongside whatever else was requested.
+    requested_names = frozenset(jobs or []) | ({ad_hoc.job_name} if ad_hoc else frozenset())
     # The config workspace is held for the whole run, so a job command can still
     # reach the files RA_CONFIG_SOURCE_DIR points at (ADR 0021).
     with _config_root(repo, config_paths, config_revset) as config_root:
-        cfg = _load_config_or_exit(config_paths, config_root, overrides)
+        cfg = _load_config_or_exit(config_paths, config_root, overrides, ad_hoc)
         _ensure_colocated_repo(repo)
         try:
             platform = get_platform(cfg, repo) if mode is RunMode.publish else None
@@ -299,7 +354,7 @@ def run(  # noqa: PLR0913, PLR0917
                 config=cfg,
                 repo_path=repo,
                 platform=platform,
-                requested_names=frozenset(jobs or []),
+                requested_names=requested_names,
                 requested_tags=frozenset(tags or []),
                 mode=mode,
             )
