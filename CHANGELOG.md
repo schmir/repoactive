@@ -1,19 +1,16 @@
 # Changelog
 
-## 0.4.1 - unreleased
+## 0.4.1 - 2026-09-08
 
-- `run` now accepts `--ad-hoc COMMAND` to run a one-off command as a job
-  without configuring it; a repository needs no configuration at all for
-  this. The job's name, and with it its branch, is derived from the command
-  unless `--ad-hoc-name` gives it one. Its commit subject reads
-  `Run 'just update-flake'`, without the `[repoactive] ` prefix. See
-  [ADR 0022](docs/adr/0022-ad-hoc-commands.md) and
+- `run` now accepts `--ad-hoc COMMAND`. This option runs one command as a
+  job that is not in the configuration. See
   [Running a command ad-hoc](README.md#running-a-command-ad-hoc).
 - `run`, `validate-config`, `info jobs`, and `info tags` now accept
-  `--config-revset REVSET` to read configuration from its merged tree.
-  Conflicts are reported and allowed unless they prevent configuration from
-  parsing. See [ADR 0021](docs/adr/0021-read-config-from-a-revset.md) and
+  `--config-revset REVSET`. The repoactive tool creates a merged tree from
+  the revisions that the revset selects. It reads the configuration from
+  this tree. See
   [Reading configuration from a revset](README.md#reading-configuration-from-a-revset).
+- By default, the Docker image now contains jj 0.45.1.
 
 ## 0.4.0 - 2026-08-13
 
