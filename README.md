@@ -330,7 +330,7 @@ repoactive run --mode publish
 repoactive run --config-revset 'trunk()'
 
 # Run a one-off command without configuring a job for it
-repoactive run --ad-hoc 'just update-flake'
+repoactive run --ad-hoc 'just flake-update-diff'
 
 # Enable debug logging
 repoactive run --debug
@@ -1064,7 +1064,7 @@ to schedule and throttle them, and how to generate jobs dynamically.
 repository needs no `repoactive` configuration at all:
 
 ```bash
-repoactive run --ad-hoc 'just update-flake'
+repoactive run --ad-hoc 'just flake-update-diff'
 ```
 
 `repoactive` builds one job from the command and runs it exactly as if it
@@ -1075,18 +1075,18 @@ the commit carries the usual `Repoactive-Job` trailer. `--mode push` and
 
 The job's name (and with it, its branch) is derived from the command: every
 run of characters a job name may not contain becomes a single dash, so
-`just update-flake` produces the branch `repoactive/just-update-flake`. The
-name is deterministic, so running the same ad-hoc command again updates that
-branch instead of opening a second one. Pass `--ad-hoc-name` for a name of
-your own:
+`just flake-update-diff` produces the branch
+`repoactive/just-flake-update-diff`. The name is deterministic, so running
+the same ad-hoc command again updates that branch instead of opening a
+second one. Pass `--ad-hoc-name` for a name of your own:
 
 ```bash
 repoactive run --ad-hoc "sed -i 's/2025/2026/' LICENSE" --ad-hoc-name copyright-year
 ```
 
-The commit subject names the command it ran, `Run 'just update-flake'`, and
-carries no `commit_title_prefix`; the merge request title keeps the usual
-`[repoactive] ` prefix.
+The commit subject names the command it ran, `Run 'just flake-update-diff'`,
+and carries no `commit_title_prefix`; the merge request title keeps the
+usual `[repoactive] ` prefix.
 
 The remaining rules:
 

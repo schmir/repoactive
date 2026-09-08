@@ -44,9 +44,19 @@ build-image:
 smoketest:
     uv run nox -s smoketest
 
-# Update the nix flake lockfile
-update-flake:
-    ./scripts/update-flake.sh
+# Update the flake inputs and show the resulting dev shell package changes.
+flake-update-diff:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    system=$(nix eval --impure --raw --expr builtins.currentSystem)
+    target=".#devShells.${system}.default"
+    # Build the dev shell closure before and after updating, then diff the two.
+    before=$(nix build --no-link --no-warn-dirty --print-out-paths "$target")
+    # Three --quiet flags drop nix below warn level, hiding the "updating
+    # lock file" notice; errors still print and still abort the recipe.
+    nix flake update --no-warn-dirty --quiet --quiet --quiet
+    after=$(nix build --no-link --no-warn-dirty --print-out-paths "$target")
+    nix shell nixpkgs#nvd --command nvd diff "$before" "$after"
 
 # Remove build artifacts, caches, and the virtualenv
 clean:
