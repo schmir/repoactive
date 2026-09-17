@@ -8,10 +8,12 @@ from pathlib import Path
 import pytest
 
 from repoactive.command import (
+    MAX_OUTPUT_CHARS,
     CommandError,
     CommandResult,
     _spawn,
     run_command,
+    truncate_middle,
 )
 from repoactive.config import Job, MissingSecretError
 from repoactive.constants import RA_WORKSPACE_DIR_ENV
@@ -319,3 +321,84 @@ class TestRunCommand:
         result = _run(job, tmp_path)
 
         assert result.output == f"[{bash}]"
+
+
+_CHATTY = "".join(f"line {i}\n" for i in range(5000))
+_LIMIT = 1000
+
+
+def _split_on_marker(truncated: str) -> tuple[str, str, str]:
+    """Split a truncate_middle result into its head, marker line, and tail."""
+    head, _, rest = truncated.partition("\n[... ")
+    marker, _, tail = rest.partition("\n")
+    return head, f"[... {marker}", tail
+
+
+class TestTruncateMiddle:
+    def test_short_text_is_unchanged(self) -> None:
+        assert truncate_middle("a\nb\nc\n", 100) == "a\nb\nc\n"
+
+    def test_text_at_the_limit_is_unchanged(self) -> None:
+        text = "a" * 100
+        assert truncate_middle(text, 100) == text
+
+    def test_result_stays_within_the_limit(self) -> None:
+        assert len(truncate_middle(_CHATTY, _LIMIT)) <= _LIMIT
+
+    def test_keeps_the_start_and_the_end(self) -> None:
+        result = truncate_middle(_CHATTY, _LIMIT)
+        assert result.startswith("line 0\n")
+        assert result.endswith("line 4999\n")
+
+    def test_marker_names_the_dropped_characters(self) -> None:
+        head, marker, tail = _split_on_marker(truncate_middle(_CHATTY, _LIMIT))
+        omitted = len(_CHATTY) - len(head) - len(tail)
+        assert marker == f"[... {omitted} characters omitted ...]"
+
+    def test_tail_keeps_more_than_the_head(self) -> None:
+        # 30% of the budget comes from the start, 70% from the end.
+        head, _, tail = _split_on_marker(truncate_middle(_CHATTY, _LIMIT))
+        assert 2 * len(head) < len(tail)
+
+    def test_cuts_on_line_boundaries(self) -> None:
+        head, _, tail = _split_on_marker(truncate_middle(_CHATTY, _LIMIT))
+        lines = _CHATTY.splitlines()
+        assert all(line in lines for line in head.splitlines() + tail.splitlines())
+
+    def test_single_long_line_is_still_truncated(self) -> None:
+        # No newline to cut at: the raw character slices are kept instead.
+        result = truncate_middle("x" * 5000, _LIMIT)
+        assert len(result) <= _LIMIT
+        assert result.startswith("x")
+        assert result.endswith("x")
+
+
+class TestRunCommandOutputCap:
+    @pytest.mark.slow
+    def test_large_output_is_capped(self, tmp_path: Path) -> None:
+        job = Job(
+            name="foo",
+            command=f"seq 1 {MAX_OUTPUT_CHARS}",
+            title="t",
+            branch_prefix="repoactive/",
+            commit_title_prefix="",
+        )
+        result = _run(job, tmp_path)
+
+        assert len(result.output) <= MAX_OUTPUT_CHARS
+        assert result.output.startswith("1\n")
+        assert result.output.endswith(f"{MAX_OUTPUT_CHARS}")
+
+    @pytest.mark.slow
+    def test_failure_reports_the_full_output(self, tmp_path: Path) -> None:
+        job = Job(
+            name="foo",
+            command=f"seq 1 {MAX_OUTPUT_CHARS}; exit 1",
+            title="t",
+            branch_prefix="repoactive/",
+            commit_title_prefix="",
+        )
+        with pytest.raises(CommandError) as excinfo:
+            _run(job, tmp_path)
+
+        assert len(str(excinfo.value)) > MAX_OUTPUT_CHARS

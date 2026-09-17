@@ -17,11 +17,45 @@ from repoactive.settings import load_settings
 
 logger = logging.getLogger(__name__)
 
+# How much of a command's output is kept for the commit message and the MR
+# description. Beyond this the middle is dropped (see truncate_middle and
+# docs/adr/0023-cap-captured-command-output.md).
+MAX_OUTPUT_CHARS = 32 * 1024
+
 
 @dataclass
 class CommandResult:
     output: str
     elapsed: float
+
+
+def truncate_middle(text: str, limit: int) -> str:
+    """Drop the middle of text so the result fits in limit characters.
+
+    Keeps 30% of the remaining budget from the start and 70% from the end, with
+    a marker in between naming how much went: the first lines say what ran, the
+    last lines say how it ended, so the middle is the expendable part. Both
+    slices are cut back to a line boundary unless that would empty them, which
+    happens when the output is one enormous line.
+    """
+    if len(text) <= limit:
+        return text
+    # Size the marker with the widest omitted count it can ever carry, so the
+    # real marker is no longer than the one budgeted for and the result stays
+    # within limit.
+    budget = max(limit - len(_omitted_marker(len(text))), 0)
+    head_len = budget * 30 // 100
+    head, tail = text[:head_len], text[len(text) - (budget - head_len) :]
+    if "\n" in head:
+        head = head[: head.rindex("\n")]
+    if "\n" in tail:
+        tail = tail[tail.index("\n") + 1 :]
+    return head + _omitted_marker(len(text) - len(head) - len(tail)) + tail
+
+
+def _omitted_marker(omitted: int) -> str:
+    """Render the line that stands in for the characters truncate_middle dropped."""
+    return f"\n[... {omitted} characters omitted ...]\n"
 
 
 class CommandError(RuntimeError):
@@ -161,11 +195,16 @@ def run_command(job: Job, cwd: Path, *, env: dict[str, str]) -> CommandResult:
             + (f":\n{detail}" if detail else ""),
             elapsed=elapsed,
         )
-    command_result = CommandResult(output=detail, elapsed=elapsed)
+    # Only the success path is capped: a failure is reported in full above, where
+    # the complete output is what makes it diagnosable.
+    command_result = CommandResult(
+        output=truncate_middle(detail, MAX_OUTPUT_CHARS), elapsed=elapsed
+    )
     logger.debug(
-        "[%s] command finished in %.3fs, %d bytes output",
+        "[%s] command finished in %.3fs, %d bytes output (%d captured)",
         job.name,
         command_result.elapsed,
+        len(detail),
         len(command_result.output),
     )
     return command_result

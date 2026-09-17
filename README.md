@@ -248,6 +248,10 @@ plus the `Repoactive-Job` trailer that
 Repoactive-Job: uv-lock-upgrade
 ```
 
+Output above 32 KiB is truncated: the start and the end are kept and the
+middle is replaced by a line naming how many characters went. A command that
+_fails_ is still reported in full on the terminal.
+
 ### Keeping the local clone current
 
 `repoactive` works entirely from the **local** repository view and never
@@ -672,8 +676,8 @@ underscores.
 - **`commit_title_prefix`** (default: inherited) - Override the commit title
   prefix for this job only.
 - **`output_in_commit`** (default: `true`) - Append the job's command and
-  its captured output to the commit message. Set to `false` to keep the
-  commit message clean.
+  its captured output to the commit message (truncated in the middle above
+  32 KiB). Set to `false` to keep the commit message clean.
 
 **Run control:**
 

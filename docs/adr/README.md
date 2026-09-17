@@ -137,3 +137,10 @@ it.
   (and thus its branch) is a deterministic slug of the command unless
   `--ad-hoc-name` overrides it, and a name a configured job already uses is
   rejected. Only `run` takes the option.
+- [0023 — Cap the captured command output](0023-cap-captured-command-output.md)
+  — Accepted. `run_command` keeps at most 32 KiB of a successful command's
+  output, dropping the middle (30% of the budget from the start, 70% from
+  the end) with a marker naming what went. Capping at the capture point
+  bounds the commit message and the MR description at once — the latter has
+  a hard 65536-character limit on GitHub. A failing command is still
+  reported in full.

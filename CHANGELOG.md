@@ -6,6 +6,10 @@
   `jj: argument list too long`. The commit message is now passed to
   `jj describe` on stdin instead of as a command line argument, which Linux
   limits to 128 KiB per entry.
+- A command's captured output is now capped at 32 KiB. Beyond that the
+  middle is dropped, keeping the start and the end, in both the commit
+  message and the MR description. A failing command is still reported in
+  full. See [ADR 0023](docs/adr/0023-cap-captured-command-output.md).
 
 ## 0.4.1 - 2026-09-08
 
