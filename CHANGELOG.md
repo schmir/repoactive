@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.4.2 - unreleased
+## 0.4.2 - 2026-09-17
 
 - Jobs with very large command output no longer fail with
   `jj: argument list too long`. The commit message is now passed to
