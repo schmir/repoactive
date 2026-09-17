@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.2 - unreleased
+
+- Jobs with very large command output no longer fail with
+  `jj: argument list too long`. The commit message is now passed to
+  `jj describe` on stdin instead of as a command line argument, which Linux
+  limits to 128 KiB per entry.
+
 ## 0.4.1 - 2026-09-08
 
 - `run` now accepts `--ad-hoc COMMAND`. This option runs one command as a

@@ -135,6 +135,13 @@ class TestDescribe:
         repo.describe("title\n\nbody")
         assert _description(repo) == "title\n\nbody"
 
+    def test_message_larger_than_argv_limit(self, repo: JJ) -> None:
+        # Linux caps a single argv entry at 128 KiB; a job embedding its command
+        # output in the commit can exceed that, so the message goes in on stdin.
+        message = "title\n\n" + "x" * (256 * 1024)
+        repo.describe(message)
+        assert _description(repo) == message
+
 
 class TestGetDescription:
     def test_returns_description_of_revision(self, repo: JJ) -> None:

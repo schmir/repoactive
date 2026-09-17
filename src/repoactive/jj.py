@@ -225,11 +225,13 @@ class JJ:
         *,
         global_args: tuple[str, ...] = (),
         cwd: Path | None = None,
+        stdin: str | None = None,
     ) -> str:
         """Run program with args, raising CommandFailedError on a non-zero exit.
 
         global_args are inserted between the program and args but kept out
-        of logs and error messages, which show only the caller's args.
+        of logs and error messages, which show only the caller's args. stdin,
+        when given, is fed to the process instead of an empty pipe.
         """
         run_cwd = cwd or self.cwd
         logger.debug("%s %s (cwd=%s)", program, " ".join(args), run_cwd)
@@ -238,6 +240,7 @@ class JJ:
             result = subprocess.run(
                 [program, *global_args, *args],
                 cwd=run_cwd,
+                input=stdin,
                 capture_output=True,
                 text=True,
                 check=True,
@@ -260,8 +263,8 @@ class JJ:
         )
         return result.stdout
 
-    def _run(self, *args: str) -> str:
-        return self._exec("jj", args, global_args=("--no-pager", "--color=never"))
+    def _run(self, *args: str, stdin: str | None = None) -> str:
+        return self._exec("jj", args, global_args=("--no-pager", "--color=never"), stdin=stdin)
 
     def op_id(self) -> str:
         """Return the current operation id.
@@ -434,7 +437,13 @@ class JJ:
         return self._run("log", "--no-graph", "-r", "@", "-T", "self.diff().stat(50)").strip()
 
     def describe(self, message: str) -> None:
-        self._run("describe", "--message", message)
+        """Set the working copy's description.
+
+        The message goes in on stdin, not as --message: a job that embeds its
+        command output in the commit can exceed the 128 KiB Linux puts on a
+        single argv entry, which fails the exec with "argument list too long".
+        """
+        self._run("describe", "--stdin", stdin=message)
 
     def change_id(self, revision: str = "@") -> str:
         """Return the short change id of revision (the working copy by default)."""
