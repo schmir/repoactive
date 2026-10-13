@@ -15,17 +15,18 @@ description = "Script-driven code changes with automated merge requests"
 readme = "README.md"
 requires-python = ">=3.12"
 license = "GPL-3.0-or-later"
+keywords = ["git", "jujutsu", "github", "gitlab", "merge-request", "automation"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 5 - Production/Stable",
     "Environment :: Console",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
     "Operating System :: MacOS :: MacOS X",
     "Operating System :: POSIX",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
     "Topic :: Software Development",
     "Topic :: Software Development :: Version Control",
     "Topic :: Software Development :: Version Control :: Git",
