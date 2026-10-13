@@ -99,9 +99,9 @@ pipx install repoactive
 ```
 
 `repoactive` drives the [jj (Jujutsu)](https://github.com/jj-vcs/jj) CLI, so
-a `jj` binary must be on your `PATH`. Publishing merge requests additionally
-needs a GitHub or GitLab API token in the environment. See
-[Requirements](#requirements) for the complete list.
+a `jj` binary (0.46.0 or newer) must be on your `PATH`. Publishing merge
+requests additionally needs a GitHub or GitLab API token in the environment.
+See [Requirements](#requirements) for the complete list.
 
 ## Quick start
 
@@ -1469,8 +1469,9 @@ design.
   [per-repository run lock](#one-run-at-a-time-per-repository); Windows is
   not supported.
 - Python 3.12 or later
-- [jj (Jujutsu)](https://github.com/jj-vcs/jj) - `repoactive` uses jj to
-  manage branches and commits in the target repository
+- [jj (Jujutsu)](https://github.com/jj-vcs/jj) 0.46.0 or later -
+  `repoactive` uses jj to manage branches and commits in the target
+  repository
 - A configured jj user name and email - jj records them as the commit
   author. Set them once with the `jj config set` commands shown in
   [Quick start](#quick-start) step 1.

@@ -1,6 +1,7 @@
 # 7. Colocate job workspaces so commands get a working git repository
 
-Status: Accepted
+Status: Superseded by [ADR 0024](0024-native-workspace-colocation.md), which
+uses `jj workspace add --colocate` (jj 0.46.0).
 
 ## Context
 

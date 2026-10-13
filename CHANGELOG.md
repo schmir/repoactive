@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.0 - unreleased
+
+- **Breaking:** repoactive now requires jj 0.46.0 or newer. `run` checks the
+  installed version first and exits with an error if it is older. Job
+  workspaces are now colocated with `jj workspace add --colocate` instead of
+  by hand. See [ADR 0024](docs/adr/0024-native-workspace-colocation.md).
+
 ## 0.4.2 - 2026-09-17
 
 - Jobs with very large command output no longer fail with

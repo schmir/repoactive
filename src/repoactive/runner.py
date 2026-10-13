@@ -356,7 +356,6 @@ def _run_job_prepare_command_commit(
         case human_commits.UnexpectedLayers():
             raise NotImplementedError()
 
-    repo.git_sync_head()
     return shape
 
 
@@ -901,7 +900,6 @@ def _run_generator_job(ctx: RunContext, *, job: Job, parents: list[str]) -> JobR
     ):
         repo.new(*parents)
         try:
-            repo.git_sync_head()
             logger.debug("[%s] running generator command (jobs dir %s)", job.name, jobs_dir.path)
             run_command(
                 job,

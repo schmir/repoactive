@@ -32,11 +32,13 @@ from repoactive.jj import (
     JJ,
     JJError,
     JJNotFoundError,
+    JJVersionError,
     JobCommit,
     NotAColocatedRepoError,
     NotColocatedGitRepoError,
     require_colocated_repo,
     require_jj_on_path,
+    require_min_jj_version,
 )
 from repoactive.jobtree import format_job_forest, print_job_table
 from repoactive.lock import RunLockHeldError
@@ -200,6 +202,15 @@ def _check_jj() -> None:
         raise typer.Exit(code=1) from e
 
 
+def _check_jj_version() -> None:
+    """Exit with a clear error unless the installed jj meets the minimum version."""
+    try:
+        require_min_jj_version()
+    except JJVersionError as e:
+        _error(str(e))
+        raise typer.Exit(code=1) from e
+
+
 def _ensure_colocated_repo(repo: Path) -> None:
     """Ensure repo is a colocated jj repository root, else exit with a clear error.
 
@@ -247,6 +258,7 @@ def _config_root(
         _error("--config-revset cannot be combined with --config")
         raise typer.Exit(code=1)
     _check_jj()
+    _check_jj_version()
     # Create a colocated jj repository before the workspace. See ADR 0021.
     _ensure_colocated_repo(repo)
     with contextlib.ExitStack() as stack:
@@ -339,6 +351,7 @@ def run(  # noqa: PLR0913, PLR0917
     """Apply jobs locally; pass --mode push or --mode publish to publish."""
     _setup_logging(debug)
     _check_jj()
+    _check_jj_version()
     ad_hoc = _ad_hoc_job(ad_hoc_command, ad_hoc_name)
     # An ad-hoc job is requested by name, so it runs at once like any job named
     # on the command line, alongside whatever else was requested.

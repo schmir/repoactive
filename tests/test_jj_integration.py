@@ -1159,7 +1159,6 @@ class TestTempWorkspace:
             assert ws.cwd.is_dir()
             assert "ws" in repo.workspace_names()
             ws.new("@")
-            ws.git_sync_head()
             assert _git(ws.cwd, "status", "--porcelain") == ""
 
     def test_cleans_up_on_exit(self, repo: JJ) -> None:
@@ -1315,7 +1314,7 @@ class TestWorkspaceColocation:
         repo._workspace_add("ws", ws_path)
         assert _git(ws_path, "status", "--porcelain") == ""
 
-    def test_git_sync_head_after_moving_working_copy(self, repo: JJ, tmp_path: Path) -> None:
+    def test_git_head_follows_moving_working_copy(self, repo: JJ, tmp_path: Path) -> None:
         self._commit(repo, "a.txt", "first")
         repo.bookmark_set("base", "@-")
         self._commit(repo, "b.txt", "second")
@@ -1323,19 +1322,13 @@ class TestWorkspaceColocation:
         repo._workspace_add("ws", ws_path)
         ws = JJ(ws_path)
         ws.new("base")
-        ws.git_sync_head()
         assert _git(ws_path, "rev-parse", "HEAD") == _commit_id(ws, "@-")
         assert _git(ws_path, "status", "--porcelain") == ""
 
-    def test_git_sync_head_noop_without_git(self, repo: JJ, tmp_path: Path) -> None:
-        ws_path = tmp_path / "ws"
-        repo._workspace_add("ws", ws_path)  # empty repo: colocation is skipped
-        JJ(ws_path).git_sync_head()  # must not raise
-
-    def test_empty_repo_workspace_not_colocated(self, repo: JJ, tmp_path: Path) -> None:
+    def test_empty_repo_workspace_is_colocated(self, repo: JJ, tmp_path: Path) -> None:
         ws_path = tmp_path / "ws"
         repo._workspace_add("ws", ws_path)
-        assert not (ws_path / ".git").exists()
+        assert (ws_path / ".git").exists()
         assert JJ(ws_path).is_empty() is True  # jj still works in the workspace
 
     def test_non_colocated_repo_workspace(self, tmp_path: Path) -> None:
@@ -1353,18 +1346,8 @@ class TestWorkspaceColocation:
         (ws_path / "b.txt").write_text("b")
         ws.describe("from workspace")
         ws.new("@")
-        ws.git_sync_head()
         assert _git(ws_path, "log", "-1", "--format=%s") == "from workspace"
         assert _git(ws_path, "status", "--porcelain") == ""
-
-    def test_prune_after_forget(self, repo: JJ, tmp_path: Path) -> None:
-        self._commit(repo, "a.txt", "initial")
-        ws_path = tmp_path / "ws"
-        repo._workspace_add("ws", ws_path)
-        repo.workspace_forget("ws")
-        shutil.rmtree(ws_path)
-        repo.git_worktree_prune()
-        assert _git(repo.cwd, "worktree", "list", "--porcelain").count("worktree ") == 1
 
     def test_workspace_names_lists_added_workspace(self, repo: JJ, tmp_path: Path) -> None:
         self._commit(repo, "a.txt", "initial")
@@ -1381,9 +1364,7 @@ class TestWorkspaceColocation:
         repo.forget_stale_workspaces()
 
         assert sorted(repo.workspace_names()) == ["default", "mine"]
-        # The dead git worktree of the forgotten workspace is pruned too.
         worktrees = _git(repo.cwd, "worktree", "list", "--porcelain")
-        assert f"worktree {tmp_path / 'stale'}" not in worktrees
         assert f"worktree {tmp_path / 'mine'}" in worktrees
 
     def test_forget_stale_config_workspaces_reclaims_an_abandoned_one(

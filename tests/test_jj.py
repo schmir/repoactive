@@ -4,6 +4,7 @@ Behavior that invokes jj is covered against a real repository in
 test_jj_integration.py.
 """
 
+import subprocess
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -11,16 +12,20 @@ import pytest
 
 from repoactive.jj import (
     CONFIG_WORKSPACE_PREFIX,
+    MIN_JJ_VERSION,
     WORKSPACE_PREFIX,
     CommandFailedError,
     JJNotFoundError,
+    JJVersionError,
     MissingGitDirError,
     NotAJJRepoError,
     NotColocatedGitRepoError,
     _jj_timestamp,
     config_workspace_name,
+    parse_jj_version,
     require_colocated_repo,
     require_jj_on_path,
+    require_min_jj_version,
     workspace_name,
 )
 
@@ -63,6 +68,50 @@ class TestRequireJJOnPath:
 
         with pytest.raises(JJNotFoundError, match=r"docs\.jj-vcs\.dev"):
             require_jj_on_path()
+
+
+def _fake_jj_version(monkeypatch: pytest.MonkeyPatch, stdout: str, returncode: int = 0) -> None:
+    """Make subprocess.run report the given output for jj --version."""
+
+    def fake_run(args: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(args, returncode, stdout=stdout, stderr="boom")
+
+    monkeypatch.setattr("repoactive.jj.subprocess.run", fake_run)
+
+
+class TestParseJJVersion:
+    def test_parses_plain_version(self) -> None:
+        assert parse_jj_version("jj 0.46.0\n") == (0, 46, 0)
+
+    def test_parses_version_with_build_suffix(self) -> None:
+        assert parse_jj_version("jj 0.47.1-6a3f1c2d") == (0, 47, 1)
+
+    def test_rejects_garbage(self) -> None:
+        with pytest.raises(JJVersionError, match="could not parse"):
+            parse_jj_version("not a version")
+
+
+class TestRequireMinJJVersion:
+    def test_accepts_minimum(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _fake_jj_version(monkeypatch, "jj 0.46.0\n")
+        require_min_jj_version()
+
+    def test_accepts_newer(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _fake_jj_version(monkeypatch, "jj 1.0.0\n")
+        require_min_jj_version()
+
+    def test_rejects_older(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _fake_jj_version(monkeypatch, "jj 0.45.9\n")
+        with pytest.raises(JJVersionError, match=r"0\.46\.0 or newer, but found 0\.45\.9"):
+            require_min_jj_version()
+
+    def test_rejects_failed_invocation(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _fake_jj_version(monkeypatch, "", returncode=1)
+        with pytest.raises(JJVersionError, match="failed"):
+            require_min_jj_version()
+
+    def test_minimum_is_0_46_0(self) -> None:
+        assert MIN_JJ_VERSION == (0, 46, 0)
 
 
 class TestRequireColocatedRepo:

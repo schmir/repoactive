@@ -37,10 +37,10 @@ it.
   environment as cheap defence-in-depth (a live credential, unlike repo
   contents, skips the MR review gate).
 - [0007 — Colocate job workspaces so commands get a working git repository](0007-colocate-job-workspaces-for-git-aware-commands.md)
-  — Accepted. `jj workspace add` does not colocate (jj#5252), so repoactive
-  manually wires up a git worktree in each job workspace. This is for the
-  job command's benefit (uv dynamic versioning, `git ls-files`, …), not
-  repoactive's own operations; remove it if jj#5252 is fixed.
+  — Superseded by [0024](0024-native-workspace-colocation.md).
+  `jj workspace add` did not colocate (jj#5252), so repoactive manually
+  wired up a git worktree in each job workspace, for the job command's
+  benefit (uv dynamic versioning, `git ls-files`, …).
 - [0008 — Configure jobs as a name-keyed table](0008-jobs-keyed-by-name.md)
   — Accepted. Jobs are a `[job.<name>]` table keyed by name, not a `[[job]]`
   array with a `name` field. The name is a job's identity (branch, trailer,
@@ -144,3 +144,7 @@ it.
   bounds the commit message and the MR description at once — the latter has
   a hard 65536-character limit on GitHub. A failing command is still
   reported in full.
+- [0024 — Use jj's native workspace colocation](0024-native-workspace-colocation.md)
+  — Accepted. jj 0.46.0 colocates non-default workspaces itself, so
+  repoactive passes `--colocate` to `jj workspace add` and drops the manual
+  git worktree wiring and the `HEAD` sync of ADR 0007.

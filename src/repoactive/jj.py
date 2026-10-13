@@ -33,12 +33,11 @@ WORKSPACE_PREFIX = "repoactive-tmp-"
 # Prefix for temporary configuration workspaces. See ADR 0021.
 CONFIG_WORKSPACE_PREFIX = "repoactive-config-"
 
-# The all-zeros commit_id jj reports for the virtual root commit, which has no
-# git counterpart.
-GIT_ROOT_COMMIT_ID = "0" * 40
-
 # Where to point users who don't have jj installed.
 JJ_INSTALL_URL = "https://docs.jj-vcs.dev/latest/install-and-setup/#installation-and-setup"
+
+# The oldest jj release repoactive supports.
+MIN_JJ_VERSION = (0, 46, 0)
 
 
 def _jj_timestamp(dt: datetime) -> str:
@@ -106,6 +105,45 @@ def require_jj_on_path() -> None:
     """Verify the jj executable is on PATH, raising JJNotFoundError otherwise."""
     if shutil.which("jj") is None:
         raise JJNotFoundError()
+
+
+class JJVersionError(Exception):
+    """Raised when the installed jj is older than MIN_JJ_VERSION or its version is unreadable."""
+
+    @classmethod
+    def unparsable(cls, output: str) -> "JJVersionError":
+        return cls(f"could not parse the jj version from: {output.strip()!r}")
+
+    @classmethod
+    def failed(cls, stderr: str) -> "JJVersionError":
+        return cls(f"jj --version failed:\n{stderr.strip()}")
+
+    @classmethod
+    def too_old(cls, found: tuple[int, int, int]) -> "JJVersionError":
+        need = ".".join(map(str, MIN_JJ_VERSION))
+        have = ".".join(map(str, found))
+        return cls(
+            f"repoactive requires jj {need} or newer, but found {have}. "
+            f"Upgrade jujutsu: {JJ_INSTALL_URL}"
+        )
+
+
+def parse_jj_version(output: str) -> tuple[int, int, int]:
+    """Parse the output of jj --version (e.g. "jj 0.46.0-abc123") into (major, minor, patch)."""
+    m = re.search(r"(\d+)\.(\d+)\.(\d+)", output)
+    if m is None:
+        raise JJVersionError.unparsable(output)
+    return int(m[1]), int(m[2]), int(m[3])
+
+
+def require_min_jj_version() -> None:
+    """Verify the installed jj is at least MIN_JJ_VERSION, raising JJVersionError otherwise."""
+    result = subprocess.run(["jj", "--version"], capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        raise JJVersionError.failed(result.stderr)
+    found = parse_jj_version(result.stdout)
+    if found < MIN_JJ_VERSION:
+        raise JJVersionError.too_old(found)
 
 
 class NotAColocatedRepoError(Exception):
@@ -616,39 +654,6 @@ class JJ:
     def is_colocated(self) -> bool:
         return (self.cwd / ".git").exists()
 
-    def _target_git_head(self) -> str | None:
-        """Commit the colocated git HEAD should point at: the first parent of @.
-
-        Returns None if that parent is the root commit, which has no git
-        counterpart.
-        """
-        output = self._run("log", "-r", "@-", "--no-graph", "-T", 'commit_id ++ "\\n"')
-        commit_id = output.splitlines()[0] if output.strip() else ""
-        if not commit_id or commit_id == GIT_ROOT_COMMIT_ID:
-            return None
-        return commit_id
-
-    def git_sync_head(self) -> None:
-        """Sync the colocated git checkout (HEAD and index) to the jj working copy.
-
-        jj only exports git HEAD in the default workspace; workspaces colocated
-        via _workspace_add() need this after the working copy moves (new, edit,
-        rebase). No-op if the workspace is not colocated.
-        """
-        if not self.is_colocated():
-            return
-        head = self._target_git_head()
-        if head is None:
-            return
-        # Mixed reset: moves the detached HEAD and index, leaves the
-        # jj-managed files alone.
-        self._git("reset", "--quiet", head)
-
-    def git_worktree_prune(self) -> None:
-        """Drop git worktree registrations of workspaces whose directory is gone."""
-        if self.is_colocated():
-            self._git("worktree", "prune")
-
     def workspace_names(self) -> set[str]:
         """Names of the workspaces jj currently tracks for this repo."""
         return set(self._run("workspace", "list", "-T", 'name ++ "\\n"').splitlines())
@@ -666,7 +671,7 @@ class JJ:
         self._run("workspace", "update-stale")
 
     def forget_stale_workspaces(self) -> None:
-        """Forget any leftover repoactive workspaces and prune their dead worktrees.
+        """Forget any leftover repoactive workspaces.
 
         A run killed before its `finally` could call workspace_forget leaves its
         temporary workspace (named with WORKSPACE_PREFIX) registered in jj. Because
@@ -678,39 +683,19 @@ class JJ:
         logger.debug("stale workspaces to forget: %s", stale)
         for name in stale:
             self.workspace_forget(name)
-        if stale:
-            self.git_worktree_prune()
 
     def _workspace_add(
         self, name: str, path: Path, colocation: Colocation = Colocation.COLOCATED
     ) -> None:
-        self._run("workspace", "add", "--name", name, str(path))
-        if colocation is Colocation.COLOCATED and self.is_colocated():
-            self._colocate_workspace(name, path)
-
-    def _colocate_workspace(self, name: str, path: Path) -> None:
-        """Register the new workspace as a git worktree of the colocated repo.
-
-        jj's `workspace add` never colocates the new workspace, even when the
-        main repository is colocated (https://github.com/jj-vcs/jj/issues/5252),
-        so git commands would not work inside it. Both `git worktree add` and
-        `jj workspace add` refuse a non-empty existing directory, so the
-        worktree is created next to the workspace and its .git file moved into
-        place.
-        """
-        head = JJ(path)._target_git_head()
-        if head is None:
-            logger.debug("not colocating workspace %r: parent is the root commit", name)
-            return
-        with tempfile.TemporaryDirectory(prefix="repoactive-worktree-", dir=path.parent) as d:
-            tmp = Path(d)
-            self._git("worktree", "add", "--no-checkout", "--detach", str(tmp / name), head)
-            (tmp / name / ".git").rename(path / ".git")
-        self._git("worktree", "repair", str(path))
-        # jj writes this for colocated repos, but not for workspaces.
-        (path / ".jj" / ".gitignore").write_text("/*\n")
-        # --no-checkout left the index empty; jj already wrote the files.
-        self._git("reset", "--quiet", head, cwd=path)
+        colocate = colocation is Colocation.COLOCATED and self.is_colocated()
+        self._run(
+            "workspace",
+            "add",
+            "--name",
+            name,
+            "--colocate" if colocate else "--no-colocate",
+            str(path),
+        )
 
     def workspace_forget(self, name: str) -> None:
         self._run("workspace", "forget", name)
@@ -758,9 +743,10 @@ class JJ:
         """Create a workspace named name in a temp directory, cleaning up on exit.
 
         Adds a jj workspace inside a fresh temp directory and yields a JJ bound
-        to it. On exit the workspace is forgotten, the temp directory removed,
-        and the now-dead git worktree pruned. Teardown is best-effort: jj errors
-        during cleanup are suppressed so they cannot mask the body's outcome.
+        to it. On exit the workspace is forgotten (jj also removes its git
+        worktree) and the temp directory removed. Teardown is best-effort: jj
+        errors during cleanup are suppressed so they cannot mask the body's
+        outcome.
         """
         tmp_root = Path(tempfile.mkdtemp(prefix="repoactive-workspace-"))
         try:
@@ -774,6 +760,3 @@ class JJ:
             with contextlib.suppress(JJError):
                 self.workspace_forget(name)
             shutil.rmtree(tmp_root, ignore_errors=True)
-            if colocation is Colocation.COLOCATED:
-                with contextlib.suppress(JJError):
-                    self.git_worktree_prune()

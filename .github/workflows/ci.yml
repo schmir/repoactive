@@ -42,8 +42,8 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.12", "3.13", "3.14"]
-        jj-version: ["v0.42.0", "v0.44.0", "v0.45.1"]
+        python-version: ["3.12", "3.13", "3.14", "3.15"]
+        jj-version: ["v0.46.0"]
     steps:
       - uses: actions/checkout@v6
 
