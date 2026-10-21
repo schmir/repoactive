@@ -18,6 +18,7 @@ from repoactive.config import (
     Config,
     CreateMR,
     Job,
+    RerunMode,
 )
 from repoactive.constants import RA_JOBS_DIR_ENV, RA_WORKSPACE_DIR_ENV
 from repoactive.generator import build_generated_jobs, load_job_specs
@@ -350,7 +351,10 @@ def _run_job_prepare_command_commit(
             anchor = shape.command_commit.change_id
             repo.rebase_source(anchor, revset_heads(shape.prereq_heads + parents))
             repo.edit(anchor)
-            repo.restore_working_copy()
+            # An incremental rerun keeps its previous output, unless the rebase
+            # left it conflicted: the command cannot work on conflict markers.
+            if job.rerun is not RerunMode.incremental or repo.has_conflict("@"):
+                repo.restore_working_copy()
         case human_commits.AllPrerequisites():
             repo.new(revset_heads(shape.prereq_heads + parents))
         case human_commits.UnexpectedLayers():
@@ -581,8 +585,11 @@ def run_job(
     An existing branch's command commit (and its fixup descendants) is rebased
     onto the run's parents (prerequisites merged in), then emptied so the
     command regenerates its content directly into it, keeping the change-id so
-    the bookmark and any not-selected dependents follow for free. A new job or a
-    merged-and-undeleted branch gets a fresh commit on the parents instead.
+    the bookmark and any not-selected dependents follow for free. With
+    rerun = "incremental" it is not emptied (unless the rebase left it
+    conflicted), so the command starts from its previous output (ADR 0025). A
+    new job or a merged-and-undeleted branch gets a fresh commit on the
+    parents instead.
 
     A failed command is an exact, cheap rollback: op_checkpoint restores the
     op captured before any mutation, returning the branch to precisely its prior

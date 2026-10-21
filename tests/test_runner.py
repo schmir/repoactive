@@ -9,10 +9,18 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from pydantic import ValidationError
 
 from repoactive import human_commits, runner
 from repoactive.command import CommandError, CommandResult
-from repoactive.config import Config, CreateMR, Job, JobDefaults, MissingSecretError
+from repoactive.config import (
+    Config,
+    CreateMR,
+    Job,
+    JobDefaults,
+    MissingSecretError,
+    RerunMode,
+)
 from repoactive.constants import (
     RA_CONFIG_SOURCE_DIR_ENV,
     RA_JOB_BASE_BRANCH_ENV,
@@ -43,6 +51,7 @@ from repoactive.runner import (
     _pushable_branch_revset,
     _record_job_plan,
     _run_generator_job,
+    _run_job_prepare_command_commit,
     _strip_boxquote_and_trailers,
     _suppress_superseded_mrs,
     apply_plan,
@@ -2832,3 +2841,57 @@ class TestPrepareRepo:
         ):
             raise RuntimeError("boom")
         assert "jj --repository /repo op restore OP-START" in capsys.readouterr().out
+
+
+class TestPrepareCommandCommitRestore:
+    """ADR 0020/0025: an existing command commit is emptied unless the job reruns incrementally."""
+
+    def _prepare(self, *, rerun: RerunMode, conflict: bool = False) -> MagicMock:
+        repo = MagicMock()
+        repo.has_conflict.return_value = conflict
+        job = _job("job").model_copy(update={"rerun": rerun})
+        shape = _normal_layers(prereq_heads=[], fixup_roots=[])
+        with patch("repoactive.runner.human_commits.classify_branch", return_value=shape):
+            _run_job_prepare_command_commit(repo=repo, job=job, parents=["main"])
+        return repo
+
+    def test_restores_by_default(self) -> None:
+        repo = self._prepare(rerun=RerunMode.fresh)
+        repo.edit.assert_called_once_with("cmd-id")
+        repo.restore_working_copy.assert_called_once()
+
+    def test_incremental_keeps_previous_output(self) -> None:
+        repo = self._prepare(rerun=RerunMode.incremental)
+        repo.edit.assert_called_once_with("cmd-id")
+        repo.restore_working_copy.assert_not_called()
+
+    def test_incremental_restores_when_rebase_conflicts(self) -> None:
+        repo = self._prepare(rerun=RerunMode.incremental, conflict=True)
+        repo.has_conflict.assert_called_once_with("@")
+        repo.restore_working_copy.assert_called_once()
+
+
+class TestRerunMode:
+    def _job(self, **extra: object) -> Job:
+        return Job.model_validate({"name": "a", "command": "c", "title": "t", **extra})
+
+    def test_unset_on_job_until_resolved(self) -> None:
+        assert self._job().rerun is None
+
+    def test_parses_incremental(self) -> None:
+        assert self._job(rerun="incremental").rerun is RerunMode.incremental
+
+    def test_inherits_from_job_defaults(self) -> None:
+        defaults = JobDefaults(rerun=RerunMode.incremental)
+        assert self._job().resolve(defaults).rerun is RerunMode.incremental
+
+    def test_job_overrides_job_defaults(self) -> None:
+        defaults = JobDefaults(rerun=RerunMode.incremental)
+        assert self._job(rerun="fresh").resolve(defaults).rerun is RerunMode.fresh
+
+    def test_defaults_to_fresh(self) -> None:
+        assert self._job().resolve(JobDefaults()).rerun is RerunMode.fresh
+
+    def test_rejects_unknown_value(self) -> None:
+        with pytest.raises(ValidationError):
+            self._job(rerun="bogus")

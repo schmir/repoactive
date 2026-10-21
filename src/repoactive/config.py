@@ -357,6 +357,19 @@ class CreateMR(StrEnum):
     unless_superseded = "unless-superseded"
 
 
+class RerunMode(StrEnum):
+    """How a job's command commit is prepared when its branch already exists.
+
+    fresh empties the command commit first, so the command regenerates its
+    output from a clean tree. incremental keeps the output of the previous run
+    so the command works on top of it (an emptied tree is still used when the
+    rebase left the commit conflicted). See ADR 0025.
+    """
+
+    fresh = "fresh"
+    incremental = "incremental"
+
+
 def _coerce_create_mr(value: object) -> object:
     """Map the boolean TOML form onto the enum (true -> always, false -> never)."""
     if isinstance(value, bool):
@@ -430,6 +443,8 @@ class JobDefaults(BaseModel):
     # `<shell> -c <command>`. None means /bin/sh (the shell=True default). May be a
     # bare name resolved on PATH (e.g. "bash") or an absolute path.
     shell: _Shell | None = None
+    # How an existing command commit is prepared on a rerun (ADR 0025).
+    rerun: RerunMode = RerunMode.fresh
     # Names of environment variables to mark as secrets config-wide: each is
     # stripped from every job command's environment, but a job still reads one
     # only by listing it in its own secret_env. Marks names, never grants them;
@@ -450,6 +465,7 @@ _DEFAULTED_FIELDS = (
     "auto_merge",
     "required_approvals",
     "shell",
+    "rerun",
 )
 
 
@@ -504,6 +520,7 @@ class Job(BaseModel):
     auto_merge: bool | None = None
     required_approvals: int | None = Field(default=None, ge=0)
     shell: _Shell | None = None
+    rerun: RerunMode | None = None
 
     @field_validator("name")
     @classmethod

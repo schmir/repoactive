@@ -6,6 +6,10 @@
   installed version first and exits with an error if it is older. Job
   workspaces are now colocated with `jj workspace add --colocate` instead of
   by hand. See [ADR 0024](docs/adr/0024-native-workspace-colocation.md).
+- New job option `rerun` (also settable in `[job-defaults]`). With
+  `rerun = "incremental"`, on a rerun, the command starts from the output it
+  generated last time instead of an emptied commit. See
+  [ADR 0025](docs/adr/0025-incremental-jobs.md).
 
 ## 0.4.2 - 2026-09-17
 

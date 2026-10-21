@@ -624,6 +624,9 @@ that file instead.
   bare name is resolved on `PATH` (e.g. `"bash"`); an absolute path also
   works. The command runs as `<shell> -c <command>`. Arguments are not
   allowed - the value must be a single binary.
+- **`rerun`** (default: `"fresh"`) - How a job's command commit is prepared
+  when its branch already exists. Each job inherits it and can override it
+  with its own [`rerun`](#jobname).
 
 **Secrets:**
 
@@ -678,6 +681,13 @@ underscores.
 - **`output_in_commit`** (default: `true`) - Append the job's command and
   its captured output to the commit message (truncated in the middle above
   32 KiB). Set to `false` to keep the commit message clean.
+- **`rerun`** (default: inherited) - How the command commit is prepared when
+  the job's branch already exists. `"fresh"` empties it so the command
+  regenerates its output from a clean tree. `"incremental"` keeps the output
+  of the previous run and lets the command work on top of it; the command
+  must cope with its own earlier output being present. If rebasing leaves
+  the commit conflicted, it is emptied as usual. Overrides
+  `job-defaults.rerun`.
 
 **Run control:**
 
@@ -1429,8 +1439,8 @@ Key points:
   it emits.
 - **Inheritance with override.** Each emitted job inherits the generator's
   `tags`, `cooldown_period`, `base_branch`, `timeout`, `labels`,
-  `branch_prefix`/title prefixes, `draft`, `create_mr` and `auto_merge`
-  unless its own fragment sets them. It also defaults to
+  `branch_prefix`/title prefixes, `draft`, `create_mr`, `auto_merge` and
+  `rerun` unless its own fragment sets them. It also defaults to
   `depends_on = ["<generator>"]` (i.e. built flat on `trunk()`); override
   `depends_on` to a sibling emitted job to stack them into an MR chain.
 - **Stable names are your responsibility.** Cooldown, branches and the

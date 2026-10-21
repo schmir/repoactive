@@ -121,6 +121,23 @@ def _single_job_config(command: str) -> Config:
     )
 
 
+def _rerun_config(command: str, rerun: str) -> Config:
+    return Config.model_validate(
+        {
+            "jobs": {
+                "j": {
+                    "command": command,
+                    "title": "J",
+                    "branch_prefix": "",
+                    "create_mr": "never",
+                    "base_branch": "main",
+                    "rerun": rerun,
+                }
+            }
+        }
+    )
+
+
 def _stacked_config() -> Config:
     """Two jobs, each writing its own file: "bookmark_b" depends on "bookmark_a"."""
     return Config.model_validate(
@@ -812,3 +829,100 @@ def test_moved_trunk_rewrites_command_commit_even_with_identical_output(
 
     assert _commit_id(repo, "j") != first
     assert _file_content(repo, "j", "out.txt") == "hello\n"
+
+
+@pytest.mark.parametrize(
+    ("rerun", "expected"), [("fresh", "run\n"), ("incremental", "run\nrun\n")]
+)
+def test_rerun_mode_decides_whether_command_sees_earlier_output(
+    repo: JJ, rerun: str, expected: str
+) -> None:
+    """An incremental rerun starts from the previous output; a fresh one from an emptied tree.
+
+    The command appends to log.txt, so the file records whether the earlier run's
+    content was still there when the command ran (ADR 0025).
+    """
+    repo.describe("root")
+    repo.bookmark_set("main")
+    config = _rerun_config("echo run >> log.txt", rerun)
+
+    run_all(config=config, repo_path=repo.cwd)
+    assert _file_content(repo, "j", "log.txt") == "run\n"
+    command_commit = _change_id(repo, "j")
+
+    run_all(config=config, repo_path=repo.cwd)
+
+    assert _file_content(repo, "j", "log.txt") == expected
+    assert _change_id(repo, "j") == command_commit
+
+
+def test_incremental_rerun_empties_tree_when_rebase_conflicts(repo: JJ) -> None:
+    """A rebase conflict makes an incremental rerun fall back to an emptied tree (ADR 0025).
+
+    The previous output appended to log.txt, and trunk then appended a different
+    line, so rebasing the command commit onto the new trunk conflicts in log.txt.
+    The command must not see conflict markers or its earlier output: it starts
+    from trunk's log.txt and appends to that, and the branch is not frozen.
+    """
+    repo.describe("root")
+    (repo.cwd / "log.txt").write_text("base\n")
+    repo.bookmark_set("main")
+    config = _rerun_config("echo run >> log.txt", "incremental")
+
+    run_all(config=config, repo_path=repo.cwd)
+    assert _file_content(repo, "j", "log.txt") == "base\nrun\n"
+
+    repo.new("main")
+    (repo.cwd / "log.txt").write_text("base\ntrunk\n")
+    repo.describe("trunk change")
+    repo.bookmark_set("main")
+
+    summary = run_all(config=config, repo_path=repo.cwd)
+
+    assert not summary.frozen
+    assert not repo.has_conflict("j")
+    assert _file_content(repo, "j", "log.txt") == "base\ntrunk\nrun\n"
+
+
+def test_gated_job_runs_on_incremental_rerun_that_adds_nothing(repo: JJ) -> None:
+    """A run_only_if_changed dependent still runs when an incremental rerun adds nothing.
+
+    The first run of "a" creates i-was-here. The second run touches it again and
+    changes nothing, but the incremental command commit still carries the file
+    from the first run, so "a" has a diff and the job gated on it must run.
+    """
+    repo.describe("root")
+    repo.bookmark_set("main")
+    config = Config.model_validate(
+        {
+            "jobs": {
+                "a": {
+                    "command": "touch i-was-here",
+                    "title": "A",
+                    "branch_prefix": "",
+                    "create_mr": "never",
+                    "base_branch": "main",
+                    "rerun": "incremental",
+                },
+                "b": {
+                    "command": "echo b > b.txt",
+                    "title": "B",
+                    "branch_prefix": "",
+                    "create_mr": "never",
+                    "depends_on": ["a"],
+                    "run_only_if_changed": ["a"],
+                },
+            }
+        }
+    )
+
+    first = run_all(config=config, repo_path=repo.cwd)
+    assert not first.run_only_if_changed_skipped
+    b_commit = _change_id(repo, "b")
+
+    second = run_all(config=config, repo_path=repo.cwd)
+
+    assert not second.run_only_if_changed_skipped
+    assert _file_content(repo, "a", "i-was-here") == ""
+    assert _file_content(repo, "b", "b.txt") == "b\n"
+    assert _change_id(repo, "b") == b_commit

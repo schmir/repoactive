@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from repoactive.config import RerunMode
 from repoactive.generator import (
     FragmentShape,
     GeneratedJobError,
@@ -107,6 +108,24 @@ class TestBuildGeneratedJobs:
             all_config_names=set(),
         )
         assert job.cooldown_period == "1d"
+
+    def test_inherits_rerun(self) -> None:
+        [job] = build_generated_jobs(
+            generator=_gen(rerun=RerunMode.incremental),
+            specs={"child": {"command": "c", "title": "Child"}},
+            run_names={"gen"},
+            all_config_names=set(),
+        )
+        assert job.rerun == "incremental"
+
+    def test_spec_rerun_overrides_inheritance(self) -> None:
+        [job] = build_generated_jobs(
+            generator=_gen(rerun=RerunMode.incremental),
+            specs={"child": {"command": "c", "title": "Child", "rerun": "fresh"}},
+            run_names={"gen"},
+            all_config_names=set(),
+        )
+        assert job.rerun == "fresh"
 
     def test_sibling_depends_on_allowed(self) -> None:
         specs = {

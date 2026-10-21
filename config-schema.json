@@ -242,6 +242,17 @@
           ],
           "default": null,
           "title": "Shell"
+        },
+        "rerun": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RerunMode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
@@ -343,6 +354,10 @@
           "default": null,
           "title": "Shell"
         },
+        "rerun": {
+          "$ref": "#/$defs/RerunMode",
+          "default": "fresh"
+        },
         "secret_env": {
           "items": {
             "type": "string"
@@ -381,6 +396,15 @@
       ],
       "title": "PlatformConfig",
       "type": "object"
+    },
+    "RerunMode": {
+      "description": "How a job's command commit is prepared when its branch already exists.\n\nfresh empties the command commit first, so the command regenerates its\noutput from a clean tree. incremental keeps the output of the previous run\nso the command works on top of it (an emptied tree is still used when the\nrebase left the commit conflicted). See ADR 0025.",
+      "enum": [
+        "fresh",
+        "incremental"
+      ],
+      "title": "RerunMode",
+      "type": "string"
     }
   },
   "additionalProperties": false,

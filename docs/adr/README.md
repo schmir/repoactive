@@ -148,3 +148,6 @@ it.
   — Accepted. jj 0.46.0 colocates non-default workspaces itself, so
   repoactive passes `--colocate` to `jj workspace add` and drops the manual
   git worktree wiring and the `HEAD` sync of ADR 0007.
+- [0025 — Incremental jobs keep the previous output](0025-incremental-jobs.md)
+  — Accepted. The `incremental` job option skips the `jj restore` of ADR
+  0020, so a rerun's command starts from the output it generated last time.

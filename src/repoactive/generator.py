@@ -41,6 +41,7 @@ _INHERITED_FIELDS = (
     "draft",
     "create_mr",
     "auto_merge",
+    "rerun",
 )
 
 

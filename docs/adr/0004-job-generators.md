@@ -76,10 +76,10 @@ differences in behavior:
      opt into a stacked-MR chain (`deps-pkg-b depends_on deps-pkg-a`).
    - **cooldown_period** — and the other `job-defaults`-style fields
      (`base_branch`, `timeout`, `labels`, `branch_prefix`, the title
-     prefixes, `draft`, `create_mr`): inherited from the generator unless
-     the emitted entry overrides, so a fan-out's rate limit, base branch,
-     and labels are set once on the generator instead of repeated on every
-     emitted job.
+     prefixes, `draft`, `create_mr`, `auto_merge`, `rerun`): inherited from
+     the generator unless the emitted entry overrides, so a fan-out's rate
+     limit, base branch, and labels are set once on the generator instead of
+     repeated on every emitted job.
 
 4. **Emitted jobs carry a dual trailer.** A generated job's commit records
    both its own name and its generator's, as repeated `Repoactive-Job`
