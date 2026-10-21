@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.5.0 - unreleased
+## 0.5.0 - 2026-10-21
 
 - **Breaking:** repoactive now requires jj 0.46.0 or newer. `run` checks the
   installed version first and exits with an error if it is older. Job
