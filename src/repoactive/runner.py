@@ -335,8 +335,13 @@ def _build_commit_message(job: Job, command_result: CommandResult) -> str:
 
 def _run_job_prepare_command_commit(
     *, repo: JJ, job: Job, parents: list[str]
-) -> human_commits.BranchShape:
-    """Get the repo into a state where we can run the job's command."""
+) -> tuple[human_commits.BranchShape, bool]:
+    """Get the repo into a state where we can run the job's command.
+
+    Returns the branch shape and whether the command should be skipped: true
+    only for a rerun = "skip-unless-conflict" job whose rebased command commit is clean.
+    """
+    skip_command = False
     bookmark = job.branch_name()
     shape = human_commits.classify_branch(
         repo=repo, parents=parents, bookmark=bookmark, job_name=job.name
@@ -353,14 +358,16 @@ def _run_job_prepare_command_commit(
             repo.edit(anchor)
             # An incremental rerun keeps its previous output, unless the rebase
             # left it conflicted: the command cannot work on conflict markers.
-            if job.rerun is not RerunMode.incremental or repo.has_conflict("@"):
+            if job.rerun is RerunMode.fresh or repo.has_conflict("@"):
                 repo.restore_working_copy()
+            elif job.rerun is RerunMode.skip_unless_conflict:
+                skip_command = True
         case human_commits.AllPrerequisites():
             repo.new(revset_heads(shape.prereq_heads + parents))
         case human_commits.UnexpectedLayers():
             raise NotImplementedError()
 
-    return shape
+    return shape, skip_command
 
 
 def _pushable_branch_revset(shape: human_commits.BranchShape) -> str:
@@ -574,6 +581,59 @@ def _run_job_build_result(  # noqa: PLR0913
             return build_result(effective_revsets=[tip], produced_diff=True)
 
 
+def _run_job_rebased_only(
+    *, repo: JJ, job: Job, parents: list[str], prerun_branch_shape: human_commits.BranchShape
+) -> JobRun:
+    """Finish a rerun = "skip-unless-conflict" job whose command was skipped (ADR 0026).
+
+    The command commit was only rebased, so its content and message are kept as
+    they were. A conflict that remains in the branch (a fixup that no longer
+    applies) freezes it like any other. If the rebase moved nothing (the command
+    commit kept its commit id, so its fixups did too), the status says so and jj
+    pushes nothing. A command commit the rebase emptied is retired.
+    """
+    if repo.has_conflict(_pushable_branch_revset(prerun_branch_shape)):
+        return _run_job_frozen(
+            job=job,
+            parents=parents,
+            prerun_branch_shape=prerun_branch_shape,
+            detail="conflict in rebased branch, needs rebase",
+        )
+    tip = _bookmark_change_id(prerun_branch_shape)
+    assert tip is not None
+    # The rebase can empty the command commit (trunk gained the same change).
+    # Retire it as a rerun that produced nothing would, unless human commits
+    # anchor the branch (ADR 0020).
+    if (
+        decide_disposition(
+            prerun_branch_shape, commit_empty=repo.is_empty(), idempotent_match=False
+        )
+        is Disposition.retire
+    ):
+        _delete_local_bookmark(repo, job, prerun_branch_shape)
+        repo.abandon()
+        print_status(job.name, ("no changes", "dim"), ", bookmark deleted (command skipped)")
+        return JobRun(
+            job=job,
+            effective_revsets=parents,
+            produced_diff=False,
+            prerun_branch_shape=prerun_branch_shape,
+        )
+    # JobCommit carries the short commit id, commit_ids() the full one.
+    moved = not (
+        isinstance(prerun_branch_shape, human_commits.NormalLayers)
+        and repo.commit_ids("@")[0].startswith(prerun_branch_shape.command_commit.commit_id)
+    )
+    status = ("rebased", "green") if moved else ("unchanged", "dim")
+    print_status(job.name, status, f" [{repo.change_id()}] (command skipped)")
+    return JobRun(
+        job=job,
+        effective_revsets=[tip],
+        produced_diff=True,
+        prerun_branch_shape=prerun_branch_shape,
+    )
+
+
 def run_job(
     ctx: RunContext,
     *,
@@ -587,7 +647,9 @@ def run_job(
     command regenerates its content directly into it, keeping the change-id so
     the bookmark and any not-selected dependents follow for free. With
     rerun = "incremental" it is not emptied (unless the rebase left it
-    conflicted), so the command starts from its previous output (ADR 0025). A
+    conflicted), so the command starts from its previous output (ADR 0025). With
+    rerun = "skip-unless-conflict" the command is not run at all unless the rebase left the
+    commit conflicted (ADR 0026). A
     new job or a merged-and-undeleted branch gets a fresh commit on the
     parents instead.
 
@@ -603,7 +665,7 @@ def run_job(
         ctx.job_workspace(job) as repo,
         repo.op_checkpoint() as restore,
     ):
-        shape = _run_job_prepare_command_commit(repo=repo, job=job, parents=parents)
+        shape, skip_command = _run_job_prepare_command_commit(repo=repo, job=job, parents=parents)
         # A conflict already present in a parent (@-) - a conflicted dependency
         # tip, or a prerequisite left conflicted below the command commit -
         # cannot be resolved by the command, which only regenerates the command
@@ -614,6 +676,10 @@ def run_job(
                 parents=parents,
                 prerun_branch_shape=shape,
                 detail="conflict below command commit, needs rebase",
+            )
+        if skip_command:
+            return _run_job_rebased_only(
+                repo=repo, job=job, parents=parents, prerun_branch_shape=shape
             )
         command_result = run_command(
             job,

@@ -685,9 +685,13 @@ underscores.
   the job's branch already exists. `"fresh"` empties it so the command
   regenerates its output from a clean tree. `"incremental"` keeps the output
   of the previous run and lets the command work on top of it; the command
-  must cope with its own earlier output being present. If rebasing leaves
-  the commit conflicted, it is emptied as usual. Overrides
-  `job-defaults.rerun`.
+  must cope with its own earlier output being present.
+  `"skip-unless-conflict"` keeps the rebased output and does not run the
+  command at all, unless rebasing leaves the commit conflicted. Every mode
+  rebases first. If the rebase leaves the commit conflicted, it is emptied
+  as usual and the command runs. While `"skip-unless-conflict"` skips the
+  command, later changes to the job's `command` or `title` do not reach an
+  existing branch. Overrides `job-defaults.rerun`.
 
 **Run control:**
 

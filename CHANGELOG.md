@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.2 - unreleased
+
+- New `rerun = "skip-unless-conflict"` mode. On a rerun it rebases the
+  command commit and does not run the command, unless the rebase leaves a
+  conflict. See [ADR 0026](docs/adr/0026-rerun-skip-unless-conflict.md).
+
 ## 0.5.1 - 2026-10-26
 
 - Release maintenance only: publishing now fails if the pushed tag does not

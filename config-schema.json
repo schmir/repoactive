@@ -398,10 +398,11 @@
       "type": "object"
     },
     "RerunMode": {
-      "description": "How a job's command commit is prepared when its branch already exists.\n\nfresh empties the command commit first, so the command regenerates its\noutput from a clean tree. incremental keeps the output of the previous run\nso the command works on top of it (an emptied tree is still used when the\nrebase left the commit conflicted). See ADR 0025.",
+      "description": "How a job's command commit is prepared when its branch already exists.\n\nfresh empties the command commit first, so the command regenerates its\noutput from a clean tree. incremental keeps the output of the previous run\nso the command works on top of it (an emptied tree is still used when the\nrebase left the commit conflicted). skip-unless-conflict does not run the command at\nall, keeping the rebased output, unless the rebase left the commit\nconflicted; then it runs on an emptied tree like fresh. Every mode rebases. See ADR 0025 and 0026.",
       "enum": [
         "fresh",
-        "incremental"
+        "incremental",
+        "skip-unless-conflict"
       ],
       "title": "RerunMode",
       "type": "string"

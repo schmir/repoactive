@@ -2865,6 +2865,26 @@ class TestPrepareCommandCommitRestore:
         repo.edit.assert_called_once_with("cmd-id")
         repo.restore_working_copy.assert_not_called()
 
+    def test_skip_unless_conflict_skips_command_and_keeps_output(self) -> None:
+        job = _job("job").model_copy(update={"rerun": RerunMode.skip_unless_conflict})
+        repo = MagicMock()
+        repo.has_conflict.return_value = False
+        shape = _normal_layers(prereq_heads=[], fixup_roots=[])
+        with patch("repoactive.runner.human_commits.classify_branch", return_value=shape):
+            _, skip = _run_job_prepare_command_commit(repo=repo, job=job, parents=["main"])
+        assert skip
+        repo.restore_working_copy.assert_not_called()
+
+    def test_skip_unless_conflict_runs_command_when_rebase_conflicts(self) -> None:
+        job = _job("job").model_copy(update={"rerun": RerunMode.skip_unless_conflict})
+        repo = MagicMock()
+        repo.has_conflict.return_value = True
+        shape = _normal_layers(prereq_heads=[], fixup_roots=[])
+        with patch("repoactive.runner.human_commits.classify_branch", return_value=shape):
+            _, skip = _run_job_prepare_command_commit(repo=repo, job=job, parents=["main"])
+        assert not skip
+        repo.restore_working_copy.assert_called_once()
+
     def test_incremental_restores_when_rebase_conflicts(self) -> None:
         repo = self._prepare(rerun=RerunMode.incremental, conflict=True)
         repo.has_conflict.assert_called_once_with("@")

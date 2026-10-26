@@ -884,6 +884,80 @@ def test_incremental_rerun_empties_tree_when_rebase_conflicts(repo: JJ) -> None:
     assert _file_content(repo, "j", "log.txt") == "base\ntrunk\nrun\n"
 
 
+def test_skip_unless_conflict_rerun_skips_command_unless_rebase_conflicts(
+    repo: JJ, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A skip-unless-conflict rerun moves the command commit without running the command (ADR 0026).
+
+    Trunk gains an unrelated file, so the command commit rebases cleanly and
+    log.txt keeps its single line. When trunk then edits log.txt, the rebase
+    conflicts and the command runs on an emptied tree.
+    """
+    repo.describe("root")
+    (repo.cwd / "log.txt").write_text("base\n")
+    repo.bookmark_set("main")
+    config = _rerun_config("echo run >> log.txt", "skip-unless-conflict")
+
+    run_all(config=config, repo_path=repo.cwd)
+    assert _file_content(repo, "j", "log.txt") == "base\nrun\n"
+    command_commit = _change_id(repo, "j")
+
+    repo.new("main")
+    (repo.cwd / "other.txt").write_text("x\n")
+    repo.describe("unrelated trunk change")
+    repo.bookmark_set("main")
+
+    summary = run_all(config=config, repo_path=repo.cwd)
+
+    assert not summary.frozen
+    assert _change_id(repo, "j") == command_commit
+    assert _file_content(repo, "j", "log.txt") == "base\nrun\n"
+    assert _file_content(repo, "j", "other.txt") == "x\n"
+    assert "[j] rebased" in capsys.readouterr().out
+
+    run_all(config=config, repo_path=repo.cwd)
+    out = capsys.readouterr().out
+    assert "[j] unchanged" in out
+    assert "[j] rebased" not in out
+
+    repo.new("main")
+    (repo.cwd / "log.txt").write_text("base\ntrunk\n")
+    repo.describe("conflicting trunk change")
+    repo.bookmark_set("main")
+
+    summary = run_all(config=config, repo_path=repo.cwd)
+
+    assert not summary.frozen
+    assert not repo.has_conflict("j")
+    assert _file_content(repo, "j", "log.txt") == "base\ntrunk\nrun\n"
+
+
+def test_skip_unless_conflict_rerun_retires_commit_emptied_by_rebase(repo: JJ) -> None:
+    """A rebase that empties the command commit retires the branch (ADR 0026).
+
+    Trunk gains exactly the change the command commit carries, so the rebased
+    commit is empty. Without running the command, the job still abandons it and
+    deletes the bookmark, as a fresh rerun that produces nothing does.
+    """
+    repo.describe("root")
+    (repo.cwd / "log.txt").write_text("base\n")
+    repo.bookmark_set("main")
+    config = _rerun_config("echo run >> log.txt", "skip-unless-conflict")
+
+    run_all(config=config, repo_path=repo.cwd)
+    assert repo.bookmark_exists("j")
+
+    repo.new("main")
+    (repo.cwd / "log.txt").write_text("base\nrun\n")
+    repo.describe("trunk gains the same change")
+    repo.bookmark_set("main")
+
+    summary = run_all(config=config, repo_path=repo.cwd)
+
+    assert not summary.frozen
+    assert not repo.bookmark_exists("j")
+
+
 def test_gated_job_runs_on_incremental_rerun_that_adds_nothing(repo: JJ) -> None:
     """A run_only_if_changed dependent still runs when an incremental rerun adds nothing.
 

@@ -151,3 +151,6 @@ it.
 - [0025 — Incremental jobs keep the previous output](0025-incremental-jobs.md)
   — Accepted. The `incremental` job option skips the `jj restore` of ADR
   0020, so a rerun's command starts from the output it generated last time.
+- [0026 — The skip-unless-conflict rerun mode](0026-rerun-skip-unless-conflict.md)
+  — Accepted. `rerun = "skip-unless-conflict"` rebases the command commit
+  and does not run the command unless the rebase conflicts.

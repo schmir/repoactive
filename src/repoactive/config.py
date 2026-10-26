@@ -363,11 +363,14 @@ class RerunMode(StrEnum):
     fresh empties the command commit first, so the command regenerates its
     output from a clean tree. incremental keeps the output of the previous run
     so the command works on top of it (an emptied tree is still used when the
-    rebase left the commit conflicted). See ADR 0025.
+    rebase left the commit conflicted). skip-unless-conflict does not run the command at
+    all, keeping the rebased output, unless the rebase left the commit
+    conflicted; then it runs on an emptied tree like fresh. Every mode rebases. See ADR 0025 and 0026.
     """
 
     fresh = "fresh"
     incremental = "incremental"
+    skip_unless_conflict = "skip-unless-conflict"
 
 
 def _coerce_create_mr(value: object) -> object:
