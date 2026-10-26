@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.1 - 2026-10-26
+
+- Release maintenance only: publishing now fails if the pushed tag does not
+  match the version in `pyproject.toml`. The 0.5.0 release was tagged while
+  the version was still a dev version.
+
 ## 0.5.0 - 2026-10-21
 
 - **Breaking:** repoactive now requires jj 0.46.0 or newer. `run` checks the
