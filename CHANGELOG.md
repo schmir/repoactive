@@ -5,6 +5,8 @@
 - New `rerun = "skip-unless-conflict"` mode. On a rerun it rebases the
   command commit and does not run the command, unless the rebase leaves a
   conflict. See [ADR 0026](docs/adr/0026-rerun-skip-unless-conflict.md).
+- The Docker image now ships jj 0.47.1. The minimum supported version is
+  still 0.46.0.
 
 ## 0.5.1 - 2026-10-26
 
