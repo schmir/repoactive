@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.5.2 - unreleased
+## 0.5.2 - 2026-11-05
 
 - New `rerun = "skip-unless-conflict"` mode. On a rerun it rebases the
   command commit and does not run the command, unless the rebase leaves a
